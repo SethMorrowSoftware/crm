@@ -16,3 +16,8 @@ storage/sessions/*
 # Local test scaffolding
 /tests/.env.local
 /tests/junit.xml
+
+# Agent tooling scratch space. .claude/ itself can hold committed project
+# config (skills, settings), but worktrees/ holds throwaway git worktrees —
+# nested checkouts of this same repository, created and removed automatically.
+/.claude/worktrees/
