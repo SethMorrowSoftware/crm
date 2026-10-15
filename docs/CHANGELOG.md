@@ -144,7 +144,7 @@ by accident.
 
 ### Tests and CI
 
-- **409 tests, no test framework** — the same no-dependency constraint as the
+- **412 tests, no test framework** — the same no-dependency constraint as the
   application, so CI needs nothing but PHP.
 - Four layers: unit, static analysis over the source itself, integration
   against a real MySQL, and end-to-end over real HTTP against the real front
@@ -221,7 +221,7 @@ Fixed here:
   Mode address and mistyping the From address in one submit put the old address
   back, looking saved.
 
-The suite grew from 372 to **409 tests** to cover them. Each fix was
+The suite grew from 372 to **412 tests** to cover them. Each fix was
 mutation-checked: the password-reset suite, for instance, fails on three
 separate assertions when the token lookup is replaced with `LIMIT 1` — the
 mutation that previously left all 372 tests green.
@@ -282,6 +282,62 @@ Four things came out of it, and the environment-dependent bug was the smallest:
 
 The pattern worth keeping: **a test that reaches past the application to reset
 its state is only as reliable as its assumption about where that state lives.**
+
+### What an adversarial review of the tests then found
+
+Once CI was green, the diff's own tests were reviewed across four dimensions —
+isolation, cross-engine behaviour, gate soundness and mutation testing — with
+every finding put to three independent skeptics. Nine survived, and the pattern
+is uncomfortable: **the tests that lied were the ones written to prove the
+security fixes.**
+
+- **The only end-to-end test of the reset-link-poisoning fix asserted nothing.**
+  It minted a CSRF token with one browser and sent the attack on a separate
+  curl handle carrying `Host: attacker.test`. libcurl matches jar cookies
+  against the Host header, so that request carried no session cookie at all,
+  the CSRF middleware answered 419, and no mail was ever built — and the test
+  treated the empty result as a pass ("may be refused before any mail is built,
+  which is also a safe outcome"). Its two real assertions were dead code on
+  every run of every configuration. MEASURED: replacing the link construction
+  in `AuthController` with `'http://' . $request->host() . …` — exactly the bug
+  this release fixed — left all 409 tests green. The session cookie is now
+  forced through so the request reaches the controller, a trusted source is
+  configured as a real install has one, and an empty result is a FAILURE.
+- **The one line in `hostOf()` that makes a real stored URL usable had no
+  coverage.** Every test fed a bare `scheme://host`, but the installer stores
+  `system.install_url` with the subdirectory the app lives in, and operators
+  type a trailing slash. Without the path strip both configured sources fail
+  the host regex, are skipped, and `baseUrl()` falls back to the request Host —
+  reopening the poisoning on a URL carrying a live token. Deleting that line
+  left all 54 mailer tests green.
+- **The new static gate had a false negative in its own regex.** Its lookbehind
+  included a backslash, so `App\Core\DB::value()` — the style
+  `tests/unit/RouterTest.php` already uses — passed. The gate reported 27/27 on
+  a file whose every line was a database call while CI's lint job on the same
+  tree exited 1. A gate that gives false assurance is worse than none. It now
+  matches the qualified spellings and flags a bare `use` of a denied class.
+- **A clock-dependent flake, reproduced.** The web-cron test asserted its
+  output contained no `404`, but that output embeds the nightly backup's
+  filename — a second-resolution timestamp. 502 of 86,400 seconds a day contain
+  those digits, as does all of 2026-04-04. It now looks for a 404 *page*.
+- **`glob('*.part')` could no longer match anything.** The temp name gained a
+  pid and random suffix in this release; the deadline test's "leaves no file
+  behind" assertion was unfalsifiable, and a left-behind partial dump was
+  caught only by a later test under the wrong name.
+- **The migration retry contract was never exercised.** `CREATE TABLE IF NOT
+  EXISTS` raises no error, so the "already exists" tolerance was never entered
+  by any test — while this release narrowed it. The statements that actually
+  depend on it are the nine non-idempotent `ALTER TABLE … ADD CONSTRAINT`. A
+  test now re-runs one, which also puts the open MySQL 5.7 question (1022,
+  dropped here) in front of CI rather than leaving it to an assumption.
+- **The upgrade suite left the version marker naming a release that does not
+  exist**, so the http layer re-entered the production upgrade path mid-run.
+- Plus a sharp edge that cost a real debugging round: the tools suite now says
+  when `config/config.php` names a different database from the one under test,
+  instead of failing six tests in a way that reads as broken authentication.
+
+Every fix above is mutation-checked: the mutation that the old test tolerated
+now fails it.
 
 One confirmed finding was deliberately **not** fixed here: `users_manage`
 allows a non-owner holding it to set the Owner's password, which defeats the

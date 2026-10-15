@@ -240,8 +240,21 @@ Harness::test('a run that exceeds its deadline leaves no file behind', function 
         'a partial dump somebody restores from in an emergency is worse than no dump'
     );
 
-    // And no stray .part file either.
-    Assert::count(0, (array) glob(Backup::directory() . '/*.part'));
+    // And no stray partial file either.
+    //
+    // The glob is `*.part*`, not `*.part`: the temp name carries the pid and a
+    // random suffix (`.part.<pid>.<hex>`) so two concurrent backups cannot
+    // share it, and the bare pattern silently stopped matching anything the
+    // application can produce when that changed. This assertion was
+    // unfalsifiable until it was fixed — a partial dump left behind by a
+    // deadline abort was caught only by a LATER test inheriting the garbage,
+    // which reports the failure against the publish path and sends whoever
+    // reads it looking in the wrong place.
+    Assert::count(
+        0,
+        (array) glob(Backup::directory() . '/*.part*'),
+        'the aborted run must clean up its own partial file'
+    );
 });
 
 // ------------------------------------------------------------- path safety

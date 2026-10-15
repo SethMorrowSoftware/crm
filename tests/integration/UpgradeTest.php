@@ -277,3 +277,127 @@ Harness::test('every foreign-key constraint name carries the table prefix', func
             . implode("\n  - ", $unprefixed)
     );
 });
+
+Harness::test('a retry tolerates a foreign key the first attempt already added', function (): void {
+    // THE test behind the retry contract, which did not exist.
+    //
+    // 're-running a partially applied file completes it' above looks like it
+    // covers this and does not: `CREATE TABLE IF NOT EXISTS` on an existing
+    // table raises no error at all, only a Note, so meansAlreadyApplied() is
+    // never entered. MEASURED by mutation — making that method return false
+    // unconditionally leaves that test and all 34 schema tests green.
+    //
+    // The statements in the shipped schema that genuinely depend on the
+    // tolerance are the nine `ALTER TABLE … ADD CONSTRAINT {prefix}fk_…`, which
+    // are NOT idempotent: re-running one after it succeeded raises a duplicate
+    // constraint error, and whether the runner tolerates that code decides
+    // whether a half-applied release can EVER be completed or is wedged
+    // forever. This release narrowed the tolerated set — 1022 removed, 1005
+    // made conditional on errno 121 — so it is exactly the wrong moment for
+    // this path to be untested.
+    //
+    // Engine codes: MEASURED 1005 + "errno: 121" on MariaDB 10.11; MySQL 8.0
+    // standardises on 1826. MySQL 5.7's code was NOT established from the
+    // documentation, and third-party reports say 1022 — which this release no
+    // longer tolerates. This test runs on that cell of the matrix, so CI
+    // answers the question instead of an assumption carrying it.
+    $pdo = DB::pdo();
+
+    $pdo->exec('DROP TABLE IF EXISTS `cc_upgrade_fk_child`');
+    $pdo->exec('DROP TABLE IF EXISTS `cc_upgrade_fk_parent`');
+    $pdo->exec(
+        'CREATE TABLE `cc_upgrade_fk_parent` (`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, '
+        . 'PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
+    $pdo->exec(
+        'CREATE TABLE `cc_upgrade_fk_child` (`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, '
+        . '`parent_id` BIGINT UNSIGNED DEFAULT NULL, PRIMARY KEY (`id`), KEY (`parent_id`)) '
+        . 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+    );
+
+    try {
+        with_pending_migration(
+            "ALTER TABLE `{prefix}upgrade_fk_child`\n"
+            . "    ADD CONSTRAINT `{prefix}fk_upgrade_probe_parent`\n"
+            . "    FOREIGN KEY (`parent_id`) REFERENCES `{prefix}upgrade_fk_parent` (`id`)\n"
+            . "    ON DELETE SET NULL;\n",
+            static function (string $name) use ($pdo): void {
+                // The state a retry starts from: this statement already
+                // succeeded, and the file died somewhere after it.
+                $pdo->exec(
+                    'ALTER TABLE `cc_upgrade_fk_child` '
+                    . 'ADD CONSTRAINT `cc_fk_upgrade_probe_parent` '
+                    . 'FOREIGN KEY (`parent_id`) REFERENCES `cc_upgrade_fk_parent` (`id`) '
+                    . 'ON DELETE SET NULL'
+                );
+
+                // Caught, because an untolerated code THROWS here — and a bare
+                // RuntimeException in the report tells whoever sees it far less
+                // than a sentence naming the engine and what to do about it.
+                try {
+                    $result = (new Migration())->run();
+                } catch (Throwable $e) {
+                    Assert::fail(
+                        'the retry threw instead of tolerating a duplicate constraint name, so a '
+                            . 'half-applied release can never be completed on this engine. Engine: '
+                            . (string) DB::value('SELECT VERSION()') . '. Error: ' . $e->getMessage()
+                            . ' — if this is MySQL 5.7 answering 1022, that code was dropped from '
+                            . 'Migration::ALREADY_EXISTS in this release and has to be tolerated for '
+                            . 'this case specifically (it is ambiguous in general, which is why it '
+                            . 'was dropped).'
+                    );
+
+                    return;
+                }
+
+                Assert::inArray(
+                    $name,
+                    $result['applied'],
+                    'a duplicate constraint name must read as "already applied", or a release that '
+                        . 'half-applied can never be completed. Engine: '
+                        . (string) DB::value('SELECT VERSION()') . '. Runner said: '
+                        . (string) ($result['error'] ?? '(no error reported)')
+                );
+                Assert::same([], (new Migration())->pending());
+            }
+        );
+    } finally {
+        $pdo->exec('DROP TABLE IF EXISTS `cc_upgrade_fk_child`');
+        $pdo->exec('DROP TABLE IF EXISTS `cc_upgrade_fk_parent`');
+    }
+});
+
+// --------------------------------------------------- leave the database honest
+
+Harness::test('the suite leaves the version marker describing the shipped release', function (): void {
+    // This has to be the LAST test in the file, and it is a repair as well as
+    // an assertion.
+    //
+    // Several tests above deliberately set system.version to a release that
+    // does not exist ('1.0.0-before', '1.0.0-before-bad-fk') and then assert
+    // the marker must NOT advance — so the fake value is still there when they
+    // end. 'the version marker ends up matching the shipped VERSION file' used
+    // to be the last word on that, but the tests added later in this file run
+    // after it, and UpgradeTest is the last integration file: the http layer
+    // was being handed a database claiming to be a release nobody shipped.
+    //
+    // That is not harmless. app/bootstrap.php calls cc_apply_pending_upgrade()
+    // on every web request, so the first request of the http layer re-entered
+    // the production upgrade path mid-suite — including its Cache::flush() —
+    // which is exactly the sort of coupling that turns an unrelated cache or
+    // rate-limit assertion into a mystery three suites later.
+    //
+    // If you add a test below this one, move this back to the bottom.
+    $shipped = trim((string) file_get_contents(CC_ROOT . '/VERSION'));
+
+    Assert::notEmpty($shipped, 'the VERSION file should not be empty');
+
+    Settings::set('system.version', $shipped);
+    Settings::load(true);
+
+    Assert::same(
+        $shipped,
+        (string) Settings::get('system.version'),
+        'later suites read this, and a lie here is invisible until something else breaks'
+    );
+});

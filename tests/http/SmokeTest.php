@@ -572,8 +572,20 @@ Harness::test('web cron runs with the right token and does not leak a page', fun
 
     // The bug this catches: bootstrap used to fall through to the router,
     // dispatch /cron.php as a route, 404, and send that HTML first.
+    //
+    // The 404 is looked for as a PAGE, never as the bare digits. cron's output
+    // embeds the nightly backup's filename, which carries a second-resolution
+    // UTC timestamp and a row count — so `notContains('404')` failed whenever
+    // the clock landed on a second whose HHMMSS contained those digits
+    // (measured: 502 of 86,400 seconds, ~0.6% per job and ~3% per push across
+    // five matrix jobs), for the whole of 2026-04-04, and on any day the row
+    // count passed through 404x. It was reproduced on a real run:
+    // "Backup: castle-crm-20261015-204041.sql.gz (751 rows)". A red build that
+    // reads as a routing regression and clears on a re-run is worse than no
+    // assertion, because it teaches whoever sees it to re-run CI.
     Assert::notContains('<!doctype html>', strtolower($response['body']));
-    Assert::notContains('404', $response['body']);
+    Assert::notContains('not found', strtolower($response['body']));
+    Assert::notContains('<html', strtolower($response['body']));
 });
 
 // -------------------------------------------------------------- rendering

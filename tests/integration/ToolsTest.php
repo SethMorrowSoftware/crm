@@ -34,6 +34,32 @@ if (!is_file(CC_ROOT . '/config/config.php')) {
     return;
 }
 
+// The tools are separate PROCESSES, and they read config/config.php to find
+// their database — they know nothing of CC_TEST_DB_NAME. So if that file names
+// a different database from the one these tests are populating, every tool runs
+// against a database with no fixtures in it and six tests fail with "No active
+// account matches …", which reads exactly like broken authentication.
+//
+// This cost a real debugging round: running --no-http on a machine whose
+// config.php was left pointing at castle_install_test by an installer
+// walk-through produced six red tests that looked like a code regression and
+// sent me looking at CI. Normally tests/run.php writes a matching throwaway
+// config when it starts the HTTP server, so the mismatch only appears with
+// --no-http or --unit.
+$toolsConfig = (array) (require CC_ROOT . '/config/config.php');
+$toolsDb     = (string) ($toolsConfig['db']['name'] ?? '');
+$testsDb     = (string) test_db_config()['name'];
+
+if ($toolsDb !== '' && $toolsDb !== $testsDb) {
+    Harness::skip(
+        'tools suite',
+        'config/config.php names "' . $toolsDb . '" but these tests use "' . $testsDb
+            . '", and the tools read the config file — run the full suite, or point them at the same database'
+    );
+
+    return;
+}
+
 /**
  * Run a tool and capture both streams and the exit code.
  *

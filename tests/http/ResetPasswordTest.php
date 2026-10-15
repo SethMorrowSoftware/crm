@@ -422,54 +422,97 @@ Harness::test('an unknown address gets the same answer as a known one', function
 });
 
 Harness::test('the reset link host comes from configuration, not the Host header', function (): void {
-    // Reset-link poisoning: with app_url unset the link host used to be taken
-    // straight from $_SERVER['HTTP_HOST'], so a crafted request could mail the
-    // owner a real token pointing at the attacker's domain. absoluteUrl() now
+    // Reset-link poisoning: with nothing configured the link host used to be
+    // taken straight from $_SERVER['HTTP_HOST'], so a crafted request could
+    // mail a real token pointing at the attacker's domain. absoluteUrl() now
     // prefers app_url, then the configured venue website, then the URL the
-    // installer was reached on, and logs a warning if it ever has to fall back
-    // to the request.
+    // installer was reached on, and logs a warning if it ever falls back to the
+    // request.
+    //
+    // THE FIRST VERSION OF THIS TEST PROVED NOTHING, and it is worth saying how
+    // because the shape is easy to repeat. It minted the CSRF token with one
+    // browser and sent the attack on a separate curl handle carrying
+    // `Host: attacker.test`. libcurl matches jar cookies against the Host
+    // header, so that request carried no session cookie, the csrf middleware
+    // answered 419, no mail was ever built — and the test treated the empty
+    // result as a pass ("may be refused before any mail is built, which is also
+    // a safe outcome"). Its two real assertions were dead code on every run of
+    // every configuration. MEASURED: replacing the link construction in
+    // AuthController with `'http://' . $request->host() . ...` — literally the
+    // bug this release fixed — left all 409 tests green.
+    //
+    // Two things make it real now: postWithForgedHost() forces the session
+    // cookie through so the request actually reaches the controller, and an
+    // empty result is a FAILURE rather than a shrug.
     $email = 'reset-host@example.test';
     $id = reset_fixture($email);
 
-    $browser = new TestBrowser(getenv('CC_TEST_BASE_URL') ?: '', 'reset-host');
-    $csrf = $browser->csrfToken('/forgot-password');
+    // A real install has a trusted source recorded — the installer writes
+    // system.install_url. The test fixture does NOT: the runner writes
+    // app_url => null and the seeds create neither key, so with nothing
+    // configured the documented behaviour is the request-host fallback and
+    // there would be no security property here to assert. So this sets up what
+    // an install has.
+    //
+    // The value carries a subdirectory, which is the shape
+    // installer_currentBaseUrl() actually stores on the ordinary cPanel layout,
+    // so the end-to-end path covers hostOf()'s path stripping as well.
+    $row = DB::first('SELECT `key` FROM {settings} WHERE `key` = :k', ['k' => 'system.install_url']);
+    $had = $row !== null;
+    $was = Settings::get('system.install_url');
 
-    $jar = sys_get_temp_dir() . '/cc-reset-host-' . getmypid() . '.cookies';
-    $handle = curl_init((getenv('CC_TEST_BASE_URL') ?: '') . '/forgot-password');
+    Settings::set('system.install_url', 'https://crm.realvenue.test/crm');
 
-    curl_setopt_array($handle, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => http_build_query(['email' => $email, '_token' => $csrf]),
-        CURLOPT_COOKIEJAR      => $jar,
-        CURLOPT_COOKIEFILE     => $jar,
-        CURLOPT_TIMEOUT        => 20,
-        // The attack: claim to be somewhere else.
-        CURLOPT_HTTPHEADER     => ['Host: attacker.test'],
-    ]);
+    try {
+        $browser = new TestBrowser(getenv('CC_TEST_BASE_URL') ?: '', 'reset-host');
 
-    curl_exec($handle);
-    curl_close($handle);
+        $response = $browser->postWithForgedHost(
+            '/forgot-password',
+            '/forgot-password',
+            ['email' => $email],
+            'attacker.test'
+        );
 
-    $body = (string) DB::value(
-        "SELECT body FROM {messages}
-          WHERE to_address = :email AND channel = 'email'
-          ORDER BY id DESC LIMIT 1",
-        ['email' => $email]
-    );
+        Assert::notSame(
+            419,
+            $response['status'],
+            'the forged-Host POST was rejected before reaching the controller, so this test '
+                . 'asserted nothing — the session cookie is not surviving the Host override'
+        );
 
-    if ($body === '') {
-        // The crafted Host may be refused before any mail is built, which is
-        // also a safe outcome — but then there is nothing to assert about it.
-        Assert::true(true, 'no message was minted for the crafted host, which is safe');
-    } else {
+        $body = (string) DB::value(
+            "SELECT body FROM {messages}
+              WHERE to_address = :email AND channel = 'email'
+              ORDER BY id DESC LIMIT 1",
+            ['email' => $email]
+        );
+
+        Assert::notSame(
+            '',
+            $body,
+            'no reset email was recorded, so the branch under test never ran (status '
+                . $response['status'] . '). This must fail rather than pass: an unexercised '
+                . 'path is not a safe one.'
+        );
+
         Assert::contains('/reset-password/', $body, 'precondition: a link was built');
+        Assert::contains(
+            'crm.realvenue.test',
+            $body,
+            'the configured source must decide the host'
+        );
         Assert::notContains(
             'attacker.test',
             $body,
             'a reset link must never be built from the request Host header'
         );
-    }
+    } finally {
+        if ($had) {
+            Settings::set('system.install_url', $was);
+        } else {
+            Settings::forget('system.install_url');
+        }
 
-    DB::delete('users', 'id = :id', ['id' => $id]);
+        DB::delete('users', 'id = :id', ['id' => $id]);
+    }
 });

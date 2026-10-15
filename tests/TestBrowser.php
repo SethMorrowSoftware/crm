@@ -64,10 +64,16 @@ final class TestBrowser
 
     /**
      * @param array<string,string>|null $post
+     * @param list<string> $extraHeaders
      * @return array{status:int,body:string,headers:string,location:string}
      */
-    public function request(string $path, ?array $post = null, bool $follow = false): array
-    {
+    public function request(
+        string $path,
+        ?array $post = null,
+        bool $follow = false,
+        array $extraHeaders = [],
+        ?string $cookie = null
+    ): array {
         $handle = curl_init($this->baseUrl . $path);
 
         if ($handle === false) {
@@ -82,8 +88,17 @@ final class TestBrowser
             CURLOPT_FOLLOWLOCATION => $follow,
             CURLOPT_TIMEOUT        => 20,
             CURLOPT_MAXREDIRS      => 5,
-            CURLOPT_HTTPHEADER     => ['X-Forwarded-For: ' . $this->clientIp],
+            CURLOPT_HTTPHEADER     => array_merge(
+                ['X-Forwarded-For: ' . $this->clientIp],
+                $extraHeaders
+            ),
         ];
+
+        if ($cookie !== null && $cookie !== '') {
+            // Not domain-matched by libcurl, unlike the jar — see
+            // postWithForgedHost().
+            $options[CURLOPT_COOKIE] = $cookie;
+        }
 
         if ($post !== null) {
             $options[CURLOPT_POST] = true;
@@ -150,6 +165,63 @@ final class TestBrowser
         $data['_token'] = $this->csrfToken($tokenPath);
 
         return $this->post($path, $data, $follow);
+    }
+
+    /**
+     * The cookies this browser is holding, as a request header value.
+     */
+    public function cookieHeader(): string
+    {
+        $pairs = [];
+
+        foreach (preg_split('/\R/', (string) @file_get_contents($this->jar)) ?: [] as $line) {
+            $line = trim($line);
+
+            if ($line === '') {
+                continue;
+            }
+
+            // A HttpOnly cookie is stored as a comment line with a marker, so
+            // the marker has to be stripped before comments are skipped — the
+            // session cookie is exactly this kind.
+            if (str_starts_with($line, '#HttpOnly_')) {
+                $line = substr($line, strlen('#HttpOnly_'));
+            } elseif ($line[0] === '#') {
+                continue;
+            }
+
+            $fields = explode("\t", $line);
+
+            if (count($fields) >= 7 && $fields[5] !== '') {
+                $pairs[] = $fields[5] . '=' . $fields[6];
+            }
+        }
+
+        return implode('; ', $pairs);
+    }
+
+    /**
+     * POST with a FORGED Host header, carrying the session cookie explicitly.
+     *
+     * The explicit cookie is the whole point. libcurl matches jar cookies
+     * against the Host header, so overriding Host means NO cookie is sent at
+     * all — the session that minted the CSRF token is not the session that
+     * posts, the csrf middleware answers 419, and the request never reaches the
+     * controller. A test written the obvious way therefore exercises nothing
+     * and, if it treats "no mail was sent" as a pass, reports success forever.
+     * That is exactly what happened to the reset-link-poisoning test: MEASURED,
+     * breaking the link construction in AuthController left the whole suite
+     * green. CURLOPT_COOKIE is not domain-matched, so the session survives the
+     * forgery and the attack actually runs.
+     *
+     * @param array<string,string> $data
+     * @return array{status:int,body:string,headers:string,location:string}
+     */
+    public function postWithForgedHost(string $tokenPath, string $path, array $data, string $host): array
+    {
+        $data['_token'] = $this->csrfToken($tokenPath);
+
+        return $this->request($path, $data, false, ['Host: ' . $host], $this->cookieHeader());
     }
 
     public function login(string $email, string $password): array

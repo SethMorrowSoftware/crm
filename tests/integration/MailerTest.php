@@ -713,6 +713,46 @@ Harness::test('the installer-recorded URL beats a crafted Host header', function
     Assert::notContains('attacker.test', $url);
 });
 
+Harness::test('a stored URL with a path or a trailing slash is still usable', function (): void {
+    // The shapes these two settings ACTUALLY take on a real install, neither of
+    // which any other test feeds them.
+    //
+    // installer_currentBaseUrl() stores system.install_url as the scheme and
+    // host PLUS the subdirectory the app was installed in, so the ordinary
+    // cPanel layout gives "https://host/crm"; and an operator typing the venue
+    // website on the settings form will commonly end it with a slash.
+    //
+    // hostOf() drops the path with a single explode('/', $value)[0]. Without
+    // that line both of these values fail its host regex, hostOf() returns '',
+    // the loop skips BOTH configured keys, and baseUrl() falls through to the
+    // request's Host header — which is reset-link poisoning again, on a URL
+    // carrying a live token. MEASURED: deleting that one line left all 54
+    // mailer tests green, because every other test feeds a bare scheme://host.
+    $cases = [
+        ['venue.website', 'https://castlefuncenter.example/', 'castlefuncenter.example'],
+        ['system.install_url', 'https://crm.realvenue.test/crm', 'crm.realvenue.test'],
+    ];
+
+    foreach ($cases as [$key, $stored, $host]) {
+        $settings = ['venue.website' => null, 'system.install_url' => null];
+        $settings[$key] = $stored;
+
+        $url = with_link_inputs(
+            null,
+            $settings,
+            'attacker.test',
+            static fn (): string => Mailer::absoluteUrl('/reset-password/' . str_repeat('a', 64))
+        );
+
+        Assert::contains($host, $url, $key . ' = ' . $stored);
+        Assert::notContains(
+            'attacker.test',
+            $url,
+            $key . ' is configured, so the Host header must not be reached: ' . $url
+        );
+    }
+});
+
 Harness::test('the venue website is preferred over the installer URL', function (): void {
     // Precedence between the two stored fallbacks, which neither test above
     // pins on its own: an operator who has since moved the install to its real

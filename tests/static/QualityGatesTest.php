@@ -601,6 +601,19 @@ Harness::test('no unit test touches the database', function (): void {
     // The deny-list names the application services that open a connection on
     // first use. Pure helpers on the same classes — Auth::hash(),
     // Mailer::merge() — are fine and deliberately not listed.
+    // The FULLY-QUALIFIED spelling has to match too, and the first version of
+    // this gate did not catch it: its lookbehind was [A-Za-z0-9_\\], so a
+    // backslash SUPPRESSED the match and `App\Core\DB::value()` sailed through.
+    // That is not an exotic spelling — tests/unit/RouterTest.php already writes
+    // `App\Core\Request::capture()`, so it is the established style in this very
+    // directory. The gate reported 27/27 green on a file whose every line was a
+    // database call, while CI's lint job on the same tree exited 1. A gate that
+    // gives false assurance is worse than no gate, because the next person
+    // writes the call fully qualified, sees green, and pushes.
+    //
+    // A bare `use` of one of these in a unit file is flagged on its own line
+    // too, which closes the aliasing hole (`use App\Core\DB as Database;`)
+    // without trying to track aliases through the file.
     $forbidden = ['DB', 'Settings', 'Cache', 'Audit', 'Migration', 'Backup', 'Upgrade', 'Model'];
     $offenders = [];
 
@@ -613,9 +626,21 @@ Harness::test('no unit test touches the database', function (): void {
             }
 
             foreach ($forbidden as $class) {
-                if (preg_match('/(?<![A-Za-z0-9_\\\\])' . $class . '::/', $line) === 1) {
+                // Optional leading backslash, optional App\Core\ prefix. The
+                // lookbehind still stops MyDB:: and SubModel:: matching, but no
+                // longer stops a backslash.
+                $call = '/(?<![A-Za-z0-9_])\\\\?(?:App\\\\Core\\\\)?' . $class . '::/';
+
+                if (preg_match($call, $line) === 1) {
                     $offenders[] = relative_path($file) . ':' . ($number + 1)
                         . ' uses ' . $class . '::';
+                }
+
+                $import = '/^\s*use\s+\\\\?App\\\\Core\\\\' . $class . '\s*(;|\s+as\s)/';
+
+                if (preg_match($import, $line) === 1) {
+                    $offenders[] = relative_path($file) . ':' . ($number + 1)
+                        . ' imports ' . $class;
                 }
             }
         }
