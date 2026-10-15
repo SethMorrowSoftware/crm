@@ -275,13 +275,16 @@ function start_test_server(): ?array
     // then signals the PHP server directly, instead of killing a wrapper and
     // leaving the server orphaned for the CI runner to complain about.
     //
-    // apc.enable_cli=0 pins the server to Cache's FILE backend, so the cache a
-    // run leaves behind is on disk where the next run's flush above can clear
-    // it, and so the backend does not silently differ between a developer's
-    // machine and CI. It is NOT what keeps the suites out of the rate limiter —
-    // that was tried and does not work, because nothing in this process can be
-    // sure of reaching a counter the server process owns. Each TestBrowser
-    // presents its own client address instead.
+    // apc.enable_cli=0 asks the server for Cache's FILE backend rather than
+    // APCu, so the backend does not differ between a developer's machine and
+    // CI for no stated reason. It is NOT what keeps the suites out of the rate
+    // limiter, and it is deliberately not described as making the server's
+    // cache clearable from here: that was tried, with this flag set and the
+    // files unlinked directly, and CI still answered 429 from the sixth POST.
+    // Why it did not work was never established — the flag should have been
+    // enough, which is the point. Nothing in this process can be SURE of
+    // reaching state the server process owns, so the suites no longer try;
+    // each TestBrowser presents its own client address instead.
     $command = [
         PHP_BINARY,
         '-d', 'apc.enable_cli=0',
