@@ -20,6 +20,7 @@ declare(strict_types=1);
 
 $options = getopt('', [
     'unit', 'no-http', 'no-db', 'filter::', 'stop', 'junit::', 'help',
+    'require-db', 'require-http', 'min-tests::',
 ]) ?: [];
 
 if (isset($options['help'])) {
@@ -67,6 +68,19 @@ if (test_db_enabled()) {
     echo "Database skipped (CC_TEST_SKIP_DB=1)\n";
 }
 
+// A suite that silently skips is the most dangerous kind of green: CI reports
+// success having tested nothing. With --require-db, an unreachable database is
+// a hard failure instead.
+if (isset($options['require-db']) && !$databaseReady) {
+    fwrite(STDERR, "\nFAIL: --require-db was given but the database suites could not run.\n");
+
+    if (getenv('GITHUB_ACTIONS') !== false) {
+        fwrite(STDERR, "::error::The database was required but unavailable; no integration test ran.\n");
+    }
+
+    exit(1);
+}
+
 // ---------------------------------------------------------------------------
 // HTTP server
 //
@@ -92,6 +106,17 @@ if ($httpEnabled) {
     }
 } elseif (getenv('CC_TEST_SKIP_HTTP') === '1') {
     echo "HTTP suite skipped (CC_TEST_SKIP_HTTP=1)\n";
+}
+
+if (isset($options['require-http']) && !$httpEnabled) {
+    fwrite(STDERR, "\nFAIL: --require-http was given but the HTTP suite could not run.\n");
+
+    if (getenv('GITHUB_ACTIONS') !== false) {
+        fwrite(STDERR, "::error::The HTTP suite was required but could not start a server.\n");
+    }
+
+    stop_test_server($serverProcess, $serverPipes);
+    exit(1);
 }
 
 echo "\n";
@@ -133,6 +158,36 @@ $junit = isset($options['junit']) && $options['junit'] !== false
     : (getenv('CI') !== false ? __DIR__ . '/junit.xml' : null);
 
 $exitCode = Harness::report($junit);
+
+// The second half of the "green but empty" guard: assert that a plausible
+// number of tests actually ran. A filter legitimately reduces the count, so
+// this only applies when one was not used.
+$minimum = isset($options['min-tests']) && $options['min-tests'] !== false
+    ? (int) $options['min-tests']
+    : 0;
+
+if ($minimum > 0 && $filter === []) {
+    $ran = Harness::testCount();
+
+    if ($ran < $minimum) {
+        fwrite(STDERR, sprintf(
+            "\nFAIL: only %d tests ran but at least %d were expected.\n"
+            . "Either a suite was skipped silently, or --min-tests needs updating.\n",
+            $ran,
+            $minimum
+        ));
+
+        if (getenv('GITHUB_ACTIONS') !== false) {
+            fwrite(STDERR, sprintf(
+                "::error::Expected at least %d tests, only %d ran.\n",
+                $minimum,
+                $ran
+            ));
+        }
+
+        $exitCode = 1;
+    }
+}
 
 stop_test_server($serverProcess, $serverPipes);
 
@@ -207,13 +262,15 @@ function start_test_server(): ?array
         return null;
     }
 
-    $command = sprintf(
-        '%s -S 127.0.0.1:%d -t %s %s',
-        escapeshellarg(PHP_BINARY),
-        $port,
-        escapeshellarg(CC_ROOT),
-        escapeshellarg(CC_ROOT . '/tools/dev-server.php')
-    );
+    // Passed as an array so no intermediate shell is spawned: proc_terminate()
+    // then signals the PHP server directly, instead of killing a wrapper and
+    // leaving the server orphaned for the CI runner to complain about.
+    $command = [
+        PHP_BINARY,
+        '-S', '127.0.0.1:' . $port,
+        '-t', CC_ROOT,
+        CC_ROOT . '/tools/dev-server.php',
+    ];
 
     $descriptors = [
         0 => ['pipe', 'r'],
@@ -340,7 +397,26 @@ function stop_test_server(mixed $process, array $pipes): void
     }
 
     if (is_resource($process)) {
-        @proc_terminate($process);
+        @proc_terminate($process, SIGTERM);
+
+        // Give it a moment to exit on its own before insisting, so the server
+        // closes its listening socket and the port is free for the next run.
+        for ($attempt = 0; $attempt < 20; $attempt++) {
+            $status = @proc_get_status($process);
+
+            if (!is_array($status) || $status['running'] !== true) {
+                break;
+            }
+
+            usleep(50000);
+        }
+
+        $status = @proc_get_status($process);
+
+        if (is_array($status) && $status['running'] === true) {
+            @proc_terminate($process, SIGKILL);
+        }
+
         @proc_close($process);
     }
 

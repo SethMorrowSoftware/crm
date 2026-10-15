@@ -125,6 +125,18 @@ final class Harness
     }
 
     /**
+     * How many tests have run.
+     *
+     * The runner uses this for its "green but empty" guard: a suite that
+     * silently skips everything would otherwise report success having tested
+     * nothing at all.
+     */
+    public static function testCount(): int
+    {
+        return count(self::$results);
+    }
+
+    /**
      * Print the summary and return the process exit code.
      */
     public static function report(?string $junitPath = null): int

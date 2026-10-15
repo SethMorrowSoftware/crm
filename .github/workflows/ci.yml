@@ -5,8 +5,11 @@ name: CI
 # shared host the application actually runs on.
 
 on:
+  # Only the long-lived branches on push. Feature branches are covered by
+  # their pull request, so this avoids running the whole matrix twice for
+  # every commit on a PR branch.
   push:
-    branches: ['**']
+    branches: [main, master]
   pull_request:
   workflow_dispatch:
 
@@ -63,7 +66,8 @@ jobs:
           exit $failed
 
       - name: Unit and static suites
-        run: php tests/run.php --unit --junit=tests/junit-unit.xml
+        # --min-tests guards against a green run that tested nothing.
+        run: php tests/run.php --unit --min-tests=100 --junit=tests/junit-unit.xml
 
       - name: Upload unit results
         if: always()
@@ -153,7 +157,14 @@ jobs:
           CC_TEST_DB_NAME: castle_crm_test
           CC_TEST_DB_USER: root
           CC_TEST_DB_PASS: ci-root-password
-        run: php tests/run.php --junit=tests/junit.xml
+        # --require-db and --require-http turn a skipped suite into a failure:
+        # CI reporting success because nothing ran is worse than CI failing.
+        run: |
+          php tests/run.php \
+            --require-db \
+            --require-http \
+            --min-tests=200 \
+            --junit=tests/junit.xml
 
       - name: Show the application log on failure
         if: failure()

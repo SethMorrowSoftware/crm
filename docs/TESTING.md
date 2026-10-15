@@ -18,6 +18,9 @@ php tests/run.php --filter=validator,security
 # Stop at the first failure
 php tests/run.php --stop
 
+# Refuse to report success if a suite silently skipped (what CI uses)
+php tests/run.php --require-db --require-http --min-tests=200
+
 # Prove the product's actual promise: that it installs on a bare host
 php tests/install/walk-installer.php
 ```
@@ -37,6 +40,21 @@ php tests/install/walk-installer.php
 The runner starts and stops its own web server, so `php tests/run.php` is the
 whole job. It writes a throwaway `config/config.php`, stashing any existing one
 and restoring it afterwards.
+
+### Guarding against a green that tested nothing
+
+The most dangerous CI result is success reported by a run that skipped
+everything — an unreachable database makes the integration suites vanish, and
+the exit code stays 0. Three flags close that:
+
+| Flag | Effect |
+|---|---|
+| `--require-db` | An unavailable database is a hard failure, not a skip |
+| `--require-http` | A server that will not start is a hard failure |
+| `--min-tests=N` | Fail unless at least N tests actually ran (ignored when `--filter` is used, which legitimately reduces the count) |
+
+CI passes all three. If you add a suite and the count climbs, raise the
+`--min-tests` value in `.github/workflows/ci.yml` — that is the point of it.
 
 ## The four layers
 
