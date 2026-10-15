@@ -611,48 +611,125 @@ Harness::test('a seeded subject renders a name with an apostrophe as typed', fun
 // first needs real rows. The app_url-only case stays in unit/mailer, which
 // runs with no database at all.
 
-Harness::test('with no app_url a link uses the configured venue website', function (): void {
-    $originalUrl = Config::get('app_url');
-    $originalHost = $_SERVER['HTTP_HOST'] ?? null;
+/**
+ * Run a closure with absoluteUrl()'s three inputs pinned: the configured
+ * app_url, the stored settings it falls back through, and the request's Host
+ * header. All three are put back exactly as they were.
+ *
+ * "Exactly" is the point, and it is why this does not use with_mail_settings():
+ * a row's EXISTENCE has to be restored as well as its value. venue.website is
+ * seeded by the installer, so forgetting it would change what every later test
+ * sees; system.install_url is not seeded on this path, so setting it back to
+ * null would CREATE a row that was never there. One leaks a deletion, the other
+ * an insertion, and both leave the suite passing.
+ *
+ * "Not configured" is expressed as null, which is what baseUrl() means by it:
+ * it trims each stored value and skips an empty one, so a null row and an
+ * absent row are the same thing to the code under test.
+ *
+ * @param array<string,string|null> $settings
+ */
+function with_link_inputs(?string $appUrl, array $settings, ?string $host, callable $callback): mixed
+{
+    $previousUrl = Config::get('app_url');
+    $previousHost = $_SERVER['HTTP_HOST'] ?? null;
+    $previous = [];
+
+    foreach ($settings as $key => $value) {
+        $previous[$key] = [
+            'exists' => setting_row_exists($key),
+            'value'  => Settings::get($key),
+        ];
+
+        Settings::set($key, $value);
+    }
+
+    Config::set('app_url', $appUrl);
+    set_request_host($host);
 
     try {
-        Config::set('app_url', null);
-        Settings::set('venue.website', 'https://castlefuncenter.example');
-        $_SERVER['HTTP_HOST'] = 'attacker.test';
-
-        $url = Mailer::absoluteUrl('/u/abc');
-
-        Assert::contains('castlefuncenter.example', $url);
-        Assert::notContains('attacker.test', $url);
+        return $callback();
     } finally {
-        Config::set('app_url', $originalUrl);
-        Settings::forget('venue.website');
-        $_SERVER['HTTP_HOST'] = $originalHost;
+        Config::set('app_url', $previousUrl);
+        set_request_host($previousHost);
+
+        foreach ($previous as $key => $before) {
+            if ($before['exists']) {
+                Settings::set($key, $before['value']);
+
+                continue;
+            }
+
+            Settings::forget($key);
+        }
     }
+}
+
+function setting_row_exists(string $key): bool
+{
+    return DB::first('SELECT `key` FROM {settings} WHERE `key` = :key', ['key' => $key]) !== null;
+}
+
+/**
+ * Absent and empty are different to hostOf(), so a null host unsets the key
+ * rather than assigning null to it.
+ */
+function set_request_host(?string $host): void
+{
+    if ($host === null) {
+        unset($_SERVER['HTTP_HOST']);
+
+        return;
+    }
+
+    $_SERVER['HTTP_HOST'] = $host;
+}
+
+
+Harness::test('with no app_url a link uses the configured venue website', function (): void {
+    $url = with_link_inputs(
+        null,
+        ['venue.website' => 'https://castlefuncenter.example', 'system.install_url' => null],
+        'attacker.test',
+        static fn (): string => Mailer::absoluteUrl('/u/abc')
+    );
+
+    Assert::contains('castlefuncenter.example', $url);
+    Assert::notContains('attacker.test', $url, 'the Host header must not win');
 });
 
 Harness::test('the installer-recorded URL beats a crafted Host header', function (): void {
     // The normal state after setup: system.install_url holds the address the
     // operator actually reached the installer on, so even with app_url and the
     // venue website unset, a crafted request cannot redirect a reset link.
-    $originalUrl = Config::get('app_url');
-    $originalHost = $_SERVER['HTTP_HOST'] ?? null;
+    $url = with_link_inputs(
+        null,
+        ['venue.website' => null, 'system.install_url' => 'https://crm.realvenue.test'],
+        'attacker.test',
+        static fn (): string => Mailer::absoluteUrl('/reset-password/' . str_repeat('a', 64))
+    );
 
-    try {
-        Config::set('app_url', null);
-        Settings::forget('venue.website');
-        Settings::set('system.install_url', 'https://crm.realvenue.test');
-        $_SERVER['HTTP_HOST'] = 'attacker.test';
+    Assert::contains('crm.realvenue.test', $url);
+    Assert::notContains('attacker.test', $url);
+});
 
-        $url = Mailer::absoluteUrl('/reset-password/' . str_repeat('a', 64));
+Harness::test('the venue website is preferred over the installer URL', function (): void {
+    // Precedence between the two stored fallbacks, which neither test above
+    // pins on its own: an operator who has since moved the install to its real
+    // address should not have links built from the address setup ran on.
+    $url = with_link_inputs(
+        null,
+        [
+            'venue.website'      => 'https://castlefuncenter.example',
+            'system.install_url' => 'https://temporary.hostingco.test',
+        ],
+        'attacker.test',
+        static fn (): string => Mailer::absoluteUrl('/u/abc')
+    );
 
-        Assert::contains('crm.realvenue.test', $url);
-        Assert::notContains('attacker.test', $url);
-    } finally {
-        Config::set('app_url', $originalUrl);
-        Settings::forget('system.install_url');
-        $_SERVER['HTTP_HOST'] = $originalHost;
-    }
+    Assert::contains('castlefuncenter.example', $url);
+    Assert::notContains('temporary.hostingco.test', $url);
+    Assert::notContains('attacker.test', $url);
 });
 
 Harness::test('an unconfigured install sanitises the host it falls back to', function (): void {
@@ -661,58 +738,85 @@ Harness::test('an unconfigured install sanitises the host it falls back to', fun
     // Mailer logs a warning when it comes to this. What must NOT happen is a
     // crafted header smuggling a path, a credential, a second host or a header
     // break into the URL.
-    $originalUrl = Config::get('app_url');
-    $originalHost = $_SERVER['HTTP_HOST'] ?? null;
+    with_link_inputs(
+        null,
+        ['venue.website' => null, 'system.install_url' => null],
+        'crm.example.test',
+        static function (): void {
+            $cases = [
+                // crafted header            => must not appear in the URL
+                'attacker.test/evil'         => '/evil',
+                'user:pass@attacker.test'    => '@',
+                "real.test\nX-Evil: 1"       => "\n",
+                'real.test attacker.test'    => ' ',
+            ];
 
-    try {
-        Config::set('app_url', null);
-        Settings::forget('venue.website');
-        Settings::forget('system.install_url');
+            foreach ($cases as $crafted => $forbidden) {
+                set_request_host((string) $crafted);
 
-        $cases = [
-            // crafted header            => must not appear in the URL
-            'attacker.test/evil'         => '/evil',
-            'user:pass@attacker.test'    => '@',
-            "real.test\nX-Evil: 1"       => "\n",
-            'real.test attacker.test'    => ' ',
-        ];
+                $url = Mailer::absoluteUrl('/u/abc');
 
-        foreach ($cases as $crafted => $forbidden) {
-            $_SERVER['HTTP_HOST'] = $crafted;
-
-            $url = Mailer::absoluteUrl('/u/abc');
-
-            Assert::notContains(
-                $forbidden,
-                $url,
-                'input: ' . addcslashes((string) $crafted, "\n")
-            );
-            Assert::matches(
-                '#^https?://[A-Za-z0-9.-]+(:\d+)?/u/abc$#',
-                $url,
-                'the URL must have exactly one clean host: ' . $url
-            );
+                Assert::notContains(
+                    $forbidden,
+                    $url,
+                    'input: ' . addcslashes((string) $crafted, "\n")
+                );
+                Assert::matches(
+                    '#^https?://[A-Za-z0-9.-]+(:\d+)?/u/abc$#',
+                    $url,
+                    'the URL must have exactly one clean host: ' . $url
+                );
+            }
         }
-    } finally {
-        Config::set('app_url', $originalUrl);
-        $_SERVER['HTTP_HOST'] = $originalHost;
-    }
+    );
 });
 
 Harness::test('a plain host is still usable when nothing is configured', function (): void {
     // The fallback must keep working, or a fresh install's links break.
-    $originalUrl = Config::get('app_url');
-    $originalHost = $_SERVER['HTTP_HOST'] ?? null;
+    $url = with_link_inputs(
+        null,
+        ['venue.website' => null, 'system.install_url' => null],
+        'crm.example.test',
+        static fn (): string => Mailer::absoluteUrl('/u/abc')
+    );
 
-    try {
-        Config::set('app_url', null);
-        Settings::forget('venue.website');
-        Settings::forget('system.install_url');
-        $_SERVER['HTTP_HOST'] = 'crm.example.test';
+    Assert::contains('crm.example.test', $url);
+});
 
-        Assert::contains('crm.example.test', Mailer::absoluteUrl('/u/abc'));
-    } finally {
-        Config::set('app_url', $originalUrl);
-        $_SERVER['HTTP_HOST'] = $originalHost;
-    }
+Harness::test('the link helper restores a row it found and removes one it did not', function (): void {
+    // Both halves of this were wrong in the first version of these tests, and
+    // the check written to catch it was itself vacuous — worth spelling out.
+    //
+    // A row that EXISTS must come back with its value, because forgetting it
+    // deletes real configuration on an installed system. A row that did NOT
+    // exist must not be left behind, because setting it back to null creates
+    // one. The earlier check compared the rows before and after without
+    // establishing them first — and NEITHER is seeded in this database
+    // (venue.website is written by the installer, not by the test seeds), so it
+    // compared absent with absent and passed against the leaking helper it was
+    // meant to fail on. The prior state has to be set up here, not assumed.
+    Settings::set('venue.website', 'https://already-configured.example');
+
+    Assert::true(setting_row_exists('venue.website'), 'precondition: the row is there');
+    Assert::false(setting_row_exists('system.install_url'), 'precondition: this one is not');
+
+    with_link_inputs(
+        null,
+        ['venue.website' => null, 'system.install_url' => 'https://temporary.example'],
+        'crm.example.test',
+        static fn (): string => Mailer::absoluteUrl('/u/abc')
+    );
+
+    Assert::true(setting_row_exists('venue.website'), 'an existing row must not be deleted');
+    Assert::same(
+        'https://already-configured.example',
+        Settings::get('venue.website'),
+        'and its value must come back'
+    );
+    Assert::false(
+        setting_row_exists('system.install_url'),
+        'a row that was absent must not be created'
+    );
+
+    Settings::forget('venue.website');
 });

@@ -169,10 +169,20 @@ jobs:
       - name: Show the application log on failure
         if: failure()
         run: |
+          # The whole application log, not a tail of it. A 120-line tail ended
+          # before the http suites had even run, so a red reset-password suite
+          # showed no entry explaining itself and the cause had to be found by
+          # reproducing CI's environment locally instead of by reading this.
           echo "── application log ──"
-          tail -n 120 storage/logs/*.log 2>/dev/null || echo "(no application log)"
-          echo "── test server log ──"
-          tail -n 60 storage/logs/test-server.log 2>/dev/null || echo "(no server log)"
+          cat storage/logs/castle-*.log 2>/dev/null || echo "(no application log)"
+          # The server log is mostly Accepted/Closing pairs, so keep only the
+          # request lines — those carry the status code of every POST, which is
+          # how a 429 from the rate limiter becomes visible at all.
+          echo "── test server requests ──"
+          grep -hE '\[[0-9]{3}\]:' storage/logs/test-server.log 2>/dev/null \
+            | tail -n 200 || echo "(no server request lines)"
+          echo "── test server log (tail) ──"
+          tail -n 40 storage/logs/test-server.log 2>/dev/null || echo "(no server log)"
 
       - name: Upload test results
         if: always()

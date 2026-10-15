@@ -144,7 +144,7 @@ by accident.
 
 ### Tests and CI
 
-- **405 tests, no test framework** — the same no-dependency constraint as the
+- **407 tests, no test framework** — the same no-dependency constraint as the
   application, so CI needs nothing but PHP.
 - Four layers: unit, static analysis over the source itself, integration
   against a real MySQL, and end-to-end over real HTTP against the real front
@@ -221,7 +221,7 @@ Fixed here:
   Mode address and mistyping the From address in one submit put the old address
   back, looking saved.
 
-The suite grew from 372 to **405 tests** to cover them. Each fix was
+The suite grew from 372 to **407 tests** to cover them. Each fix was
 mutation-checked: the password-reset suite, for instance, fails on three
 separate assertions when the token lookup is replaced with `LIMIT 1` — the
 mutation that previously left all 372 tests green.
@@ -231,9 +231,42 @@ with no database at all — so they did not fail, they *errored*, and because th
 CI matrix and the installer walk-through both `needs: lint`, they took the whole
 pipeline down on the first push. They now live in `integration/mailer`, and a
 static gate asserts that no test under `tests/unit` names `DB::`, `Settings::`
-or any other service that opens a connection. That gate is the 405th test: the
-mistake was mine, and the layer contract was only written in prose until it
-caught nobody.
+or any other service that opens a connection. That gate is one of the tests
+counted above: the mistake was mine, and the layer contract was only written in
+prose until it caught nobody.
+
+Then the matrix — which had been skipped on both previous pushes, because it
+`needs: lint` — ran for the first time and failed on all five configurations
+while every local run stayed green. **Two of the new password-reset tests were
+defeated by the application's own rate limiter.** `/forgot-password` allows five
+POSTs per quarter of an hour, the suite makes ten, and it cleared the counter
+between them with `Cache::flush()`. That call clears whichever backend the
+*calling* process resolves — and the counter belongs to the *server* process.
+The two agree only on the file backend; CI's PHP had APCu, which is per-process
+shared memory, so the flush cleared a segment nobody else could see and reported
+success. Calls six onwards were answered 429, no token was ever minted, and the
+two tests that need a real minted token failed. A developer's machine without
+APCu passed every time.
+
+Three things came out of it, because the environment-dependent bug was the
+smaller half of the problem:
+
+- `tests/run.php` starts the test server with `apc.enable_cli=0` and writes an
+  explicit `storage_path`, so both processes provably share one cache; the suite
+  now unlinks the counter files directly rather than trusting an API that can
+  succeed against the wrong store.
+- The failure said only **"Expected a value, got null"** — one sentence for a
+  path containing eight mail-refusal reasons, a rate limiter and a redirect. It
+  now reports the HTTP status, and whether a `password_resets` row exists, which
+  separates "never minted" from "minted but not mailed" in the message itself.
+- CI's failure step tailed 120 log lines, which ended *before* the http suites
+  had run, so the log explaining it was truncated away. It now prints the whole
+  application log and every server request line with its status code — a 429 was
+  invisible in CI output, and the rate limiter logs at WARNING while the test
+  server runs at `log_level=error`.
+
+The pattern worth keeping: **a test that reaches past the application to reset
+its state is only as reliable as its assumption about where that state lives.**
 
 One confirmed finding was deliberately **not** fixed here: `users_manage`
 allows a non-owner holding it to set the Owner's password, which defeats the

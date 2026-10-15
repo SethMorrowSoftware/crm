@@ -54,14 +54,40 @@ require_once CC_ROOT . '/tests/TestBrowser.php';
  * (The log driver records the body too, but the test runner configures the
  * server with log_level=error, so its notice is filtered out.)
  */
+/**
+ * Clear the server's rate-limit counters.
+ *
+ * /forgot-password allows 5 POSTs per 15 minutes per IP, and every request in
+ * this suite comes from 127.0.0.1 — so without clearing the counters, the sixth
+ * call onwards is answered with a 429 and no token is minted at all.
+ *
+ * The files are unlinked directly rather than going through Cache::flush(),
+ * because that call clears whichever backend THIS process resolves, and the
+ * counter that matters belongs to the SERVER process. The two agree only on the
+ * file backend, which tests/run.php pins the server to with apc.enable_cli=0;
+ * with APCu in play, flush() clears a segment nobody else can see and reports
+ * success. Cache::flush() is still called, for this process's own entries.
+ *
+ * The throttle itself remains exercised, by the smoke suite's own test for it.
+ */
+function clear_rate_limits(): int
+{
+    $cleared = 0;
+
+    foreach (glob(CC_ROOT . '/storage/cache/*.cache') ?: [] as $file) {
+        if (@unlink($file)) {
+            $cleared++;
+        }
+    }
+
+    App\Core\Cache::flush();
+
+    return $cleared;
+}
+
 function request_reset(string $email): array
 {
-    // /forgot-password allows 5 requests per 15 minutes per IP, and every
-    // request in this suite comes from 127.0.0.1 — so without clearing the
-    // counters the later tests in this file would be answered with a 429 and
-    // read as "no token was minted". The throttle itself is still exercised,
-    // by the smoke suite's own test for it.
-    App\Core\Cache::flush();
+    clear_rate_limits();
 
     $browser = new TestBrowser(getenv('CC_TEST_BASE_URL') ?: '', 'reset-' . bin2hex(random_bytes(3)));
     $response = $browser->postWithToken('/forgot-password', '/forgot-password', ['email' => $email], true);
@@ -80,7 +106,59 @@ function request_reset(string $email): array
         'token'    => $m[1] ?? null,
         'browser'  => $browser,
         'log'      => $body,
+        'why'      => isset($m[1]) ? '' : mint_failure_detail($email, $response),
     ];
+}
+
+/**
+ * Say why no token came back, in the failure message itself.
+ *
+ * This exists because the first version of this suite asserted
+ * Assert::notNull($result['token']) with no message, and when it went red on CI
+ * — on all five configurations, while every local run passed — the report said
+ * only "Expected a value, got null". That is one sentence for a path with eight
+ * refusal reasons, a rate limiter and a redirect in it, and it cost a whole
+ * debugging round to narrow down something the test already knew.
+ *
+ * The two facts that split the space: the HTTP status (a 429 means the mint
+ * never ran), and whether password_resets holds a row (if it does, the token
+ * WAS minted and the mail was refused; if it does not, the request never got
+ * that far).
+ *
+ * @param array<string,mixed> $response
+ */
+function mint_failure_detail(string $email, array $response): string
+{
+    $status = (int) ($response['status'] ?? 0);
+
+    $minted = DB::exists('SELECT id FROM {password_resets} WHERE email = :e', ['e' => $email]);
+
+    $recent = DB::query(
+        "SELECT to_address, status, error_message FROM {messages}
+          WHERE channel = 'email' ORDER BY id DESC LIMIT 3"
+    );
+
+    $trail = [];
+
+    foreach ($recent as $row) {
+        $trail[] = $row['to_address'] . ' (' . $row['status']
+            . ((string) $row['error_message'] !== '' ? '; ' . $row['error_message'] : '') . ')';
+    }
+
+    return 'no reset link was recorded for ' . $email . '. '
+        . 'POST /forgot-password returned ' . $status . '. '
+        . ($status === 429
+            ? 'That is the rate limiter: the server\'s counter was not cleared, so the mint never ran. '
+                . 'clear_rate_limits() unlinks storage/cache/*.cache, which only reaches the server '
+                . 'when it is on the file backend — check that tests/run.php still starts it with '
+                . 'apc.enable_cli=0. '
+            : '')
+        . ($minted
+            ? 'A password_resets row EXISTS, so the token was minted and the MAIL was refused — '
+                . 'look for "Mail refused" or "Password reset email could not be sent" in '
+                . 'storage/logs/, and note the server runs at log_level=error. '
+            : 'No password_resets row, so the request never reached the mint. ')
+        . 'Newest email rows: ' . ($trail === [] ? 'none at all' : implode(', ', $trail));
 }
 
 /** The owner account these tests reset, recreated per test so order cannot matter. */
@@ -119,7 +197,10 @@ Harness::test('requesting a reset mints a single-use token and mails the link', 
     $result = request_reset($email);
 
     Assert::same(200, $result['response']['status']);
-    Assert::notNull($result['token'], 'the reset link should be recoverable from the log: ' . $result['log']);
+    Assert::notNull(
+        $result['token'],
+        $result['why'] ?: 'the reset link should be recoverable from the log: ' . $result['log']
+    );
 
     $row = DB::first('SELECT * FROM {password_resets} WHERE email = :e', ['e' => $email]);
 
@@ -161,7 +242,7 @@ Harness::test('a DIFFERENT well-formed token cannot redeem a pending reset', fun
 
     $result = request_reset($email);
 
-    Assert::notNull($result['token']);
+    Assert::notNull($result['token'], $result['why']);
 
     $attacker = str_repeat('ab', 32);
 
@@ -223,7 +304,7 @@ Harness::test('an expired token is refused', function (): void {
 
     $result = request_reset($email);
 
-    Assert::notNull($result['token']);
+    Assert::notNull($result['token'], $result['why']);
 
     // Age it past its hour.
     DB::update('password_resets', [
@@ -256,7 +337,7 @@ Harness::test('the correct token resets the password and burns itself', function
 
     $result = request_reset($email);
 
-    Assert::notNull($result['token']);
+    Assert::notNull($result['token'], $result['why']);
 
     $response = $result['browser']->postWithToken('/reset-password/' . $result['token'], '/reset-password', [
         'token'                 => $result['token'],
@@ -302,8 +383,8 @@ Harness::test('issuing a new reset invalidates the previous one', function (): v
     $first = request_reset($email);
     $second = request_reset($email);
 
-    Assert::notNull($first['token']);
-    Assert::notNull($second['token']);
+    Assert::notNull($first['token'], $first['why']);
+    Assert::notNull($second['token'], $second['why']);
     Assert::notSame($first['token'], $second['token']);
 
     Assert::same(

@@ -119,6 +119,22 @@ action behind a GET link, and font sizes are relative so a browser's own text
 setting still works. The name detector is itself tested against fixtures —
 a static gate that cannot fail reads as coverage without being any.
 
+### Resetting state the server owns
+
+Two layers run in two processes: the tests run here, the front controller runs
+in the test server. Anything a test resets by reaching past HTTP — a rate-limit
+counter, a cache entry — has to be stored where *both* processes can see it, or
+the reset silently applies to the wrong copy and succeeds.
+
+So `tests/run.php` starts the server with `apc.enable_cli=0` and an explicit
+`storage_path`, pinning it to the file cache, and the suites clear those files
+directly instead of calling `Cache::flush()` — which clears whichever backend
+the calling process happens to resolve. This is not hypothetical tidiness: with
+APCu present only on CI, the password-reset suite passed locally and failed on
+all five CI configurations, because the flush cleared a per-process segment the
+server could not see and the rate limiter answered 429 from the sixth request
+on.
+
 ### `tests/integration` — against a real database
 
 The schema and seeds run through **their own files**, the same code path the

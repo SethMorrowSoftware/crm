@@ -234,7 +234,11 @@ function start_test_server(): ?array
         . "        'prefix'  => 'cc_',\n"
         . "        'socket'  => " . $export($config['socket']) . ",\n"
         . "    ],\n"
-        . "    'storage_path' => null,\n"
+        // Explicit, not null: the cache and the log have to land where this
+        // process expects them, so that clearing a rate-limit counter here
+        // clears the one the server just wrote. Relying on both sides to
+        // derive the same default from a null is how that stops being true.
+        . "    'storage_path' => " . $export(CC_ROOT . '/storage') . ",\n"
         . "    'session'      => [\n"
         . "        'name'             => 'castle_crm_test_session',\n"
         . "        'idle_timeout'     => 3600,\n"
@@ -265,8 +269,18 @@ function start_test_server(): ?array
     // Passed as an array so no intermediate shell is spawned: proc_terminate()
     // then signals the PHP server directly, instead of killing a wrapper and
     // leaving the server orphaned for the CI runner to complain about.
+    //
+    // apc.enable_cli=0 pins the server to Cache's FILE backend, and it is not a
+    // detail. Several HTTP tests have to clear the server's rate-limit counters
+    // between requests, and a test running in this process can only do that if
+    // the store is on disk where both processes can see it: APCu is per-process
+    // shared memory, so a counter in the server's segment is unreachable from
+    // here. That is precisely how CI diverged from a developer's machine — a
+    // box without APCu passed, CI's PHP had it, and the reset-password suite
+    // went red on all five configurations while every local run was green.
     $command = [
         PHP_BINARY,
+        '-d', 'apc.enable_cli=0',
         '-S', '127.0.0.1:' . $port,
         '-t', CC_ROOT,
         CC_ROOT . '/tools/dev-server.php',
