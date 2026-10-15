@@ -527,7 +527,8 @@ seeing guest spend or lifetime value.
 
 ## 7. Data model
 
-~72 tables. Conventions: `InnoDB`, `utf8mb4_unicode_ci`, `id BIGINT UNSIGNED AUTO_INCREMENT`,
+99 tables and 121 foreign keys as built (this section sketches the shape; the
+authority is `install/schema/*.sql`). Conventions: `InnoDB`, `utf8mb4_unicode_ci`, `id BIGINT UNSIGNED AUTO_INCREMENT`,
 `created_at`/`updated_at` on every table, `deleted_at` soft deletes on business entities,
 FKs with explicit `ON DELETE` behaviour, table prefix configurable (default `cc_`).
 
