@@ -553,3 +553,53 @@ Harness::test('every send writes a message row with the original recipient', fun
 
     DB::delete('users', 'id = :id', ['id' => $ownerId]);
 });
+
+Harness::test('a seeded subject renders a name with an apostrophe as typed', function (): void {
+    // End to end through the real stored template, because the escaping bug
+    // was in sendTemplate()'s use of the body's escaper for the subject, and a
+    // unit test of merge() alone would not have seen it.
+    $ownerId = test_make_user('owner', ['email' => 'owner-subject-escape@example.test']);
+
+    Mailer::useDriver('log');
+    Mailer::startCapturing();
+
+    try {
+        $result = with_mail_settings(live_settings(), static fn (): array => Mailer::sendTemplate(
+            'password-reset',
+            'apostrophe@example.test',
+            [
+                'name'       => "Mia O'Brien",
+                'reset_link' => 'https://crm.example.test/reset-password/' . str_repeat('a', 64),
+                'venue_name' => "Dave & Buster's",
+                'expires_in' => 'one hour',
+            ],
+            ['kind' => Mailer::TRANSACTIONAL]
+        ));
+
+        $sent = Mailer::captured();
+    } finally {
+        Mailer::stopCapturing();
+        Mailer::useDriver(null);
+    }
+
+    Assert::true($result['sent'], 'reason: ' . $result['reason']);
+    Assert::count(1, $sent);
+
+    Assert::contains("Dave & Buster's", $sent[0]['subject'], 'the subject must read as typed');
+    Assert::notContains('&amp;', $sent[0]['subject'], 'a subject line is not HTML');
+    Assert::notContains('&#039;', $sent[0]['subject']);
+
+    // The body is HTML and must still be escaped.
+    Assert::contains('&#039;', $sent[0]['html'], 'the HTML body must still escape the apostrophe');
+    Assert::notContains("Mia O'Brien", $sent[0]['html'], 'raw apostrophe must not reach the markup');
+
+    // And the stored record carries the readable subject, not entities.
+    $row = DB::first(
+        "SELECT subject FROM {messages} WHERE to_address = 'apostrophe@example.test' ORDER BY id DESC LIMIT 1"
+    );
+
+    Assert::notNull($row);
+    Assert::notContains('&amp;', (string) $row['subject'], 'nor may the message trail store entities');
+
+    DB::delete('users', 'id = :id', ['id' => $ownerId]);
+});

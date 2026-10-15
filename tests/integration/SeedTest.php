@@ -277,3 +277,105 @@ Harness::test('deleting the demo contacts leaves no orphans', function (): void 
 
     test_reset_transactional_data();
 });
+
+// ------------------------------------- the advertised cleanup, then a re-run
+
+Harness::test('re-seeding after the advertised cleanup does not fail the installer', function (): void {
+    // MEASURED. bookings do not cascade from contacts
+    // (fk_bookings_contact is ON DELETE SET NULL) and booking_number is
+    // UNIQUE, so the documented cleanup ("delete the demo contacts") left the
+    // bookings behind; the guard keyed only on contacts then read as "not
+    // seeded" and the re-run died on the unique key — inside the installer's
+    // transaction, taking the whole setup down rather than skipping a seed.
+    test_reset_transactional_data();
+
+    $first = load_seed('demo')();
+
+    Assert::greaterThan(0, $first['bookings'], 'precondition: bookings were created');
+
+    // Exactly the cleanup the seed header, step 7 and the docs advertise.
+    DB::delete('contacts', "source = 'demo'");
+
+    Assert::greaterThan(
+        0,
+        (int) DB::value("SELECT COUNT(*) FROM {bookings} WHERE booking_number LIKE 'DEMO-%'"),
+        'precondition: the bookings survive the contact delete'
+    );
+
+    $second = null;
+
+    Assert::doesNotThrow(static function () use (&$second): void {
+        $second = load_seed('demo')();
+    }, 'a re-run after the cleanup must not throw — it runs inside the installer transaction');
+
+    Assert::same(0, $second['contacts'], 'and it must create nothing rather than duplicate');
+    Assert::same(0, $second['bookings']);
+
+    test_reset_transactional_data();
+});
+
+Harness::test('every demo row is reachable from the demo-data tag', function (): void {
+    // The seed's contract says "delete the examples" is one filter. Tasks were
+    // not tagged, so after the cleanup five fake urgent tasks stayed on the
+    // owner's dashboard. Anything not tagged must cascade from something that
+    // is — this asserts one or the other for every table the seed writes.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $tagId = (int) DB::value('SELECT id FROM {tags} WHERE name = :n', ['n' => 'demo-data']);
+
+    Assert::greaterThan(0, $tagId);
+
+    $tagged = static fn (string $type): int => (int) DB::value(
+        'SELECT COUNT(*) FROM {taggables} WHERE tag_id = :t AND entity_type = :e',
+        ['t' => $tagId, 'e' => $type]
+    );
+
+    foreach (['contact', 'household', 'child', 'visit', 'deal', 'activity', 'task', 'booking'] as $type) {
+        Assert::greaterThan(0, $tagged($type), $type . ' rows must carry the demo-data tag');
+    }
+
+    // The two that cascade instead, asserted as cascading rather than tagged.
+    Assert::greaterThan(0, (int) DB::value('SELECT COUNT(*) FROM {consent_log}'));
+    Assert::greaterThan(0, (int) DB::value('SELECT COUNT(*) FROM {booking_payments}'));
+
+    // Now delete via the tag and prove nothing demo-ish is left behind.
+    foreach (['task', 'activity', 'visit', 'child', 'booking', 'deal', 'contact'] as $type) {
+        $ids = DB::column(
+            'SELECT entity_id FROM {taggables} WHERE tag_id = :t AND entity_type = :e',
+            ['t' => $tagId, 'e' => $type]
+        );
+
+        if ($ids === []) {
+            continue;
+        }
+
+        $table = match ($type) {
+            'child'    => 'children',
+            'activity' => 'activities',
+            default    => $type . 's',
+        };
+        $list = implode(',', array_map('intval', $ids));
+
+        DB::query('DELETE FROM {' . $table . '} WHERE id IN (' . $list . ')');
+    }
+
+    Assert::same(
+        0,
+        (int) DB::value('SELECT COUNT(*) FROM {tasks}'),
+        'no fake task may survive the documented cleanup — they land on the owner dashboard'
+    );
+    Assert::same(0, (int) DB::value('SELECT COUNT(*) FROM {bookings}'));
+    Assert::same(
+        0,
+        (int) DB::value('SELECT COUNT(*) FROM {booking_payments}'),
+        'payments should have cascaded with their booking'
+    );
+    Assert::same(
+        0,
+        (int) DB::value('SELECT COUNT(*) FROM {consent_log}'),
+        'consent rows should have cascaded with their contact'
+    );
+
+    test_reset_transactional_data();
+});

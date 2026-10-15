@@ -51,15 +51,40 @@ $flags = [];
 // misspelled flag is a tool that quietly deletes the wrong backups.
 $known = ['help', 'list', 'export', 'no-compress', 'include-volatile', 'keep', 'quiet'];
 
+// Flags that are meaningless without a value. `--keep` on its own used to
+// coerce to max(1, (int) true) = 1 and prune every backup but the one just
+// written — so forgetting the number destroyed thirteen of fourteen nightlies
+// and reported it as a success. `--keep 14` (a space) was already refused;
+// the valueless form was the one shape that got through.
+$needsValue = [
+    'keep'   => '/^\d{1,2}$/',
+    'export' => '/^[a-z_]+$/',
+];
+
 foreach ($args as $arg) {
-    if (preg_match('/^--([a-z-]+)(?:=(.*))?$/', $arg, $m) === 1 && in_array($m[1], $known, true)) {
-        $flags[$m[1]] = $m[2] ?? true;
-        continue;
+    if (preg_match('/^--([a-z-]+)(?:=(.*))?$/', $arg, $m) !== 1 || !in_array($m[1], $known, true)) {
+        fwrite(STDERR, 'Unrecognised argument: ' . $arg . "\n");
+        fwrite(STDERR, 'Known options: --' . implode(', --', $known) . "\n");
+        exit(2);
     }
 
-    fwrite(STDERR, 'Unrecognised argument: ' . $arg . "\n");
-    fwrite(STDERR, 'Known options: --' . implode(', --', $known) . "\n");
-    exit(2);
+    [, $name] = $m;
+    $value = $m[2] ?? null;
+
+    if (isset($needsValue[$name])) {
+        if ($value === null || preg_match($needsValue[$name], $value) !== 1) {
+            fwrite(STDERR, '--' . $name . " needs a value, e.g. --" . $name
+                . ($name === 'keep' ? '=14' : '=contacts') . "\n");
+            exit(2);
+        }
+
+        if ($name === 'keep' && (int) $value < 1) {
+            fwrite(STDERR, "--keep must be at least 1.\n");
+            exit(2);
+        }
+    }
+
+    $flags[$name] = $value ?? true;
 }
 
 if (isset($flags['help'])) {

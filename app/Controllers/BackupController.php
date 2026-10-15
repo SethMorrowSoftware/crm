@@ -7,10 +7,12 @@ namespace App\Controllers;
 use App\Core\Audit;
 use App\Core\Backup;
 use App\Core\DB;
+use App\Core\Log;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Settings;
 use RuntimeException;
+use Throwable;
 
 /**
  * Backups and data export.
@@ -208,6 +210,15 @@ final class BackupController extends Controller
 
         $filename = sprintf('%s-%s.csv', $table, gmdate('Ymd-His'));
 
+        // Audited BEFORE the stream starts, not after it finishes.
+        //
+        // The headers are already sent by the time the writer runs, so a
+        // failure part way through cannot become an error page — and the row
+        // that said who took a copy of the guest list used to be written only
+        // on success. An export that died after streaming 40,000 contacts left
+        // no trace at all, which is the one case the audit trail exists for.
+        Audit::event('data.exported', ['table' => $table, 'started' => true]);
+
         return Response::stream(static function () use ($table): void {
             $handle = fopen('php://output', 'wb');
 
@@ -217,11 +228,29 @@ final class BackupController extends Controller
 
             try {
                 $rows = Backup::exportCsv($table, $handle);
+
+                Audit::event('data.exported', ['table' => $table, 'rows' => $rows, 'complete' => true]);
+            } catch (Throwable $e) {
+                // The response is already a 200 with a CSV content type, so
+                // there is no way to turn this into an error page — and the
+                // bootstrap handler appending one would corrupt the download
+                // silently. Mark the file instead: a reader who opens it sees
+                // the export stopped, rather than trusting a short file.
+                Log::error('A CSV export failed part way through', [
+                    'table' => $table,
+                    'error' => $e->getMessage(),
+                ]);
+
+                Audit::event('data.exported', [
+                    'table'    => $table,
+                    'complete' => false,
+                    'error'    => $e->getMessage(),
+                ]);
+
+                echo "\n#### EXPORT INCOMPLETE — this file stopped early and is missing rows ####\n";
             } finally {
                 fclose($handle);
             }
-
-            Audit::event('data.exported', ['table' => $table, 'rows' => $rows]);
         }, $filename, 'text/csv; charset=UTF-8');
     }
 

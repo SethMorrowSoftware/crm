@@ -385,3 +385,148 @@ Harness::test('the exportable allowlist names only tables that exist', function 
         );
     }
 });
+
+// ------------------------------------------------- formula injection (CSV)
+
+Harness::test('exported cells cannot execute as spreadsheet formulas', function (): void {
+    // The Backups page tells the operator that "any cell beginning = or + [is]
+    // prefixed with an apostrophe, so a guest's 'name' cannot execute as a
+    // formula on a staff machine". It was not true of this path: the guard
+    // lived in Response::csv() (the audit export) and Backup::exportCsv()
+    // wrote raw values. A guest types their own first name on a booking form,
+    // an owner opens the download, and Excel runs it.
+    $payloads = [
+        '=HYPERLINK("http://evil.test","Click")',
+        '+1+1',
+        '-2+3',
+        '@SUM(A1:A9)',
+        "\tleading tab",
+        "\rleading cr",
+    ];
+
+    $ids = [];
+
+    foreach ($payloads as $i => $payload) {
+        $ids[] = test_make_contact(['first_name' => $payload, 'last_name' => 'Injected' . $i]);
+    }
+
+    $handle = fopen('php://temp', 'r+');
+    Backup::exportCsv('contacts', $handle);
+    rewind($handle);
+    $csv = (string) stream_get_contents($handle);
+    fclose($handle);
+
+    foreach ($payloads as $payload) {
+        // fputcsv doubles inner quotes and wraps the field, so compare against
+        // the CSV-encoded form rather than the raw string.
+        $expected = str_replace('"', '""', "'" . $payload);
+
+        Assert::contains(
+            $expected,
+            $csv,
+            'this cell must be prefixed with an apostrophe: ' . addcslashes($payload, "\t\r")
+        );
+    }
+
+    // And the raw form must not appear at the start of a field.
+    Assert::false(
+        (bool) preg_match('/(^|,)"?=HYPERLINK/m', $csv),
+        'an unneutralised formula reached the file'
+    );
+
+    foreach ($ids as $id) {
+        DB::delete('contacts', 'id = :id', ['id' => $id]);
+    }
+});
+
+Harness::test('a harmless value is not mangled by the guard', function (): void {
+    // The other half: the guard must not rewrite ordinary data. A phone number
+    // stored as "+18455550118" legitimately starts with +, so it gains the
+    // apostrophe — that is the documented trade — but a plain name must not.
+    $id = test_make_contact(['first_name' => 'Zoë', 'last_name' => "O'Brien"]);
+
+    $handle = fopen('php://temp', 'r+');
+    Backup::exportCsv('contacts', $handle);
+    rewind($handle);
+    $csv = (string) stream_get_contents($handle);
+    fclose($handle);
+
+    Assert::contains('Zoë', $csv);
+    Assert::notContains("'Zoë", $csv, 'a safe value must be written unchanged');
+
+    DB::delete('contacts', 'id = :id', ['id' => $id]);
+});
+
+// ----------------------------------------------------------- concurrency
+
+Harness::test('a second concurrent backup is refused rather than interleaved', function (): void {
+    // Two runs starting in the same second computed the same .part path and
+    // both opened it with a truncating mode, so their streams interleaved and
+    // the first rename() published the splice as a good backup — corrupt from
+    // that point, discoverable only during a restore.
+    clear_backups();
+
+    $lockPath = Backup::directory() . '/.backup.lock';
+    $held = fopen($lockPath, 'c');
+
+    Assert::notSame(false, $held, 'should be able to open the lock file');
+    Assert::true(flock($held, LOCK_EX | LOCK_NB), 'the test should get the lock first');
+
+    try {
+        $result = Backup::create(['reason' => 'test']);
+
+        Assert::false($result['ok'], 'a backup must not start while another holds the lock');
+        Assert::contains('already running', strtolower((string) $result['error']));
+        Assert::count(0, Backup::all(), 'and nothing should have been published');
+    } finally {
+        flock($held, LOCK_UN);
+        fclose($held);
+    }
+
+    // With the lock free again it works, proving the guard is not stuck on.
+    $after = Backup::create(['reason' => 'test']);
+
+    Assert::true($after['ok'], (string) $after['error']);
+
+    clear_backups();
+});
+
+Harness::test('each run writes a uniquely named temporary file', function (): void {
+    clear_backups();
+
+    $result = Backup::create(['reason' => 'test']);
+
+    Assert::true($result['ok'], (string) $result['error']);
+    Assert::count(
+        0,
+        (array) glob(Backup::directory() . '/*.part*'),
+        'the temporary file must be gone once the backup is published'
+    );
+
+    clear_backups();
+});
+
+Harness::test('two backups in the same second both survive', function (): void {
+    // The published name carries a second-resolution timestamp. An earlier fix
+    // for concurrent writes refused the second run outright, which broke a
+    // legitimate "back up, change something, back up again". Neither file may
+    // be lost and neither may be overwritten.
+    clear_backups();
+
+    $first = Backup::create(['reason' => 'test']);
+    $second = Backup::create(['reason' => 'test']);
+
+    Assert::true($first['ok'], (string) $first['error']);
+    Assert::true($second['ok'], (string) $second['error']);
+    Assert::notSame($first['filename'], $second['filename'], 'the names must differ');
+    Assert::count(2, Backup::all(), 'both must be on disk');
+
+    foreach ([$first, $second] as $result) {
+        $path = Backup::pathFor((string) $result['filename']);
+
+        Assert::notNull($path, 'each must be a listable, downloadable backup');
+        Assert::greaterThan(1000, (int) filesize((string) $path));
+    }
+
+    clear_backups();
+});

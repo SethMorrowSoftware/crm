@@ -14,8 +14,14 @@ declare(strict_types=1);
  *    reserves for fiction. Even with Safe Mode off and a provider configured,
  *    a demo contact cannot be messaged by accident.
  * 2. **Everything is findable and removable.** Every row this seed creates is
- *    tagged `demo-data`, and the contacts carry `source = 'demo'`, so
- *    "delete the examples" is one filter rather than an archaeology project.
+ *    either tagged `demo-data` — contacts, households, children, visits,
+ *    deals, activities, tasks and bookings — or cascades from a row that is
+ *    (consent_log from its contact, booking_payments from its booking), and
+ *    the contacts also carry `source = 'demo'`. So "delete the examples" is
+ *    one filter rather than an archaeology project. The tasks in particular
+ *    were missed at first and left five fake urgent items on the owner's
+ *    dashboard after the advertised cleanup, which is why this list is now
+ *    explicit and asserted by the seed tests.
  * 3. **No consent is faked.** Demo guests have email consent with a
  *    consent_log row that says, in writing, that it came from this seed and
  *    is not evidence of anything. Two deliberately have no consent, because
@@ -75,7 +81,18 @@ return static function (): array {
     };
 
     // Already seeded? Leave it alone rather than doubling it.
-    if (DB::exists("SELECT id FROM {contacts} WHERE source = 'demo'")) {
+    //
+    // Keyed on the bookings as well as the contacts, because they do not go
+    // away together: fk_bookings_contact is ON DELETE SET NULL, so the
+    // advertised cleanup ("delete the demo contacts") leaves the bookings
+    // behind with a null contact. Checking only the contacts then read as "not
+    // seeded", and the re-run died on booking_number's UNIQUE key — inside the
+    // installer's transaction, so it took the whole setup down rather than
+    // skipping a seed nobody needed. MEASURED.
+    $alreadySeeded = DB::exists("SELECT id FROM {contacts} WHERE source = 'demo'")
+        || DB::exists("SELECT id FROM {bookings} WHERE booking_number LIKE 'DEMO-%'");
+
+    if ($alreadySeeded) {
         return ['contacts' => 0, 'children' => 0, 'deals' => 0, 'bookings' => 0, 'visits' => 0, 'tasks' => 0];
     }
 
@@ -274,7 +291,7 @@ return static function (): array {
         foreach ($family['children'] as [$childName, $bornDaysAgo, $notes]) {
             $birthDate = $today->modify($bornDaysAgo . ' days');
 
-            DB::insert('children', [
+            $childId = DB::insert('children', [
                 'household_id' => $householdId,
                 'contact_id'   => $contactId,
                 'first_name'   => $childName,
@@ -285,6 +302,7 @@ return static function (): array {
                 'updated_at'   => $now,
             ]);
 
+            $tag('child', $childId);
             $children++;
         }
     }
@@ -304,7 +322,7 @@ return static function (): array {
             continue;
         }
 
-        DB::insert('visits', [
+        $visitId = DB::insert('visits', [
             'contact_id'   => $contactIds[$family['last']],
             'visit_date'   => $day($family['last_visit']),
             'source'       => 'manual',
@@ -314,6 +332,7 @@ return static function (): array {
             'created_at'   => $now,
         ]);
 
+        $tag('visit', $visitId);
         $visits++;
     }
 
@@ -403,7 +422,7 @@ return static function (): array {
             $tag('deal', $dealId);
             $deals++;
 
-            DB::insert('activities', [
+            $activityId = DB::insert('activities', [
                 'entity_type' => 'deal',
                 'entity_id'   => $dealId,
                 'type'        => 'note',
@@ -416,8 +435,10 @@ return static function (): array {
                 'created_at'  => $stamp($createdOffset, '10:21:00'),
             ]);
 
+            $tag('activity', $activityId);
+
             if ($nextAction !== null && $nextIn !== null) {
-                DB::insert('tasks', [
+                $taskId = DB::insert('tasks', [
                     'title'       => $nextAction,
                     'description' => 'Example task from the installer.',
                     'entity_type' => 'deal',
@@ -431,6 +452,7 @@ return static function (): array {
                     'updated_at'  => $now,
                 ]);
 
+                $tag('task', $taskId);
                 $tasks++;
             }
 
@@ -483,6 +505,9 @@ return static function (): array {
             $tag('booking', $bookingId);
             $bookings++;
 
+            // The two payment rows carry no tag of their own: they cascade
+            // from the booking (fk_booking_payments_booking is ON DELETE
+            // CASCADE), so deleting the tagged booking takes them with it.
             DB::insert('booking_payments', [
                 'booking_id'   => $bookingId,
                 'amount_cents' => $deposit,

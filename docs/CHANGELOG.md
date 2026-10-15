@@ -144,7 +144,7 @@ by accident.
 
 ### Tests and CI
 
-- **364 tests, no test framework** — the same no-dependency constraint as the
+- **404 tests, no test framework** — the same no-dependency constraint as the
   application, so CI needs nothing but PHP.
 - Four layers: unit, static analysis over the source itself, integration
   against a real MySQL, and end-to-end over real HTTP against the real front
@@ -158,6 +158,80 @@ by accident.
   `--require-http` and `--min-tests` — because the failure mode of a test job
   on a shared runner is a silently skipped suite, not a red cross.
 - Matrix: PHP 8.1, 8.2, 8.3 × MySQL 8.0, MySQL 5.7 and MariaDB 10.11.
+
+### Found by an adversarial review of this release
+
+After the work was done, the diff was reviewed across eight dimensions with
+every finding put to three independent skeptics (already-handled /
+reachable / does-the-consequence-follow). 74 findings were raised, 37 went to
+verification, **15 survived** — and most were in code written for this release.
+Fixed here:
+
+- **The CSV export promised formula-injection escaping it did not do.** The
+  guard lived in `Response::csv()` (the audit export); `Backup::exportCsv()` —
+  the one the Backups page offers, and the one that carries the whole contacts
+  table — wrote raw values, under a UI hint stating the opposite. A guest who
+  types `=HYPERLINK(...)` as their first name gets it executed on a staff
+  machine. Three of the eight reviewers found this independently; the existing
+  test asserted the guarantee against the function no export route uses.
+- **Password-reset links were built from the unvalidated `Host` header.**
+  `app_url` was written as null by the installer, config.sample.php *and* the
+  test runner, so the fallback was the normal path: a crafted
+  `POST /forgot-password` with `Host: attacker.test` mailed the owner a genuine
+  reset token pointing at the attacker's domain. `absoluteUrl()` now prefers
+  `app_url`, then the configured venue website, then the URL the installer was
+  reached on, and logs a warning if it ever falls back to the request. The
+  installer records that URL, so a fresh install never reaches the fallback.
+- **A failed `CREATE TABLE` was recorded as applied, and the version marker
+  advanced over it.** `Migration` tolerated MySQL 1005, which is both
+  "duplicate constraint name" *and* "this foreign key is malformed". Measured:
+  a release whose new table declared `INT UNSIGNED` against a `BIGINT
+  UNSIGNED` id failed, the table was never created, and the upgrade reported
+  success — the one failure the marker exists to prevent. 1005 is now accepted
+  only with errno 121, and 1022 was dropped outright.
+- **Foreign-key constraint names carried no table prefix**, so the second of
+  two prefixed installs in one database — which the installer's prefix field
+  explicitly invites — built a partial schema without raising anything. All 121
+  names are now prefixed; verified by applying the schema twice into one
+  database, giving 99 tables and 121 foreign keys on each side.
+- **Subject lines were HTML-escaped.** `sendTemplate()` merged the subject with
+  the body's escaper, so a venue called "Dave & Buster's" mailed
+  "Reset your Dave &amp; Buster&#039;s password" and stored that in the message
+  trail. Apostrophes in a child's name are the normal case here. Subjects now
+  go through `mergeText()`.
+- **Two concurrent backups shared one `.part` filename** and interleaved into a
+  corrupt file that listed as a good backup — discoverable only during a
+  restore. Now serialised with a lock, with a per-process temp name, and the
+  published name chosen at rename time so two backups in the same second both
+  survive.
+- **`tools/backup.php --keep` with no value pruned to one backup**, destroying
+  thirteen of fourteen nightlies and reporting success. Flags that need a value
+  now say so.
+- **A streamed export that failed midway** was sent as 200 with an HTML error
+  page appended to a truncated CSV, and was never audited. The audit row is now
+  written before the first byte, and a failure appends an unmistakable marker.
+- **The demo seed could abort the whole installer.** Its guard keyed only on
+  contacts, but bookings do not cascade from them, so re-seeding after the
+  documented cleanup hit `booking_number`'s unique key inside the installer's
+  transaction. It also left five fake urgent tasks on the owner's dashboard,
+  because tasks were never tagged despite the seed's own contract promising
+  every row was.
+- **A rejected email-settings form silently restored cleared values**, because
+  repopulation used `?:` rather than `old()`'s default — so clearing the Safe
+  Mode address and mistyping the From address in one submit put the old address
+  back, looking saved.
+
+The suite grew from 372 to **404 tests** to cover them. Each fix was
+mutation-checked: the password-reset suite, for instance, fails on three
+separate assertions when the token lookup is replaced with `LIMIT 1` — the
+mutation that previously left all 372 tests green.
+
+One confirmed finding was deliberately **not** fixed here: `users_manage`
+allows a non-owner holding it to set the Owner's password, which defeats the
+`backup_manage` separation this release's own PRIVACY.md describes. It is real,
+but it lives in Phase 1's user-management code that this release does not
+touch, and changing the authorisation model deserves its own review rather than
+being folded into a release about email and backups.
 
 ### Fixed during development
 

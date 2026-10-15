@@ -31,11 +31,11 @@ CREATE TABLE IF NOT EXISTS `{prefix}visits` (
     KEY `ix_visits_household` (`household_id`, `visit_date`),
     KEY `ix_visits_external` (`external_ref`),
     KEY `ix_visits_booking` (`booking_id`),
-    CONSTRAINT `fk_visits_contact`
+    CONSTRAINT `{prefix}fk_visits_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_visits_household`
+    CONSTRAINT `{prefix}fk_visits_household`
         FOREIGN KEY (`household_id`) REFERENCES `{prefix}households` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_visits_booking`
+    CONSTRAINT `{prefix}fk_visits_booking`
         FOREIGN KEY (`booking_id`) REFERENCES `{prefix}bookings` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}tickets` (
     KEY `ix_tickets_contact` (`contact_id`),
     KEY `ix_tickets_status` (`status`, `visit_date`),
     KEY `ix_tickets_order` (`order_ref`),
-    CONSTRAINT `fk_tickets_contact`
+    CONSTRAINT `{prefix}fk_tickets_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -117,11 +117,11 @@ CREATE TABLE IF NOT EXISTS `{prefix}memberships` (
     KEY `ix_memberships_contact` (`contact_id`),
     KEY `ix_memberships_household` (`household_id`),
     KEY `ix_memberships_idle` (`status`, `last_used_at`),
-    CONSTRAINT `fk_memberships_plan`
+    CONSTRAINT `{prefix}fk_memberships_plan`
         FOREIGN KEY (`plan_id`) REFERENCES `{prefix}membership_plans` (`id`),
-    CONSTRAINT `fk_memberships_contact`
+    CONSTRAINT `{prefix}fk_memberships_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_memberships_household`
+    CONSTRAINT `{prefix}fk_memberships_household`
         FOREIGN KEY (`household_id`) REFERENCES `{prefix}households` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -135,11 +135,11 @@ CREATE TABLE IF NOT EXISTS `{prefix}membership_members` (
     PRIMARY KEY (`id`),
     KEY `ix_membership_members_membership` (`membership_id`),
     KEY `ix_membership_members_contact` (`contact_id`),
-    CONSTRAINT `fk_membership_members_membership`
+    CONSTRAINT `{prefix}fk_membership_members_membership`
         FOREIGN KEY (`membership_id`) REFERENCES `{prefix}memberships` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_membership_members_contact`
+    CONSTRAINT `{prefix}fk_membership_members_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_membership_members_child`
+    CONSTRAINT `{prefix}fk_membership_members_child`
         FOREIGN KEY (`child_id`) REFERENCES `{prefix}children` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -154,9 +154,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}membership_usage` (
     `used_at`       DATETIME NOT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_membership_usage_membership` (`membership_id`, `used_at`),
-    CONSTRAINT `fk_membership_usage_membership`
+    CONSTRAINT `{prefix}fk_membership_usage_membership`
         FOREIGN KEY (`membership_id`) REFERENCES `{prefix}memberships` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_membership_usage_visit`
+    CONSTRAINT `{prefix}fk_membership_usage_visit`
         FOREIGN KEY (`visit_id`) REFERENCES `{prefix}visits` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}membership_payments` (
     `created_at`    DATETIME    DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_membership_payments_membership` (`membership_id`, `occurred_at`),
-    CONSTRAINT `fk_membership_payments_membership`
+    CONSTRAINT `{prefix}fk_membership_payments_membership`
         FOREIGN KEY (`membership_id`) REFERENCES `{prefix}memberships` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -215,14 +215,14 @@ CREATE TABLE IF NOT EXISTS `{prefix}waiver_signatures` (
     KEY `ix_waiver_signatures_contact` (`contact_id`),
     KEY `ix_waiver_signatures_booking` (`booking_id`),
     KEY `ix_waiver_signatures_waiver` (`waiver_id`),
-    CONSTRAINT `fk_waiver_signatures_waiver`
+    CONSTRAINT `{prefix}fk_waiver_signatures_waiver`
         FOREIGN KEY (`waiver_id`) REFERENCES `{prefix}waivers` (`id`),
-    CONSTRAINT `fk_waiver_signatures_contact`
+    CONSTRAINT `{prefix}fk_waiver_signatures_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_waiver_signatures_booking`
+    CONSTRAINT `{prefix}fk_waiver_signatures_booking`
         FOREIGN KEY (`booking_id`) REFERENCES `{prefix}bookings` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE `{prefix}booking_guests`
-    ADD CONSTRAINT `fk_booking_guests_waiver`
+    ADD CONSTRAINT `{prefix}fk_booking_guests_waiver`
     FOREIGN KEY (`waiver_id`) REFERENCES `{prefix}waiver_signatures` (`id`) ON DELETE SET NULL;

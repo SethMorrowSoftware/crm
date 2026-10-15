@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 use App\Core\Config;
 use App\Core\Mailer;
+use App\Core\Settings;
 use Tests\Assert;
 use Tests\Harness;
 
@@ -260,4 +261,169 @@ Harness::test('absoluteUrl produces an absolute address', function (): void {
 
 Harness::test('absoluteUrl does not double a slash', function (): void {
     Assert::notContains('//u/', Mailer::absoluteUrl('/u/abc'));
+});
+
+// ------------------------------------------- subject lines are not HTML
+
+Harness::test('mergeText does not HTML-escape, and merge still does', function (): void {
+    // A subject line is not HTML. Merging it with the body's escaper put
+    // entities in guests' inboxes: MEASURED, a venue called "Dave & Buster's"
+    // turned "Reset your {{venue_name}} password" into
+    // "Reset your Dave &amp; Buster&#039;s password", and nothing downstream
+    // decodes it — singleLine() leaves entities alone and encodeHeaderValue()
+    // passes plain ASCII through unchanged.
+    $data = ['venue_name' => "Dave & Buster's"];
+
+    Assert::same(
+        "Reset your Dave & Buster's password",
+        Mailer::mergeText('Reset your {{venue_name}} password', $data)
+    );
+
+    Assert::same(
+        'Reset your Dave &amp; Buster&#039;s password',
+        Mailer::merge('Reset your {{venue_name}} password', $data),
+        'the HTML path must still escape'
+    );
+});
+
+Harness::test('a name with an apostrophe survives into the subject intact', function (): void {
+    foreach (["Mia O'Brien", 'Smith & Sons', 'Jack "JJ" Nolan', 'Zoë Ruiz'] as $name) {
+        $subject = Mailer::mergeText("{{child_name}}'s party", ['child_name' => $name]);
+
+        Assert::contains($name, $subject, 'the name must appear as typed');
+        Assert::notContains('&amp;', $subject);
+        Assert::notContains('&#039;', $subject);
+        Assert::notContains('&quot;', $subject);
+    }
+});
+
+// -------------------------------------------- where an email link points
+
+Harness::test('a link prefers configured app_url over the request host', function (): void {
+    // Reset-link poisoning: a link in an email is acted on away from the
+    // application, so whoever controls its host controls where the recipient
+    // lands — and a reset link carries a live token. app_url was null on every
+    // install (installer, config.sample.php and the test runner all wrote
+    // null), so the unvalidated Host header was the normal path.
+    $originalUrl = Config::get('app_url');
+    $originalHost = $_SERVER['HTTP_HOST'] ?? null;
+
+    try {
+        Config::set('app_url', 'https://real.example.test');
+        $_SERVER['HTTP_HOST'] = 'attacker.test';
+
+        $url = Mailer::absoluteUrl('/reset-password/' . str_repeat('a', 64));
+
+        Assert::contains('real.example.test', $url);
+        Assert::notContains('attacker.test', $url, 'the Host header must not win');
+    } finally {
+        Config::set('app_url', $originalUrl);
+        $_SERVER['HTTP_HOST'] = $originalHost;
+    }
+});
+
+Harness::test('with no app_url a link uses the configured venue website', function (): void {
+    $originalUrl = Config::get('app_url');
+    $originalHost = $_SERVER['HTTP_HOST'] ?? null;
+
+    try {
+        Config::set('app_url', null);
+        Settings::set('venue.website', 'https://castlefuncenter.example');
+        $_SERVER['HTTP_HOST'] = 'attacker.test';
+
+        $url = Mailer::absoluteUrl('/u/abc');
+
+        Assert::contains('castlefuncenter.example', $url);
+        Assert::notContains('attacker.test', $url);
+    } finally {
+        Config::set('app_url', $originalUrl);
+        Settings::forget('venue.website');
+        $_SERVER['HTTP_HOST'] = $originalHost;
+    }
+});
+
+Harness::test('the installer-recorded URL beats a crafted Host header', function (): void {
+    // The normal state after setup: system.install_url holds the address the
+    // operator actually reached the installer on, so even with app_url and the
+    // venue website unset, a crafted request cannot redirect a reset link.
+    $originalUrl = Config::get('app_url');
+    $originalHost = $_SERVER['HTTP_HOST'] ?? null;
+
+    try {
+        Config::set('app_url', null);
+        Settings::forget('venue.website');
+        Settings::set('system.install_url', 'https://crm.realvenue.test');
+        $_SERVER['HTTP_HOST'] = 'attacker.test';
+
+        $url = Mailer::absoluteUrl('/reset-password/' . str_repeat('a', 64));
+
+        Assert::contains('crm.realvenue.test', $url);
+        Assert::notContains('attacker.test', $url);
+    } finally {
+        Config::set('app_url', $originalUrl);
+        Settings::forget('system.install_url');
+        $_SERVER['HTTP_HOST'] = $originalHost;
+    }
+});
+
+Harness::test('an unconfigured install sanitises the host it falls back to', function (): void {
+    // With nothing configured at all the request host IS the documented
+    // fallback — a fresh install has to be able to mail a working link, and
+    // Mailer logs a warning when it comes to this. What must NOT happen is a
+    // crafted header smuggling a path, a credential, a second host or a header
+    // break into the URL.
+    $originalUrl = Config::get('app_url');
+    $originalHost = $_SERVER['HTTP_HOST'] ?? null;
+
+    try {
+        Config::set('app_url', null);
+        Settings::forget('venue.website');
+        Settings::forget('system.install_url');
+
+        $cases = [
+            // crafted header            => must not appear in the URL
+            'attacker.test/evil'         => '/evil',
+            'user:pass@attacker.test'    => '@',
+            "real.test\nX-Evil: 1"       => "\n",
+            'real.test attacker.test'    => ' ',
+        ];
+
+        foreach ($cases as $crafted => $forbidden) {
+            $_SERVER['HTTP_HOST'] = $crafted;
+
+            $url = Mailer::absoluteUrl('/u/abc');
+
+            Assert::notContains(
+                $forbidden,
+                $url,
+                'input: ' . addcslashes((string) $crafted, "\n")
+            );
+            Assert::matches(
+                '#^https?://[A-Za-z0-9.-]+(:\d+)?/u/abc$#',
+                $url,
+                'the URL must have exactly one clean host: ' . $url
+            );
+        }
+    } finally {
+        Config::set('app_url', $originalUrl);
+        $_SERVER['HTTP_HOST'] = $originalHost;
+    }
+});
+
+Harness::test('a plain host is still usable when nothing is configured', function (): void {
+    // The fallback must keep working, or a fresh install's links break.
+    $originalUrl = Config::get('app_url');
+    $originalHost = $_SERVER['HTTP_HOST'] ?? null;
+
+    try {
+        Config::set('app_url', null);
+        Settings::forget('venue.website');
+        Settings::forget('system.install_url');
+        $_SERVER['HTTP_HOST'] = 'crm.example.test';
+
+        Assert::contains('crm.example.test', Mailer::absoluteUrl('/u/abc'));
+    } finally {
+        Config::set('app_url', $originalUrl);
+        $_SERVER['HTTP_HOST'] = $originalHost;
+    }
 });

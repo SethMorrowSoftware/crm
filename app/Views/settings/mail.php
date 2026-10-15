@@ -18,7 +18,20 @@ declare(strict_types=1);
  * @var list<array{type:string,name:string,value:string,note:string}> $dns
  */
 
-$v = static fn (string $key, string $default = ''): string => (string) (old($key) ?: ($mail[$key] ?? $default));
+// old()'s DEFAULT, not `?:`. With `?:`, a submitted empty value is falsy and
+// falls through to the stored one — so after a validation error the form
+// silently restored a field the operator had just cleared. Clearing the Safe
+// Mode address and mistyping the From address in the same submit put the old
+// address back, looking saved, and redirected mail kept going to a mailbox
+// nobody reads.
+$v = static fn (string $key, string $default = ''): string
+    => (string) old($key, $mail[$key] ?? $default);
+
+// Whether this render follows a rejected submit. `driver` is always posted by
+// the form, so its presence in the old input distinguishes "the operator
+// cleared this" from "nothing was submitted" — which a checkbox cannot tell
+// from its own value, since an unticked box posts nothing at all.
+$resubmitted = old('driver', null) !== null;
 
 $drivers = [
     'log' => [
@@ -168,7 +181,7 @@ $currentDriver = old('driver') ?: $driver;
                     'none' => 'None — not recommended',
                 ] as $key => $label): ?>
                     <option value="<?= e($key) ?>"
-                        <?= (old('smtp_encryption') ?: ($mail['smtp_encryption'] ?? 'tls')) === $key
+                        <?= (string) old('smtp_encryption', $mail['smtp_encryption'] ?? 'tls') === $key
                             ? 'selected' : '' ?>><?= e($label) ?></option>
                 <?php endforeach; ?>
             </select>
@@ -201,7 +214,8 @@ $currentDriver = old('driver') ?: $driver;
     <div class="field-check">
         <input type="hidden" name="smtp_verify_peer" value="0">
         <input type="checkbox" id="smtp_verify_peer" name="smtp_verify_peer" value="1"
-               <?= ($mail['smtp_verify_peer'] ?? true) ? 'checked' : '' ?>>
+               <?= ($resubmitted ? old('smtp_verify_peer') === '1' : ($mail['smtp_verify_peer'] ?? true))
+                   ? 'checked' : '' ?>>
         <label for="smtp_verify_peer">Verify the mail server's certificate</label>
         <p class="field-hint">
             Leave this on. Turning it off means an attacker between this server and your mail host

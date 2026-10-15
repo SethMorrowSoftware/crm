@@ -163,3 +163,117 @@ Harness::test('the version marker ends up matching the shipped VERSION file', fu
 
     Assert::same($shipped, (string) Settings::get('system.version'));
 });
+
+// ------------------------------------- which failures mean "already applied"
+
+Harness::test('only genuine already-exists codes are tolerated', function (): void {
+    // Deciding this wrongly is how a half-applied release gets recorded as
+    // complete. 1005 is ambiguous: errno 121 is a duplicate constraint NAME
+    // (already there), errno 150 is a foreign key MySQL refuses to build at
+    // all (a real error). Tolerating 1005 outright meant a release whose new
+    // table had a mismatched FK column type was recorded as applied and the
+    // version marker advanced over a table that did not exist.
+    $tolerated = [
+        [1050, 'Table \'cc_contacts\' already exists'],
+        [1060, 'Duplicate column name \'email\''],
+        [1061, 'Duplicate key name \'ix_contacts_email\''],
+        [1826, 'Duplicate foreign key constraint name \'fk_x\''],
+        [1831, 'Duplicate index'],
+        [1005, "Can't create table (errno: 121 \"Duplicate key on write or update\")"],
+    ];
+
+    foreach ($tolerated as [$code, $message]) {
+        Assert::true(
+            Migration::meansAlreadyApplied($code, $message),
+            $code . ' should be treated as already applied'
+        );
+    }
+
+    $fatal = [
+        [1005, "Can't create table `cc_loyalty` (errno: 150 \"Foreign key constraint is incorrectly formed\")"],
+        [1005, "Can't create table (errno: 13 \"Permission denied\")"],
+        [1005, "Can't create table"],
+        [1022, "Duplicate entry 'x' for key 'PRIMARY'"],
+        [1064, 'You have an error in your SQL syntax'],
+        [1146, "Table 'cc_missing' doesn't exist"],
+        [1452, 'Cannot add or update a child row: a foreign key constraint fails'],
+        [0, 'unknown'],
+    ];
+
+    foreach ($fatal as [$code, $message]) {
+        Assert::false(
+            Migration::meansAlreadyApplied($code, $message),
+            $code . ' must NOT be swallowed: ' . $message
+        );
+    }
+});
+
+Harness::test('a malformed foreign key fails the upgrade instead of being recorded', function (): void {
+    // MEASURED as the review reported it: contact_id INT UNSIGNED against
+    // contacts.id BIGINT UNSIGNED is an ordinary slip, MySQL rejects the whole
+    // CREATE with 1005/errno 150, and the table is never created.
+    Settings::set('system.version', '1.0.0-before-bad-fk');
+    Settings::load(true);
+
+    with_pending_migration(
+        "CREATE TABLE IF NOT EXISTS `{prefix}upgrade_probe` (\n"
+        . "    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n"
+        . "    `contact_id` INT UNSIGNED DEFAULT NULL,\n"
+        . "    PRIMARY KEY (`id`),\n"
+        . "    CONSTRAINT `{prefix}fk_probe_contact`\n"
+        . "        FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`)\n"
+        . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;\n",
+        static function (string $name): void {
+            $result = Upgrade::run('9.9.20-test');
+
+            Assert::notNull($result['error'], 'a rejected CREATE TABLE must be reported');
+            Assert::false(
+                DB::tableExists('upgrade_probe'),
+                'precondition: MySQL really did refuse to create it'
+            );
+            Assert::inArray(
+                $name,
+                (new Migration())->pending(),
+                'the file must stay pending, not be recorded as applied'
+            );
+
+            Settings::load(true);
+
+            Assert::same(
+                '1.0.0-before-bad-fk',
+                (string) Settings::get('system.version'),
+                'and the version marker must not advance over a missing table'
+            );
+        }
+    );
+});
+
+Harness::test('every foreign-key constraint name carries the table prefix', function (): void {
+    // InnoDB requires FK constraint names to be unique per DATABASE, not per
+    // table. The installer invites sharing a database (step 3 offers the
+    // prefix precisely so two installs can coexist), so unprefixed names meant
+    // a second install collided: MEASURED before the fix, files 001-003 were
+    // recorded as applied without throwing and produced a partial schema.
+    $unprefixed = [];
+
+    foreach ((array) glob(CC_ROOT . '/install/schema/*.sql') as $file) {
+        $sql = (string) file_get_contents((string) $file);
+
+        if (preg_match_all('/CONSTRAINT\s+`([^`]+)`/i', $sql, $matches) === 0) {
+            continue;
+        }
+
+        foreach ($matches[1] as $name) {
+            if (!str_starts_with($name, '{prefix}')) {
+                $unprefixed[] = basename((string) $file) . ': ' . $name;
+            }
+        }
+    }
+
+    Assert::same(
+        [],
+        $unprefixed,
+        "these constraint names would collide with a second install in the same database:\n  - "
+            . implode("\n  - ", $unprefixed)
+    );
+});

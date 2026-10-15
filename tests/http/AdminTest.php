@@ -448,3 +448,77 @@ Harness::test('health and settings pages all still render for the owner', functi
         Assert::notContains('Something went wrong', $response['body'], $path . ' rendered an error');
     }
 });
+
+Harness::test('a rejected mail form keeps the values the operator typed', function () use ($owner): void {
+    // The repopulation helper used `old($key) ?: ($mail[$key] ?? $default)`, so
+    // a submitted EMPTY value is falsy and fell through to the STORED one —
+    // the form silently restored a field the operator had just cleared, and it
+    // looked saved. Clearing the Safe Mode address while mistyping the From
+    // address put the old address back, so redirected mail kept going to a
+    // mailbox nobody reads.
+    Settings::set('mail.safe_mode_address', 'departed.manager@example.test');
+    Settings::set('mail.smtp_host', 'old.example.test');
+    App\Core\Cache::flush();
+
+    // "office@castle" passes the browser's type=email but fails the server's
+    // validator, which requires a dot — an easy, realistic rejection.
+    // Not followed: the validator redirects back, and TestBrowser sends no
+    // Referer, so the redirect lands on the dashboard. The old input survives
+    // exactly one redirect in the session, so the form is fetched next.
+    $post = $owner->postWithToken('/settings/mail', '/settings/mail', [
+        'driver'            => 'smtp',
+        'from_email'        => 'office@castle',
+        'from_name'         => 'Castle',
+        'smtp_host'         => 'new.example.test',
+        'safe_mode_address' => '',
+        'smtp_verify_peer'  => '0',
+    ]);
+
+    Assert::same(302, $post['status'], 'a rejected submit should redirect, not render');
+
+    $response = $owner->get('/settings/mail');
+
+    Assert::same(200, $response['status']);
+
+    Assert::notContains(
+        'departed.manager@example.test',
+        $response['body'],
+        'a field the operator cleared must come back empty, not refilled from storage'
+    );
+    Assert::contains(
+        'new.example.test',
+        $response['body'],
+        'and a field they changed must keep the new value'
+    );
+    Assert::notContains(
+        'value="old.example.test"',
+        $response['body'],
+        'not the stored one'
+    );
+
+    // The setting itself must be untouched by a rejected submit.
+    Settings::load(true);
+
+    Assert::same('departed.manager@example.test', Settings::get('mail.safe_mode_address'));
+    Assert::same('old.example.test', Settings::get('mail.smtp_host'));
+
+    Settings::forget('mail.safe_mode_address');
+    Settings::forget('mail.smtp_host');
+});
+
+Harness::test('a CSV export is audited even though it streams', function () use ($owner): void {
+    // The audit row used to be written only after the stream finished, so an
+    // export that died part way through left no trace of who had taken a copy
+    // of the guest list — the one case the trail exists for. It is now written
+    // before the first byte.
+    DB::delete('audit_log', "action = 'data.exported'");
+
+    $response = $owner->get('/settings/backups/export?table=consent_log');
+
+    Assert::same(200, $response['status']);
+
+    $rows = DB::all("SELECT * FROM {audit_log} WHERE action = 'data.exported' ORDER BY id");
+
+    Assert::greaterThan(0, count($rows), 'the export must be recorded');
+    Assert::notNull($rows[0]['user_id'], 'and must name the actor');
+});

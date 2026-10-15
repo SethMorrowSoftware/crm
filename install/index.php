@@ -669,6 +669,14 @@ function installer_finalise(array &$state): array
             // turn it on from Settings → System once the padlock appears.
             'system.force_https'          => false,
             'system.audit_retention_days' => 730,
+            // The URL this install was reached on while it was being set up.
+            //
+            // Recorded so a link in an email never has to be built from the
+            // request's Host header, which a crafted request controls: that is
+            // how a password-reset link gets pointed at somebody else's domain.
+            // The operator is using the real address right now, by definition,
+            // which makes this the one moment it can be captured for free.
+            'system.install_url'          => installer_currentBaseUrl(),
         ]);
 
         // --- Email defaults
@@ -854,6 +862,29 @@ PHP;
         @unlink($temp);
         throw new RuntimeException('Could not finalise config/config.php. Check the config folder permissions.');
     }
+}
+
+/**
+ * The base URL the operator is reaching this installer on.
+ *
+ * Captured because this is the only moment the application can learn its own
+ * address without asking the request — see system.install_url above. The
+ * installer lives one directory below the app root, so /install is stripped.
+ */
+function installer_currentBaseUrl(): string
+{
+    $host = explode('/', (string) ($_SERVER['HTTP_HOST'] ?? ''))[0];
+
+    if ($host === '' || str_contains($host, '@') || preg_match('/^[A-Za-z0-9.-]+(:\d{1,5})?$/', $host) !== 1) {
+        return '';
+    }
+
+    $secure = (($_SERVER['HTTPS'] ?? '') !== '' && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+        || (int) ($_SERVER['SERVER_PORT'] ?? 0) === 443;
+
+    $path = preg_replace('#/install(/[^/]*)?$#', '', (string) ($_SERVER['SCRIPT_NAME'] ?? '')) ?? '';
+
+    return ($secure ? 'https://' : 'http://') . $host . rtrim($path, '/');
 }
 
 /**

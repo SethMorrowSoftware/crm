@@ -111,6 +111,27 @@ final class Backup
     }
 
     /**
+     * The next unused published name, and its full path.
+     *
+     * @return array{0:string,1:string} name and path, or ['',''] if none is free
+     */
+    private static function freeName(string $dir, bool $compress): array
+    {
+        $extension = '.sql' . ($compress ? '.gz' : '');
+        $stamp = time();
+
+        for ($attempt = 0; $attempt < 120; $attempt++) {
+            $name = 'castle-crm-' . gmdate('Ymd-His', $stamp + $attempt) . $extension;
+
+            if (!file_exists($dir . '/' . $name)) {
+                return [$name, $dir . '/' . $name];
+            }
+        }
+
+        return ['', ''];
+    }
+
+    /**
      * Resolve a filename to a real path inside the backup directory.
      *
      * Returns null for anything that is not a backup this class wrote. The
@@ -213,9 +234,41 @@ final class Backup
             return $fail('storage/backups is not writable. In cPanel File Manager set its permissions to 0750.');
         }
 
-        $name = 'castle-crm-' . gmdate('Ymd-His') . '.sql' . ($compress ? '.gz' : '');
-        $part = $dir . '/' . $name . '.part';
-        $final = $dir . '/' . $name;
+        // One backup at a time.
+        //
+        // The filename comes from gmdate('Ymd-His'), so two runs starting in
+        // the same second computed the SAME .part path and both opened it with
+        // a truncating mode. Each then wrote at its own file offset, so the two
+        // streams interleaved; the first rename() promoted the result to a
+        // listed backup while the other kept writing into that same inode. The
+        // file passed pathFor(), appeared on the Backups page with a plausible
+        // size, and was corrupt from the splice onward — discoverable only
+        // during a restore. Two operators clicking "Back up now" together, or a
+        // manual run meeting the nightly cron, is all it took.
+        $lockPath = $dir . '/.backup.lock';
+        $lock = @fopen($lockPath, 'c');
+
+        if ($lock !== false && !flock($lock, LOCK_EX | LOCK_NB)) {
+            fclose($lock);
+
+            return $fail('A backup is already running. Wait for it to finish, then try again.');
+        }
+
+        $releaseLock = static function () use ($lock, $lockPath): void {
+            if ($lock !== false) {
+                @flock($lock, LOCK_UN);
+                @fclose($lock);
+            }
+
+            unset($lockPath);
+        };
+
+        // Unique per process: the lock cannot cover a host where flock is
+        // unavailable, and a stale .part from a killed run must not be written
+        // into by the next one. The PUBLISHED name is chosen at rename time.
+        $part = $dir . '/castle-crm-' . gmdate('Ymd-His') . '.sql'
+            . ($compress ? '.gz' : '') . '.part.' . getmypid() . '.' . bin2hex(random_bytes(4));
+        $name = '';
 
         // A long run is expected; ask for the time if the host allows it. Many
         // do not, which is why the deadline below exists regardless.
@@ -226,6 +279,8 @@ final class Backup
         $handle = $compress ? @gzopen($part, 'wb6') : @fopen($part, 'wb');
 
         if ($handle === false) {
+            $releaseLock();
+
             return $fail('Could not create ' . basename($part) . ' in storage/backups.');
         }
 
@@ -279,6 +334,7 @@ final class Backup
         } catch (Throwable $e) {
             $compress ? gzclose($handle) : fclose($handle);
             @unlink($part);
+            $releaseLock();
 
             Log::error('Backup failed', ['error' => $e->getMessage()]);
 
@@ -292,6 +348,7 @@ final class Backup
             // file than a file somebody restores from in an emergency and
             // discovers is missing half their bookings.
             @unlink($part);
+            $releaseLock();
 
             return $fail(
                 'The backup ran out of time at table ' . $truncated . ' and was discarded rather than '
@@ -299,13 +356,29 @@ final class Backup
             );
         }
 
+        // Choose the published name now, not when the run started: the name
+        // carries a second-resolution timestamp, and two backups that finish
+        // in the same second must not collide. Advance the second until the
+        // name is free rather than overwrite a finished file or refuse a
+        // perfectly legitimate second run.
+        [$name, $final] = self::freeName($dir, $compress);
+
+        if ($final === '') {
+            @unlink($part);
+            $releaseLock();
+
+            return $fail('Could not find a free backup filename. Is storage/backups full?');
+        }
+
         if (!@rename($part, $final)) {
             @unlink($part);
+            $releaseLock();
 
             return $fail('Could not finalise the backup file.');
         }
 
         @chmod($final, 0640);
+        $releaseLock();
 
         $result = [
             'ok'         => true,
@@ -403,15 +476,17 @@ final class Backup
         // Excel reads a bare UTF-8 CSV as Windows-1252 and mangles every
         // accented name in the file. A BOM is the only thing that stops it.
         fwrite($handle, "\xEF\xBB\xBF");
-        fputcsv($handle, $columns);
+        fputcsv($handle, array_map([Response::class, 'csvCell'], $columns));
 
         $written = 0;
 
         foreach (self::chunks($full, $columns) as $row) {
-            fputcsv($handle, array_map(
-                static fn (mixed $value): string => $value === null ? '' : (string) $value,
-                $row
-            ));
+            // Every cell goes through the same guard Response::csv() uses. A
+            // guest types their own first name, and `=HYPERLINK(...)` in it is
+            // code that runs when a member of staff opens the download. This
+            // path wrote raw values until the review caught it, under a UI hint
+            // on the Backups page that promised otherwise.
+            fputcsv($handle, array_map([Response::class, 'csvCell'], $row));
 
             $written++;
 

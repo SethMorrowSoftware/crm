@@ -299,3 +299,42 @@ Harness::test('the backup tool is unreachable over HTTP', function (): void {
 
     Assert::contains("PHP_SAPI !== 'cli'", $source);
 });
+
+Harness::test('--keep with no value is refused rather than pruning to one', function (): void {
+    // `--keep` on its own coerced to max(1, (int) true) = 1 and deleted every
+    // backup but the one just written: on a host keeping 14 nightlies, 13
+    // destroyed, reported as a success. `--keep 14` (a space) was already
+    // refused, so the valueless form was the one shape that got through — and
+    // the file's own comment claimed the allowlist prevented exactly this.
+    $before = count(Backup::all());
+
+    foreach (['--keep', '--keep=', '--keep=abc', '--keep=0', '--keep=-3'] as $arg) {
+        $result = run_tool('backup.php', [$arg]);
+
+        Assert::notSame(0, $result['code'], $arg . ' must be refused');
+        Assert::contains('keep', strtolower($result['err']), $arg);
+    }
+
+    Assert::count(
+        $before,
+        Backup::all(),
+        'a refused run must not have taken a backup or pruned anything'
+    );
+});
+
+Harness::test('--export with no value is refused', function (): void {
+    foreach (['--export', '--export='] as $arg) {
+        $result = run_tool('backup.php', [$arg]);
+
+        Assert::notSame(0, $result['code'], $arg . ' must be refused');
+        Assert::empty(trim($result['out']), 'nothing should reach stdout');
+    }
+});
+
+Harness::test('--keep with a real value still works', function (): void {
+    // The other half: the validation must not break the documented usage.
+    $result = run_tool('backup.php', ['--no-compress', '--keep=3', '--quiet']);
+
+    Assert::same(0, $result['code'], $result['err']);
+    Assert::contains('castle-crm-', trim($result['out']));
+});

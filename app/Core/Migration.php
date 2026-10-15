@@ -21,16 +21,43 @@ final class Migration
     /**
      * MySQL error codes meaning "the thing you asked me to create is already
      * there". Tolerated, because that is the desired end state.
+     *
+     * Every code here must mean that and ONLY that. 1005 ("can't create
+     * table") used to be in this list on the theory that it is how older MySQL
+     * reports a duplicate foreign-key name — but it is also how MySQL reports
+     * a foreign key it refuses to build at all, such as one whose column type
+     * does not match the column it references. MEASURED on MariaDB 10.11: a
+     * release whose new table declared `contact_id INT UNSIGNED` against
+     * `contacts.id BIGINT UNSIGNED` failed with 1005 (errno 150), the table was
+     * NOT created, the file was recorded as applied, and Upgrade::run() then
+     * advanced system.version — so the next request saw nothing pending and the
+     * venue ran on a schema missing a table, with the marker claiming the
+     * upgrade had succeeded. That is the one failure the version marker exists
+     * to prevent.
+     *
+     * 1022 went for the same reason: it is "duplicate key" in the sense of a
+     * duplicate VALUE, which is a data conflict, not an object that already
+     * exists.
+     *
+     * A genuinely duplicate constraint name reports 1826 on MySQL 5.7+ and
+     * MariaDB, which is still tolerated. For the older-MySQL case 1005 is
+     * accepted only when the driver message carries errno 121 — the
+     * duplicate-key-name variant — and never errno 150.
      */
     private const ALREADY_EXISTS = [
         1050, // table exists
         1060, // duplicate column
         1061, // duplicate key name
-        1022, // duplicate key
         1826, // duplicate foreign key constraint name
-        1005, // can't create table (usually a duplicate FK name on older MySQL)
         1831, // duplicate index
     ];
+
+    /**
+     * 1005 is ambiguous, so it is decided on the driver's own errno:
+     *   121 — duplicate constraint name. Already there; tolerate.
+     *   150 — the foreign key is malformed. A real error; must throw.
+     */
+    private const DUPLICATE_CONSTRAINT_ERRNO = 121;
 
     private string $schemaPath;
 
@@ -124,7 +151,7 @@ final class Migration
             } catch (PDOException $e) {
                 $code = (int) ($e->errorInfo[1] ?? 0);
 
-                if (in_array($code, self::ALREADY_EXISTS, true)) {
+                if ($this->meansAlreadyApplied($code, $e->getMessage())) {
                     // Expected when re-running a partially applied file.
                     $this->messages[] = sprintf('%s: statement %d already applied.', $name, $index + 1);
                     continue;
@@ -153,6 +180,24 @@ final class Migration
             'batch'    => $batch,
             'ran_at'   => gmdate('Y-m-d H:i:s'),
         ]);
+    }
+
+    /**
+     * Does this failure mean the object already exists, and nothing else?
+     *
+     * Public so the behaviour can be tested directly: deciding it wrongly is
+     * how a half-applied release gets recorded as complete.
+     */
+    public static function meansAlreadyApplied(int $code, string $message): bool
+    {
+        if (in_array($code, self::ALREADY_EXISTS, true)) {
+            return true;
+        }
+
+        // 1005 is only "already there" in its duplicate-constraint-name form.
+        return $code === 1005
+            && preg_match('/errno:?\s*(\d+)/i', $message, $m) === 1
+            && (int) $m[1] === self::DUPLICATE_CONSTRAINT_ERRNO;
     }
 
     /**

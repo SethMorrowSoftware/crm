@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}playbooks` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE `{prefix}templates`
-    ADD CONSTRAINT `fk_templates_playbook`
+    ADD CONSTRAINT `{prefix}fk_templates_playbook`
     FOREIGN KEY (`playbook_id`) REFERENCES `{prefix}playbooks` (`id`) ON DELETE SET NULL;
 
 -- What a playbook brings with it, so the UI can show "3 forms, 22 automations,
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}playbook_assets` (
     `asset_id`    BIGINT UNSIGNED NOT NULL,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_playbook_assets` (`playbook_id`, `asset_type`, `asset_id`),
-    CONSTRAINT `fk_playbook_assets_playbook`
+    CONSTRAINT `{prefix}fk_playbook_assets_playbook`
         FOREIGN KEY (`playbook_id`) REFERENCES `{prefix}playbooks` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -84,12 +84,12 @@ CREATE TABLE IF NOT EXISTS `{prefix}automations` (
     -- The dispatcher's lookup: which active automations listen to this event?
     KEY `ix_automations_trigger` (`trigger_type`, `is_active`),
     KEY `ix_automations_playbook` (`playbook_id`),
-    CONSTRAINT `fk_automations_playbook`
+    CONSTRAINT `{prefix}fk_automations_playbook`
         FOREIGN KEY (`playbook_id`) REFERENCES `{prefix}playbooks` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE `{prefix}forms`
-    ADD CONSTRAINT `fk_forms_automation`
+    ADD CONSTRAINT `{prefix}fk_forms_automation`
     FOREIGN KEY (`automation_id`) REFERENCES `{prefix}automations` (`id`) ON DELETE SET NULL;
 
 -- Steps form a tree: parent_step_id plus branch gives if/else without a
@@ -115,9 +115,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}automation_steps` (
     `updated_at`        DATETIME     DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_automation_steps_automation` (`automation_id`, `parent_step_id`, `sort_order`),
-    CONSTRAINT `fk_automation_steps_automation`
+    CONSTRAINT `{prefix}fk_automation_steps_automation`
         FOREIGN KEY (`automation_id`) REFERENCES `{prefix}automations` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_automation_steps_parent`
+    CONSTRAINT `{prefix}fk_automation_steps_parent`
         FOREIGN KEY (`parent_step_id`) REFERENCES `{prefix}automation_steps` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -144,18 +144,18 @@ CREATE TABLE IF NOT EXISTS `{prefix}automation_runs` (
     KEY `ix_automation_runs_lookup` (`automation_id`, `contact_id`, `status`),
     KEY `ix_automation_runs_entity` (`entity_type`, `entity_id`),
     KEY `ix_automation_runs_contact` (`contact_id`),
-    CONSTRAINT `fk_automation_runs_automation`
+    CONSTRAINT `{prefix}fk_automation_runs_automation`
         FOREIGN KEY (`automation_id`) REFERENCES `{prefix}automations` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_automation_runs_contact`
+    CONSTRAINT `{prefix}fk_automation_runs_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE `{prefix}messages`
-    ADD CONSTRAINT `fk_messages_automation_run`
+    ADD CONSTRAINT `{prefix}fk_messages_automation_run`
     FOREIGN KEY (`automation_run_id`) REFERENCES `{prefix}automation_runs` (`id`) ON DELETE SET NULL;
 
 ALTER TABLE `{prefix}tasks`
-    ADD CONSTRAINT `fk_tasks_automation_run`
+    ADD CONSTRAINT `{prefix}fk_tasks_automation_run`
     FOREIGN KEY (`automation_run_id`) REFERENCES `{prefix}automation_runs` (`id`) ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS `{prefix}automation_step_log` (
@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}automation_step_log` (
     `executed_at` DATETIME NOT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_automation_step_log_run` (`run_id`, `executed_at`),
-    CONSTRAINT `fk_automation_step_log_run`
+    CONSTRAINT `{prefix}fk_automation_step_log_run`
         FOREIGN KEY (`run_id`) REFERENCES `{prefix}automation_runs` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -188,9 +188,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}dashboards` (
     PRIMARY KEY (`id`),
     KEY `ix_dashboards_role` (`role_id`),
     KEY `ix_dashboards_user` (`user_id`),
-    CONSTRAINT `fk_dashboards_role`
+    CONSTRAINT `{prefix}fk_dashboards_role`
         FOREIGN KEY (`role_id`) REFERENCES `{prefix}roles` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_dashboards_user`
+    CONSTRAINT `{prefix}fk_dashboards_user`
         FOREIGN KEY (`user_id`) REFERENCES `{prefix}users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -203,7 +203,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}dashboard_widgets` (
     `position`     JSON         DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_dashboard_widgets_dashboard` (`dashboard_id`),
-    CONSTRAINT `fk_dashboard_widgets_dashboard`
+    CONSTRAINT `{prefix}fk_dashboard_widgets_dashboard`
         FOREIGN KEY (`dashboard_id`) REFERENCES `{prefix}dashboards` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -257,8 +257,8 @@ CREATE TABLE IF NOT EXISTS `{prefix}goals` (
     `updated_at`   DATETIME    DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_goals_period` (`metric`, `starts_on`, `ends_on`),
-    CONSTRAINT `fk_goals_owner`
+    CONSTRAINT `{prefix}fk_goals_owner`
         FOREIGN KEY (`owner_id`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_goals_team`
+    CONSTRAINT `{prefix}fk_goals_team`
         FOREIGN KEY (`team_id`) REFERENCES `{prefix}teams` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

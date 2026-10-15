@@ -267,35 +267,67 @@ final class Mailer
 
         return self::send(array_merge([
             'to'          => $to,
-            'subject'     => self::merge((string) $template['subject'], $data),
+            // The subject is not HTML; the body is. Merging both with the same
+            // escaper put "&amp;" and "&#039;" in guests' inboxes.
+            'subject'     => self::mergeText((string) $template['subject'], $data),
             'html'        => self::merge((string) $template['body'], $data),
             'template_id' => (int) $template['id'],
         ], $options));
     }
 
     /**
-     * Substitute {{merge_tags}}.
+     * Substitute {{merge_tags}} into HTML.
      *
      * Values are HTML-escaped: a guest whose last name is "<script>" must not
      * become script when their own confirmation renders in a webmail client.
      * A tag with no value becomes empty rather than leaving the braces visible.
      *
+     * For anything that is NOT HTML — a subject line, a plain-text body — use
+     * mergeText(). Escaping there is not merely unnecessary, it is visibly
+     * wrong: see that method.
+     *
      * @param array<string,mixed> $data
      */
     public static function merge(string $body, array $data): string
     {
+        return self::substitute($body, $data, true);
+    }
+
+    /**
+     * Substitute {{merge_tags}} into text that is not HTML.
+     *
+     * A subject line is not HTML, and escaping it mangles perfectly ordinary
+     * names. MEASURED with the real helper before this existed: a venue called
+     * "Dave & Buster's" turned the seeded password-reset subject into
+     * "Reset your Dave &amp; Buster&#039;s password", and nothing downstream
+     * decodes it — singleLine() leaves entities alone and encodeHeaderValue()
+     * passes plain ASCII through — so that is what the guest sees in their
+     * inbox and what is stored in messages.subject. Apostrophes in a child's
+     * name and ampersands in a venue's name are the normal case here, not an
+     * edge case.
+     *
+     * @param array<string,mixed> $data
+     */
+    public static function mergeText(string $text, array $data): string
+    {
+        return self::substitute($text, $data, false);
+    }
+
+    /** @param array<string,mixed> $data */
+    private static function substitute(string $subject, array $data, bool $escape): string
+    {
         return (string) preg_replace_callback(
             '/\{\{\s*([a-z0-9_.]+)\s*\}\}/i',
-            static function (array $m) use ($data): string {
+            static function (array $m) use ($data, $escape): string {
                 $value = array_get($data, strtolower($m[1]));
 
                 if ($value === null) {
                     return '';
                 }
 
-                return e((string) $value);
+                return $escape ? e((string) $value) : (string) $value;
             },
-            $body
+            $subject
         );
     }
 
@@ -1190,24 +1222,92 @@ final class Mailer
      */
     public static function absoluteUrl(string $path): string
     {
-        $base = (string) Config::get('app_url', '');
+        return rtrim(self::baseUrl(), '/') . '/' . ltrim($path, '/');
+    }
 
-        if ($base === '') {
-            $scheme = 'https';
+    /**
+     * The base URL for a link in an email, from the most trustworthy source
+     * available.
+     *
+     * The Host header is LAST, and that ordering is the point. A link in an
+     * email is acted on away from the application, so whoever controls its host
+     * controls where the recipient lands — and a password-reset link carries a
+     * live token. With `app_url` unset (which the installer, config.sample.php
+     * and the test runner all wrote as null), the old code took
+     * $_SERVER['HTTP_HOST'] with no validation, so an attacker could POST
+     * /forgot-password with `Host: attacker.test` and the owner would be mailed
+     * a genuine reset link pointing at the attacker's domain — classic
+     * reset-link poisoning, and the owner is used to clicking those.
+     *
+     * So: the URL the operator configured, else the website they typed into the
+     * installer, else the host this install was reached on when it was set up,
+     * and only then the request — which is logged when it happens, because at
+     * that point the link's host is attacker-controllable input.
+     */
+    private static function baseUrl(): string
+    {
+        $configured = trim((string) Config::get('app_url', ''));
 
-            try {
-                $scheme = request()->isSecure() ? 'https' : 'http';
-            } catch (Throwable) {
-                // No request context (cron). https is the safer guess.
-            }
-
-            $host = (string) ($_SERVER['HTTP_HOST'] ?? Settings::get('venue.website', 'localhost'));
-            $host = (string) preg_replace('#^https?://#', '', $host);
-            $host = rtrim(explode('/', $host)[0], '/');
-
-            $base = $scheme . '://' . $host . (defined('CC_BASE_PATH') ? CC_BASE_PATH : '');
+        if ($configured !== '') {
+            return $configured;
         }
 
-        return rtrim($base, '/') . '/' . ltrim($path, '/');
+        foreach (['venue.website', 'system.install_url'] as $key) {
+            $stored = trim((string) Settings::get($key, ''));
+
+            if ($stored === '') {
+                continue;
+            }
+
+            $host = self::hostOf($stored);
+
+            if ($host !== '') {
+                return (str_starts_with($stored, 'http://') ? 'http://' : 'https://')
+                    . $host
+                    . (defined('CC_BASE_PATH') ? CC_BASE_PATH : '');
+            }
+        }
+
+        $scheme = 'https';
+
+        try {
+            $scheme = request()->isSecure() ? 'https' : 'http';
+        } catch (Throwable) {
+            // No request context (cron). https is the safer guess.
+        }
+
+        $host = self::hostOf((string) ($_SERVER['HTTP_HOST'] ?? ''));
+
+        if ($host === '') {
+            return $scheme . '://localhost' . (defined('CC_BASE_PATH') ? CC_BASE_PATH : '');
+        }
+
+        Log::warning('Building an email link from the request Host header', [
+            'host' => $host,
+            'fix'  => 'Set app_url in config/config.php, or the venue website in Settings, '
+                . 'so a link in an email cannot be pointed elsewhere by a crafted request.',
+        ]);
+
+        return $scheme . '://' . $host . (defined('CC_BASE_PATH') ? CC_BASE_PATH : '');
+    }
+
+    /**
+     * The host part of a configured URL or a Host header, or '' if it is not
+     * one. Deliberately strict: a host is letters, digits, dots, hyphens and
+     * an optional port, so a header carrying a path, a credential, a space or
+     * a second host cannot reach a link.
+     */
+    private static function hostOf(string $value): string
+    {
+        $value = (string) preg_replace('#^[a-z][a-z0-9+.-]*://#i', '', trim($value));
+        $value = explode('/', $value)[0];
+
+        // user:pass@host is legal in a URL and lets a crafted value hide the
+        // real host behind an @; refuse rather than guess which half is meant.
+        if ($value === '' || str_contains($value, '@')) {
+            return '';
+        }
+
+        return preg_match('/^[A-Za-z0-9.-]+(:\d{1,5})?$/', $value) === 1 ? $value : '';
     }
 }

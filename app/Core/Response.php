@@ -181,8 +181,15 @@ final class Response
      * Neutralise spreadsheet formula injection: a cell beginning with =, +, -
      * or @ is executed by Excel and Sheets when the file is opened, which turns
      * a guest's "name" into code running on a staff machine.
+     *
+     * Public because there is more than one way out of this application: this
+     * builds a CSV in memory, and App\Core\Backup streams one row by row for
+     * exports too large to assemble. Both must neutralise cells identically.
+     * While this was private, the streamed export — the one the Backups page
+     * offers, and the one that carries the whole contacts table — wrote raw
+     * values, under a UI hint promising it did exactly this.
      */
-    private static function csvCell(mixed $value): string
+    public static function csvCell(mixed $value): string
     {
         $string = $value === null ? '' : (string) $value;
 

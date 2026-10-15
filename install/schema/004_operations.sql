@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}attractions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE `{prefix}children`
-    ADD CONSTRAINT `fk_children_attraction`
+    ADD CONSTRAINT `{prefix}fk_children_attraction`
     FOREIGN KEY (`favourite_attraction_id`) REFERENCES `{prefix}attractions` (`id`) ON DELETE SET NULL;
 
 -- The venue's hours vary by season, so a row is scoped by an effective window
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}attraction_availability` (
     `note`          VARCHAR(191) DEFAULT NULL,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_attraction_availability` (`attraction_id`, `date`),
-    CONSTRAINT `fk_attraction_availability_attraction`
+    CONSTRAINT `{prefix}fk_attraction_availability_attraction`
         FOREIGN KEY (`attraction_id`) REFERENCES `{prefix}attractions` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}resources` (
     `updated_at`    DATETIME    DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_resources_type` (`type`, `is_active`),
-    CONSTRAINT `fk_resources_attraction`
+    CONSTRAINT `{prefix}fk_resources_attraction`
         FOREIGN KEY (`attraction_id`) REFERENCES `{prefix}attractions` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}party_packages` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_party_packages_slug` (`slug`),
     KEY `ix_party_packages_active` (`is_active`, `sort_order`),
-    CONSTRAINT `fk_party_packages_attraction`
+    CONSTRAINT `{prefix}fk_party_packages_attraction`
         FOREIGN KEY (`main_attraction_id`) REFERENCES `{prefix}attractions` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}package_addons` (
     `updated_at`    DATETIME    DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_package_addons_active` (`is_active`, `sort_order`),
-    CONSTRAINT `fk_package_addons_attraction`
+    CONSTRAINT `{prefix}fk_package_addons_attraction`
         FOREIGN KEY (`attraction_id`) REFERENCES `{prefix}attractions` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -214,15 +214,15 @@ CREATE TABLE IF NOT EXISTS `{prefix}bookings` (
     KEY `ix_bookings_deal` (`deal_id`),
     KEY `ix_bookings_host` (`host_user_id`, `event_date`),
     KEY `ix_bookings_pos` (`external_pos_id`),
-    CONSTRAINT `fk_bookings_deal`
+    CONSTRAINT `{prefix}fk_bookings_deal`
         FOREIGN KEY (`deal_id`) REFERENCES `{prefix}deals` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_bookings_contact`
+    CONSTRAINT `{prefix}fk_bookings_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_bookings_company`
+    CONSTRAINT `{prefix}fk_bookings_company`
         FOREIGN KEY (`company_id`) REFERENCES `{prefix}companies` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_bookings_package`
+    CONSTRAINT `{prefix}fk_bookings_package`
         FOREIGN KEY (`package_id`) REFERENCES `{prefix}party_packages` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_bookings_host`
+    CONSTRAINT `{prefix}fk_bookings_host`
         FOREIGN KEY (`host_user_id`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -236,9 +236,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}booking_addons` (
     `total_cents` BIGINT      NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
     KEY `ix_booking_addons_booking` (`booking_id`),
-    CONSTRAINT `fk_booking_addons_booking`
+    CONSTRAINT `{prefix}fk_booking_addons_booking`
         FOREIGN KEY (`booking_id`) REFERENCES `{prefix}bookings` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_booking_addons_addon`
+    CONSTRAINT `{prefix}fk_booking_addons_addon`
         FOREIGN KEY (`addon_id`) REFERENCES `{prefix}package_addons` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -252,9 +252,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}booking_attractions` (
     `sort_order`    SMALLINT NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
     KEY `ix_booking_attractions_booking` (`booking_id`, `sort_order`),
-    CONSTRAINT `fk_booking_attractions_booking`
+    CONSTRAINT `{prefix}fk_booking_attractions_booking`
         FOREIGN KEY (`booking_id`) REFERENCES `{prefix}bookings` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_booking_attractions_attraction`
+    CONSTRAINT `{prefix}fk_booking_attractions_attraction`
         FOREIGN KEY (`attraction_id`) REFERENCES `{prefix}attractions` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -269,9 +269,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}booking_resources` (
     KEY `ix_booking_resources_booking` (`booking_id`),
     -- The overlap query: resource, then time window.
     KEY `ix_booking_resources_window` (`resource_id`, `start_time`, `end_time`),
-    CONSTRAINT `fk_booking_resources_booking`
+    CONSTRAINT `{prefix}fk_booking_resources_booking`
         FOREIGN KEY (`booking_id`) REFERENCES `{prefix}bookings` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_booking_resources_resource`
+    CONSTRAINT `{prefix}fk_booking_resources_resource`
         FOREIGN KEY (`resource_id`) REFERENCES `{prefix}resources` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -288,7 +288,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}booking_guests` (
     `created_at`   DATETIME     DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_booking_guests_booking` (`booking_id`),
-    CONSTRAINT `fk_booking_guests_booking`
+    CONSTRAINT `{prefix}fk_booking_guests_booking`
         FOREIGN KEY (`booking_id`) REFERENCES `{prefix}bookings` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -302,9 +302,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}booking_tasks` (
     `sort_order`   SMALLINT     NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
     KEY `ix_booking_tasks_booking` (`booking_id`, `sort_order`),
-    CONSTRAINT `fk_booking_tasks_booking`
+    CONSTRAINT `{prefix}fk_booking_tasks_booking`
         FOREIGN KEY (`booking_id`) REFERENCES `{prefix}bookings` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_booking_tasks_user`
+    CONSTRAINT `{prefix}fk_booking_tasks_user`
         FOREIGN KEY (`assigned_to`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -323,8 +323,8 @@ CREATE TABLE IF NOT EXISTS `{prefix}booking_payments` (
     `created_at`   DATETIME    DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_booking_payments_booking` (`booking_id`, `occurred_at`),
-    CONSTRAINT `fk_booking_payments_booking`
+    CONSTRAINT `{prefix}fk_booking_payments_booking`
         FOREIGN KEY (`booking_id`) REFERENCES `{prefix}bookings` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_booking_payments_user`
+    CONSTRAINT `{prefix}fk_booking_payments_user`
         FOREIGN KEY (`recorded_by`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
