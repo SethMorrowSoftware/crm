@@ -152,7 +152,7 @@ final class Validator
 
                 [$name, $parameter] = array_pad(explode(':', $rule, 2), 2, null);
 
-                if (!$this->check($name, $value, $parameter, $field)) {
+                if (!$this->check($name, $value, $parameter, $field, $rules)) {
                     $failed = true;
                     break;
                 }
@@ -164,9 +164,28 @@ final class Validator
         }
     }
 
-    private function check(string $rule, mixed $value, ?string $parameter, string $field): bool
+    /**
+     * @param list<string> $fieldRules All rules declared for this field, so
+     *                                 min/max know whether they are bounding a
+     *                                 number or a string length.
+     */
+    private function check(string $rule, mixed $value, ?string $parameter, string $field, array $fieldRules = []): bool
     {
         $label = $this->label($field);
+
+        // A ZIP code, a phone number and an order reference are all strings
+        // that happen to look numeric. Whether min/max means "value between"
+        // or "length between" is therefore decided by the field's DECLARED
+        // type, never by inspecting the value — otherwise 'max:20' on a
+        // postal_code rejects "10918" for being larger than twenty.
+        $isNumericField = false;
+
+        foreach ($fieldRules as $declared) {
+            if (in_array(explode(':', $declared, 2)[0], ['int', 'integer', 'numeric'], true)) {
+                $isNumericField = true;
+                break;
+            }
+        }
 
         switch ($rule) {
             case 'string':
@@ -233,35 +252,53 @@ final class Validator
                 return true;
 
             case 'min':
-                $min = (float) $parameter;
-
-                if (is_numeric($value)) {
-                    if ((float) $value < $min) {
+                if ($isNumericField) {
+                    if ((float) $value < (float) $parameter) {
                         return $this->addError($field, sprintf('%s must be at least %s.', $label, $parameter));
                     }
 
                     return true;
                 }
 
-                if (mb_strlen((string) $value) < (int) $min) {
-                    return $this->addError($field, sprintf('%s must be at least %d characters.', $label, (int) $min));
+                if (is_array($value)) {
+                    if (count($value) < (int) $parameter) {
+                        return $this->addError($field, sprintf('Choose at least %d.', (int) $parameter));
+                    }
+
+                    return true;
+                }
+
+                if (mb_strlen((string) $value) < (int) $parameter) {
+                    return $this->addError(
+                        $field,
+                        sprintf('%s must be at least %d characters.', $label, (int) $parameter)
+                    );
                 }
 
                 return true;
 
             case 'max':
-                $max = (float) $parameter;
-
-                if (is_numeric($value)) {
-                    if ((float) $value > $max) {
+                if ($isNumericField) {
+                    if ((float) $value > (float) $parameter) {
                         return $this->addError($field, sprintf('%s must be %s or less.', $label, $parameter));
                     }
 
                     return true;
                 }
 
-                if (mb_strlen((string) $value) > (int) $max) {
-                    return $this->addError($field, sprintf('%s must be %d characters or fewer.', $label, (int) $max));
+                if (is_array($value)) {
+                    if (count($value) > (int) $parameter) {
+                        return $this->addError($field, sprintf('Choose no more than %d.', (int) $parameter));
+                    }
+
+                    return true;
+                }
+
+                if (mb_strlen((string) $value) > (int) $parameter) {
+                    return $this->addError(
+                        $field,
+                        sprintf('%s must be %d characters or fewer.', $label, (int) $parameter)
+                    );
                 }
 
                 return true;

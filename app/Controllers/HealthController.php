@@ -47,7 +47,7 @@ final class HealthController extends Controller
      * paths, versions of anything exploitable, or counts that would leak
      * business information to an unauthenticated caller.
      */
-    public function json(Request $request): Response
+    public function probe(Request $request): Response
     {
         $dbOk = false;
 

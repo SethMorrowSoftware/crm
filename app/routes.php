@@ -110,7 +110,7 @@ $router->post('/settings/health/test-cron', ['HealthController', 'testCron'], ['
 // A machine-readable probe for uptime monitoring. No auth — it reveals only
 // liveness, never configuration — but rate limited so it cannot be used to
 // hammer the database.
-$router->get('/health.json', ['HealthController', 'json'], ['throttle:30,1'], 'health.json');
+$router->get('/health.json', ['HealthController', 'probe'], ['throttle:30,1'], 'health.json');
 
 // ---------------------------------------------------------------------------
 // Playbooks — the 8 revenue playbooks and their activation state

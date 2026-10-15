@@ -176,10 +176,13 @@ mb_internal_encoding('UTF-8');
 View::init(CC_ROOT . '/app/Views');
 
 // -----------------------------------------------------------------------
-// CLI bootstrap stops here — cron.php drives itself from this point.
+// Non-routed entry points stop here and drive themselves: the CLI, and
+// cron.php when a host has no CLI cron and triggers it over HTTP. Falling
+// through to the router would make cron.php dispatch /cron.php as a route,
+// 404, send that response, and only then run the actual scheduled work.
 // -----------------------------------------------------------------------
 
-if (PHP_SAPI === 'cli' && !defined('CC_WEB_CRON')) {
+if (PHP_SAPI === 'cli' || defined('CC_WEB_CRON')) {
     if ($isInstalled) {
         DB::connect();
         Settings::load();

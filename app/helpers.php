@@ -519,7 +519,19 @@ if (!function_exists('array_get')) {
 if (!function_exists('request')) {
     function request(): Request
     {
-        /** @var Request */
-        return $GLOBALS['cc_request'];
+        $request = $GLOBALS['cc_request'] ?? null;
+
+        // Cron and CLI contexts have no HTTP request, but shared view partials
+        // still ask for one. Synthesising an empty one keeps those paths from
+        // having to special-case it.
+        if (!$request instanceof Request) {
+            $request = Request::capture();
+            $GLOBALS['cc_request'] = $request;
+        }
+
+        return $request;
     }
 }
+
+// The icon set defines icon(); loaded here so every view and controller has it.
+require_once __DIR__ . '/Views/partials/icons.php';

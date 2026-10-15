@@ -144,29 +144,44 @@ final class Router
 
     /**
      * Turn "/contacts/{id}" into a regex plus the parameter names it captures.
-     * Supports an optional type constraint: "{id:\d+}".
+     * An optional constraint follows a colon: "{id:\d+}", "{token:[a-f0-9]{64}}".
+     *
+     * The literal parts of the path are quoted and the constraints are spliced
+     * in between them. Quoting the whole path first would not work: preg_quote
+     * escapes the colon and the hyphen, which mangles both the delimiter and
+     * character classes like [a-z0-9-].
      *
      * @return array{0:string,1:list<string>}
      */
     private function compile(string $path): array
     {
+        // The constraint may itself contain {n} or {n,m} quantifiers, so the
+        // inner alternative allows a braced digit group without letting the
+        // match run past the placeholder's own closing brace.
+        $placeholder = '/\{([a-zA-Z_][a-zA-Z0-9_]*)(?::((?:[^{}]|\{\d+(?:,\d*)?\})+))?\}/';
+
         $params = [];
+        $regex  = '';
+        $offset = 0;
 
-        // Escape the literal parts of the path first, then substitute the
-        // placeholders. preg_quote escapes the braces too, so the second
-        // pattern matches their escaped form (\{ … \}) and un-escapes any
-        // constraint it finds inside.
-        $regex = (string) preg_replace_callback(
-            '/\\\\\{([a-zA-Z_][a-zA-Z0-9_]*)(?::(.+?))?\\\\\}/',
-            static function (array $m) use (&$params): string {
-                $params[] = $m[1];
+        if (preg_match_all($placeholder, $path, $matches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER) > 0) {
+            foreach ($matches as $match) {
+                [$whole, $wholeOffset] = $match[0];
 
-                $constraint = ($m[2] ?? '') !== '' ? stripslashes($m[2]) : '[^/]+';
+                // The literal text between the previous placeholder and this one.
+                $regex .= preg_quote(substr($path, $offset, $wholeOffset - $offset), '#');
 
-                return '(' . $constraint . ')';
-            },
-            preg_quote($path, '#')
-        );
+                $params[] = $match[1][0];
+
+                $constraint = isset($match[2]) && $match[2][0] !== '' ? $match[2][0] : '[^/]+';
+                $regex .= '(' . $constraint . ')';
+
+                $offset = $wholeOffset + strlen($whole);
+            }
+        }
+
+        // Whatever follows the last placeholder.
+        $regex .= preg_quote(substr($path, $offset), '#');
 
         return ['#^' . $regex . '$#', $params];
     }
