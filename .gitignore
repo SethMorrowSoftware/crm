@@ -9,3 +9,6 @@ storage/sessions/*
 !storage/**/.gitkeep
 .DS_Store
 *.log
+# Local test scaffolding
+/tests/.env.local
+/tests/junit.xml

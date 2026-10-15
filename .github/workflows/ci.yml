@@ -1,0 +1,253 @@
+name: CI
+
+# Castle CRM has zero Composer dependencies by design, so CI needs nothing but
+# PHP and a database. That keeps the pipeline fast and makes it mirror the
+# shared host the application actually runs on.
+
+on:
+  # Only the long-lived branches on push. Feature branches are covered by
+  # their pull request, so this avoids running the whole matrix twice for
+  # every commit on a PR branch.
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A new push supersedes an in-flight run on the same ref.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Fast feedback: syntax and the checks that need no services at all.
+  # Runs first so an obvious mistake fails in seconds rather than minutes.
+  # ---------------------------------------------------------------------
+  lint:
+    name: Lint & static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, json, openssl, curl, fileinfo
+          coverage: none
+          tools: none
+
+      - name: Check PHP syntax on every file
+        run: |
+          # -l one file at a time: the aggregate exit code is what matters, and
+          # a parse error names the file.
+          failed=0
+          while IFS= read -r -d '' file; do
+            if ! php -l "$file" > /dev/null 2>&1; then
+              echo "::error file=${file}::PHP syntax error"
+              php -l "$file" || true
+              failed=1
+            fi
+          done < <(find . -name '*.php' -not -path './vendor/*' -not -path './.git/*' -print0)
+          exit $failed
+
+      - name: Check JavaScript syntax
+        run: |
+          failed=0
+          for file in assets/js/*.js; do
+            if ! node --check "$file"; then
+              echo "::error file=${file}::JavaScript syntax error"
+              failed=1
+            fi
+          done
+          exit $failed
+
+      - name: Unit and static suites
+        # --min-tests guards against a green run that tested nothing.
+        run: php tests/run.php --unit --min-tests=100 --junit=tests/junit-unit.xml
+
+      - name: Upload unit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-unit
+          path: tests/junit-unit.xml
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------
+  # The full suite against every PHP version the spec claims to support,
+  # on both MySQL and MariaDB — the two things a cPanel host will offer.
+  # ---------------------------------------------------------------------
+  test:
+    name: PHP ${{ matrix.php }} · ${{ matrix.database }}
+    runs-on: ubuntu-latest
+    needs: lint
+
+    strategy:
+      # One failing combination should not hide the others.
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3']
+        database: ['mysql:8.0']
+        include:
+          # MariaDB is what most cPanel hosts actually run, so it is covered on
+          # the version the venue is most likely to have.
+          - php: '8.3'
+            database: 'mariadb:10.11'
+          # The oldest combination the spec claims support for.
+          - php: '8.1'
+            database: 'mysql:5.7'
+
+    services:
+      database:
+        image: ${{ matrix.database }}
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: castle_crm_test
+          MARIADB_ROOT_PASSWORD: ci-root-password
+          MARIADB_DATABASE: castle_crm_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+          --health-start-period=30s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          # Exactly the extensions the installer hard-requires, so CI proves
+          # the application runs on the minimum it asks for.
+          extensions: pdo_mysql, mbstring, json, openssl, curl, fileinfo
+          coverage: none
+          tools: none
+          ini-values: error_reporting=E_ALL, display_errors=On
+
+      - name: Wait for the database
+        run: |
+          for attempt in $(seq 1 40); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -pci-root-password --silent 2>/dev/null; then
+              echo "Database is up after ${attempt} attempt(s)."
+              mysql -h 127.0.0.1 -uroot -pci-root-password -e 'SELECT VERSION();'
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::The database never became ready."
+          exit 1
+
+      - name: Prepare storage directories
+        run: |
+          mkdir -p storage/{logs,cache,uploads,exports,backups,sessions}
+          chmod -R 0775 storage
+
+      - name: Run the full test suite
+        env:
+          CC_TEST_DB_HOST: 127.0.0.1
+          CC_TEST_DB_PORT: '3306'
+          CC_TEST_DB_NAME: castle_crm_test
+          CC_TEST_DB_USER: root
+          CC_TEST_DB_PASS: ci-root-password
+        # --require-db and --require-http turn a skipped suite into a failure:
+        # CI reporting success because nothing ran is worse than CI failing.
+        run: |
+          php tests/run.php \
+            --require-db \
+            --require-http \
+            --min-tests=200 \
+            --junit=tests/junit.xml
+
+      - name: Show the application log on failure
+        if: failure()
+        run: |
+          echo "── application log ──"
+          tail -n 120 storage/logs/*.log 2>/dev/null || echo "(no application log)"
+          echo "── test server log ──"
+          tail -n 60 storage/logs/test-server.log 2>/dev/null || echo "(no server log)"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-php${{ matrix.php }}-${{ strategy.job-index }}
+          path: tests/junit.xml
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------
+  # Prove the thing the product actually promises: that it installs on a
+  # bare host through the web installer, with no shell access.
+  # ---------------------------------------------------------------------
+  install:
+    name: Web installer end-to-end
+    runs-on: ubuntu-latest
+    needs: lint
+
+    services:
+      database:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: castle_install_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+          --health-start-period=30s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_mysql, mbstring, json, openssl, curl, fileinfo
+          coverage: none
+          tools: none
+
+      - name: Wait for the database
+        run: |
+          for attempt in $(seq 1 40); do
+            if mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password --silent 2>/dev/null; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1
+
+      - name: Create an unprivileged database user, as cPanel would
+        run: |
+          mysql -h 127.0.0.1 -uroot -pci-root-password <<'SQL'
+          CREATE USER 'castle_ci'@'%' IDENTIFIED BY 'castle-ci-password';
+          GRANT ALL PRIVILEGES ON castle_install_test.* TO 'castle_ci'@'%';
+          FLUSH PRIVILEGES;
+          SQL
+
+      - name: Prepare storage directories
+        run: |
+          mkdir -p storage/{logs,cache,uploads,exports,backups,sessions}
+          chmod -R 0775 storage
+
+      - name: Walk the installer
+        env:
+          CC_INSTALL_DB_HOST: 127.0.0.1
+          CC_INSTALL_DB_NAME: castle_install_test
+          CC_INSTALL_DB_USER: castle_ci
+          CC_INSTALL_DB_PASS: castle-ci-password
+        run: php tests/install/walk-installer.php
+
+      - name: Show logs on failure
+        if: failure()
+        run: tail -n 120 storage/logs/*.log 2>/dev/null || true
