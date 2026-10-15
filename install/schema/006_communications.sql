@@ -27,9 +27,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}conversations` (
     KEY `ix_conversations_contact` (`contact_id`, `last_message_at`),
     KEY `ix_conversations_unread` (`is_unread`, `status`),
     KEY `ix_conversations_snoozed` (`snoozed_until`),
-    CONSTRAINT `fk_conversations_contact`
+    CONSTRAINT `{prefix}fk_conversations_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_conversations_user`
+    CONSTRAINT `{prefix}fk_conversations_user`
         FOREIGN KEY (`assigned_to`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -71,11 +71,11 @@ CREATE TABLE IF NOT EXISTS `{prefix}messages` (
     KEY `ix_messages_provider` (`provider_message_id`),
     KEY `ix_messages_status` (`status`, `created_at`),
     KEY `ix_messages_campaign` (`campaign_id`, `status`),
-    CONSTRAINT `fk_messages_conversation`
+    CONSTRAINT `{prefix}fk_messages_conversation`
         FOREIGN KEY (`conversation_id`) REFERENCES `{prefix}conversations` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_messages_contact`
+    CONSTRAINT `{prefix}fk_messages_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_messages_user`
+    CONSTRAINT `{prefix}fk_messages_user`
         FOREIGN KEY (`user_id`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}message_attachments` (
     `created_at` DATETIME     DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_message_attachments_message` (`message_id`),
-    CONSTRAINT `fk_message_attachments_message`
+    CONSTRAINT `{prefix}fk_message_attachments_message`
         FOREIGN KEY (`message_id`) REFERENCES `{prefix}messages` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -189,18 +189,18 @@ CREATE TABLE IF NOT EXISTS `{prefix}campaigns` (
     PRIMARY KEY (`id`),
     KEY `ix_campaigns_status` (`status`, `scheduled_at`),
     KEY `ix_campaigns_segment` (`segment_id`),
-    CONSTRAINT `fk_campaigns_template`
+    CONSTRAINT `{prefix}fk_campaigns_template`
         FOREIGN KEY (`template_id`) REFERENCES `{prefix}templates` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_campaigns_segment`
+    CONSTRAINT `{prefix}fk_campaigns_segment`
         FOREIGN KEY (`segment_id`) REFERENCES `{prefix}segments` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE `{prefix}messages`
-    ADD CONSTRAINT `fk_messages_campaign`
+    ADD CONSTRAINT `{prefix}fk_messages_campaign`
     FOREIGN KEY (`campaign_id`) REFERENCES `{prefix}campaigns` (`id`) ON DELETE SET NULL;
 
 ALTER TABLE `{prefix}messages`
-    ADD CONSTRAINT `fk_messages_template`
+    ADD CONSTRAINT `{prefix}fk_messages_template`
     FOREIGN KEY (`template_id`) REFERENCES `{prefix}templates` (`id`) ON DELETE SET NULL;
 
 -- One row per intended recipient, written before sending. That is what makes a
@@ -226,9 +226,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}campaign_recipients` (
     UNIQUE KEY `uq_campaign_recipients` (`campaign_id`, `contact_id`),
     KEY `ix_campaign_recipients_pending` (`campaign_id`, `status`),
     KEY `ix_campaign_recipients_contact` (`contact_id`),
-    CONSTRAINT `fk_campaign_recipients_campaign`
+    CONSTRAINT `{prefix}fk_campaign_recipients_campaign`
         FOREIGN KEY (`campaign_id`) REFERENCES `{prefix}campaigns` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_campaign_recipients_contact`
+    CONSTRAINT `{prefix}fk_campaign_recipients_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -292,7 +292,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}text_club` (
     UNIQUE KEY `uq_text_club_phone` (`phone_normalized`),
     KEY `ix_text_club_status` (`status`),
     KEY `ix_text_club_contact` (`contact_id`),
-    CONSTRAINT `fk_text_club_contact`
+    CONSTRAINT `{prefix}fk_text_club_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

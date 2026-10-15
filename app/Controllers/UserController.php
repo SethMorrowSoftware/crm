@@ -109,6 +109,17 @@ final class UserController extends Controller
             return $this->notFound('That user does not exist.');
         }
 
+        // Don't offer a form whose submission will be refused — and don't show
+        // a more privileged account's details to somebody who may not act on
+        // it in the first place.
+        if (!Acl::mayManageUser($user)) {
+            return $this->refuse(
+                $request,
+                'That account holds permissions you do not have yourself.',
+                '/settings/users'
+            );
+        }
+
         return $this->view('settings/users/form', [
             'pageTitle' => 'Edit ' . $user['name'],
             'user'      => $user,
@@ -127,6 +138,18 @@ final class UserController extends Controller
 
         if ($user === null) {
             return $this->notFound('That user does not exist.');
+        }
+
+        // WHO you may act on, not just which role you may grant. Without this a
+        // users_manage holder could leave a more privileged account's role
+        // alone — so the mayAssignRole() check below never fired — and set its
+        // PASSWORD instead, then sign in as them. See Acl::mayManageUser().
+        if (!Acl::mayManageUser($user)) {
+            return $this->refuse(
+                $request,
+                'That account holds permissions you do not have yourself, so you cannot edit it.',
+                '/settings/users'
+            );
         }
 
         $data = $this->validate($request, [
@@ -225,6 +248,17 @@ final class UserController extends Controller
 
         if ($id === Auth::id()) {
             return $this->refuse($request, 'You cannot delete your own account.', '/settings/users');
+        }
+
+        // Same rule as editing: deleting an account more privileged than your
+        // own removes the oversight above you, which is the other half of the
+        // same escalation.
+        if (!Acl::mayManageUser($user)) {
+            return $this->refuse(
+                $request,
+                'That account holds permissions you do not have yourself, so you cannot delete it.',
+                '/settings/users'
+            );
         }
 
         if ($guard = $this->guardLastOwner($user, null, false, $request)) {

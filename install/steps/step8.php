@@ -29,7 +29,7 @@ if (!$complete):
         <table>
             <tbody>
             <tr>
-                <th>Database</th>
+                <th scope="col">Database</th>
                 <td><code><?= $esc($state['db']['name'] ?? '') ?></code>
                     on <code><?= $esc($state['db']['host'] ?? '') ?></code>
                     <?php if (!empty($state['db_version'])): ?>
@@ -37,13 +37,13 @@ if (!$complete):
                     <?php endif; ?>
                 </td>
             </tr>
-            <tr><th>Table prefix</th><td><code><?= $esc($state['db']['prefix'] ?? 'cc_') ?></code></td></tr>
-            <tr><th>Venue</th><td><?= $esc($state['venue']['name'] ?? '') ?>
+            <tr><th scope="col">Table prefix</th><td><code><?= $esc($state['db']['prefix'] ?? 'cc_') ?></code></td></tr>
+            <tr><th scope="col">Venue</th><td><?= $esc($state['venue']['name'] ?? '') ?>
                 &middot; <?= $esc($state['venue']['timezone'] ?? '') ?></td></tr>
-            <tr><th>Owner</th><td><?= $esc($state['owner']['name'] ?? '') ?>
+            <tr><th scope="col">Owner</th><td><?= $esc($state['owner']['name'] ?? '') ?>
                 &lt;<?= $esc($state['owner']['email'] ?? '') ?>&gt;</td></tr>
             <tr>
-                <th>Seeding</th>
+                <th scope="col">Seeding</th>
                 <td>
                     <?php
                     $chosen = array_keys(array_filter($state['seeds'] ?? []));
@@ -95,6 +95,17 @@ endif;
                     <?= (int) $summary['seeds']['playbooks']['automations'] ?> automations
                     &mdash; all inactive until you switch them on</li>
             <?php endif; ?>
+            <?php if (isset($summary['seeds']['templates'])): ?>
+                <li><?= (int) $summary['seeds']['templates']['templates'] ?> email templates,
+                    including the password-reset message the app sends itself</li>
+            <?php endif; ?>
+            <?php if (isset($summary['seeds']['demo'])): ?>
+                <li><strong>Example data:</strong>
+                    <?= (int) $summary['seeds']['demo']['contacts'] ?> fictional guests,
+                    <?= (int) $summary['seeds']['demo']['deals'] ?> party inquiries and
+                    <?= (int) $summary['seeds']['demo']['bookings'] ?> bookings
+                    &mdash; every one tagged <code>demo-data</code> so you can find and delete them</li>
+            <?php endif; ?>
         </ul>
     <?php endif; ?>
 </div>
@@ -138,7 +149,7 @@ endif;
     </p>
 
     <table>
-        <thead><tr><th>Type</th><th>Name</th><th>Value</th></tr></thead>
+        <thead><tr><th scope="col">Type</th><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
         <tbody>
         <?php foreach ($summary['dns'] ?? [] as $record): ?>
             <tr>

@@ -342,6 +342,73 @@ final class Acl
             return false;
         }
 
+        return self::roleIsSubsetOfMine($roleId);
+    }
+
+    /**
+     * May the current user edit, deactivate or delete THIS account?
+     *
+     * mayAssignRole() guards the role being granted. On its own that is only
+     * half the rule, and the missing half was a privilege-escalation hole: a
+     * non-owner holding users_manage could leave the Owner's role untouched —
+     * so mayAssignRole() was never consulted — and simply set the Owner's
+     * PASSWORD, then sign in as them. Every separation the role system draws
+     * collapses at that point, including the backup_manage split that exists
+     * so whoever can export every guest's details is not automatically
+     * whoever can take over the account. docs/PRIVACY.md describes that split
+     * as real, so this is the code that has to make it real.
+     *
+     * The rule: you may only act on an account whose role is a subset of your
+     * own permissions, and only an owner may act on the owner.
+     *
+     * @param array<string,mixed> $user A users row (needs id and role_id).
+     */
+    public static function mayManageUser(array $user): bool
+    {
+        // Your own account. Changing your own role or deactivating yourself is
+        // refused elsewhere; what is left is editing your own name and
+        // password, which needs no privilege over anybody.
+        if ((int) ($user['id'] ?? 0) === Auth::id()) {
+            return true;
+        }
+
+        if (!self::can('users_manage') && !Auth::isOwner()) {
+            return false;
+        }
+
+        // Only an owner may touch an owner — checked before the subset rule
+        // and regardless of it. A custom role carrying every permission in the
+        // catalogue would pass a subset test, and "holds every permission" is
+        // still not the same thing as "is the owner": the owner is the account
+        // that cannot be locked out, and handing it over must not be a
+        // permission anybody can be granted.
+        if (self::isOwnerRow($user) && !Auth::isOwner()) {
+            return false;
+        }
+
+        if (Auth::isOwner()) {
+            return true;
+        }
+
+        return self::roleIsSubsetOfMine((int) ($user['role_id'] ?? 0));
+    }
+
+    /** Does this users row hold the owner role? */
+    private static function isOwnerRow(array $user): bool
+    {
+        $ownerRoleId = (int) DB::value("SELECT id FROM {roles} WHERE slug = 'owner'");
+
+        return $ownerRoleId > 0 && (int) ($user['role_id'] ?? 0) === $ownerRoleId;
+    }
+
+    /**
+     * Are this role's permissions a subset of the current user's own?
+     *
+     * Shared by mayAssignRole() and mayManageUser() so the two can never drift
+     * apart — the hole above existed because only one side was checked.
+     */
+    private static function roleIsSubsetOfMine(int $roleId): bool
+    {
         $targetSlugs = DB::column(
             'SELECT p.slug
                FROM {role_permissions} rp

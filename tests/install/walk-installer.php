@@ -655,6 +655,50 @@ $allPermissions = (int) $pdo->query('SELECT COUNT(*) FROM cc_permissions')->fetc
 
 check($ownerPermissions === $allPermissions, 'the owner holds every permission');
 
+// The password-reset template is not optional: Mailer::sendTemplate() resolves
+// by slug and refuses when the row is missing, so without it nobody could
+// recover an account on a fresh install.
+$resetTemplate = $pdo->query(
+    "SELECT is_system, is_active, body FROM cc_templates WHERE slug = 'password-reset'"
+)->fetch(PDO::FETCH_ASSOC);
+
+check($resetTemplate !== false, 'the password-reset template was seeded');
+check((int) ($resetTemplate['is_system'] ?? 0) === 1, 'and is marked as a system template');
+check((int) ($resetTemplate['is_active'] ?? 0) === 1, 'and is active');
+check(
+    str_contains((string) ($resetTemplate['body'] ?? ''), '{{reset_link}}'),
+    'and carries the link merge tag'
+);
+
+$templateCount = (int) $pdo->query('SELECT COUNT(*) FROM cc_templates')->fetchColumn();
+check($templateCount >= 10, sprintf('email templates: %d', $templateCount));
+
+// Mail must default to the log driver: nothing leaves the server until an
+// operator configures a provider, which is what makes a fresh install unable
+// to reach a guest even with Safe Mode off.
+$mailDriver = (string) $pdo->query(
+    "SELECT value FROM cc_settings WHERE `key` = 'mail.driver'"
+)->fetchColumn();
+
+check($mailDriver === 'log', 'mail defaults to the log driver, so nothing is sent yet');
+
+$forceHttps = (string) $pdo->query(
+    "SELECT value FROM cc_settings WHERE `key` = 'system.force_https'"
+)->fetchColumn();
+
+check(
+    $forceHttps === '' || $forceHttps === '0',
+    'force-HTTPS is off, so a pre-certificate install is not locked out of itself'
+);
+
+// The example data was not requested in this walk-through, so there must be
+// none of it.
+$demoContacts = (int) $pdo->query(
+    "SELECT COUNT(*) FROM cc_contacts WHERE source = 'demo'"
+)->fetchColumn();
+
+check($demoContacts === 0, 'no example guests, because the checkbox was left clear');
+
 // ---------------------------------------------------------------------------
 // The installer must now refuse to run again
 // ---------------------------------------------------------------------------

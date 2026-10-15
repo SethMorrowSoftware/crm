@@ -181,3 +181,112 @@ Harness::test('every route in the real table compiles', function (): void {
 
     Assert::greaterThan(30, $router->routeCount(), 'the route table should be populated');
 });
+
+// --------------------------------------------------- request path resolution
+
+/**
+ * Build a Request for a given REQUEST_URI and SCRIPT_NAME.
+ *
+ * Request reads the superglobals in its constructor, so they are set, read and
+ * restored around each case.
+ */
+function request_for(string $requestUri, string $scriptName): App\Core\Request
+{
+    $previous = [$_SERVER['REQUEST_URI'] ?? null, $_SERVER['SCRIPT_NAME'] ?? null, $_GET];
+
+    $_SERVER['REQUEST_URI'] = $requestUri;
+    $_SERVER['SCRIPT_NAME'] = $scriptName;
+    $_GET = [];
+
+    try {
+        return App\Core\Request::capture();
+    } finally {
+        [$_SERVER['REQUEST_URI'], $_SERVER['SCRIPT_NAME'], $_GET] = $previous;
+    }
+}
+
+Harness::test('a route is resolved from the front controller at the document root', function (): void {
+    Assert::same('/settings/backups', request_for('/settings/backups', '/index.php')->path());
+});
+
+Harness::test('a subdirectory install has its prefix stripped', function (): void {
+    $request = request_for('/crm/settings/backups', '/crm/index.php');
+
+    Assert::same('/crm', $request->basePath());
+    Assert::same('/settings/backups', $request->path());
+});
+
+Harness::test('a filename in a route parameter survives path resolution', function (): void {
+    // PHP's built-in server — and some nginx fastcgi_split_path_info setups —
+    // report SCRIPT_NAME as the whole request path whenever the last segment
+    // contains a dot. Taking dirname() of that used to eat the route: a
+    // backup download arrived at the router as just "/download" and 404d.
+    $uri = '/settings/backups/castle-crm-20260101-120000.sql.gz/download';
+
+    $request = request_for($uri, $uri);
+
+    Assert::same('', $request->basePath(), 'SCRIPT_NAME that is not a .php file must not set a base path');
+    Assert::same($uri, $request->path());
+});
+
+Harness::test('that route then matches the real route table', function (): void {
+    $router = new Router();
+    require CC_ROOT . '/app/routes.php';
+
+    $uri = '/settings/backups/castle-crm-20260101-120000.sql.gz/download';
+    $request = request_for($uri, $uri);
+
+    // dispatch() would run middleware, so match the compiled regex instead.
+    $reflection = new ReflectionProperty(Router::class, 'routes');
+    $reflection->setAccessible(true);
+
+    $matched = false;
+
+    foreach ($reflection->getValue($router)['GET'] as $route) {
+        if (preg_match($route['regex'], $request->path()) === 1) {
+            $matched = true;
+            break;
+        }
+    }
+
+    Assert::true($matched, 'the backup download route should match its own URL');
+});
+
+Harness::test('a traversal attempt is reduced to the root path', function (): void {
+    foreach ([
+        '/settings/backups/..%2f..%2fconfig%2fconfig.php/download',
+        '/../config/config.php',
+        '/a/../../b',
+    ] as $uri) {
+        Assert::same('/', request_for($uri, '/index.php')->path(), 'input: ' . $uri);
+    }
+});
+
+Harness::test('duplicate slashes collapse and a trailing slash is dropped', function (): void {
+    Assert::same('/settings/mail', request_for('//settings///mail/', '/index.php')->path());
+});
+
+Harness::test('a query string is not part of the path', function (): void {
+    Assert::same(
+        '/settings/backups/export',
+        request_for('/settings/backups/export?table=contacts', '/index.php')->path()
+    );
+});
+
+Harness::test('a protocol-relative-looking path keeps its first segment', function (): void {
+    // parse_url('//settings/mail') reports `settings` as a HOST and '/mail' as
+    // the path, which would route the request to the wrong place — and, worse,
+    // would hide the first segment from the protected-directory guard in
+    // index.php. The path is cut out of REQUEST_URI by hand for this reason.
+    Assert::same('/settings/mail', request_for('//settings///mail/', '/index.php')->path());
+    Assert::same('/app/helpers.php', request_for('//app/helpers.php', '/index.php')->path());
+});
+
+Harness::test('an absolute-form request target resolves to its path', function (): void {
+    // Only a proxy should ever receive one, but a crafted request line can
+    // produce it, and reading "http:" as the first path segment would be wrong.
+    Assert::same(
+        '/settings/mail',
+        request_for('http://elsewhere.example/settings/mail', '/index.php')->path()
+    );
+});

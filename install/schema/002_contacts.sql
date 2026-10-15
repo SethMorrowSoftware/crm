@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}companies` (
     KEY `ix_companies_owner` (`owner_id`),
     KEY `ix_companies_recurring` (`is_recurring_group`, `last_event_at`),
     KEY `ix_companies_name` (`name`),
-    CONSTRAINT `fk_companies_owner`
+    CONSTRAINT `{prefix}fk_companies_owner`
         FOREIGN KEY (`owner_id`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -121,16 +121,16 @@ CREATE TABLE IF NOT EXISTS `{prefix}contacts` (
     -- audience query filter on exactly these three columns.
     KEY `ix_contacts_reachable` (`do_not_contact`, `email_consent`, `sms_consent`),
     KEY `ix_contacts_name` (`last_name`, `first_name`),
-    CONSTRAINT `fk_contacts_owner`
+    CONSTRAINT `{prefix}fk_contacts_owner`
         FOREIGN KEY (`owner_id`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_contacts_household`
+    CONSTRAINT `{prefix}fk_contacts_household`
         FOREIGN KEY (`household_id`) REFERENCES `{prefix}households` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_contacts_company`
+    CONSTRAINT `{prefix}fk_contacts_company`
         FOREIGN KEY (`company_id`) REFERENCES `{prefix}companies` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE `{prefix}households`
-    ADD CONSTRAINT `fk_households_primary_contact`
+    ADD CONSTRAINT `{prefix}fk_households_primary_contact`
     FOREIGN KEY (`primary_contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL;
 
 -- Children exist for party operations only. Castle CRM never messages a child:
@@ -157,9 +157,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}children` (
     KEY `ix_children_contact` (`contact_id`),
     KEY `ix_children_birth_month` (`birth_month`),
     KEY `ix_children_birth_date` (`birth_date`),
-    CONSTRAINT `fk_children_household`
+    CONSTRAINT `{prefix}fk_children_household`
         FOREIGN KEY (`household_id`) REFERENCES `{prefix}households` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_children_contact`
+    CONSTRAINT `{prefix}fk_children_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -170,9 +170,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}contact_companies` (
     `is_primary` TINYINT(1)   NOT NULL DEFAULT 0,
     PRIMARY KEY (`contact_id`, `company_id`),
     KEY `ix_contact_companies_company` (`company_id`),
-    CONSTRAINT `fk_contact_companies_contact`
+    CONSTRAINT `{prefix}fk_contact_companies_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_contact_companies_company`
+    CONSTRAINT `{prefix}fk_contact_companies_company`
         FOREIGN KEY (`company_id`) REFERENCES `{prefix}companies` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}taggables` (
     `created_at`  DATETIME    DEFAULT NULL,
     PRIMARY KEY (`tag_id`, `entity_type`, `entity_id`),
     KEY `ix_taggables_entity` (`entity_type`, `entity_id`),
-    CONSTRAINT `fk_taggables_tag`
+    CONSTRAINT `{prefix}fk_taggables_tag`
         FOREIGN KEY (`tag_id`) REFERENCES `{prefix}tags` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}custom_field_values` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_custom_field_values` (`field_id`, `entity_type`, `entity_id`),
     KEY `ix_custom_field_values_entity` (`entity_type`, `entity_id`),
-    CONSTRAINT `fk_custom_field_values_field`
+    CONSTRAINT `{prefix}fk_custom_field_values_field`
         FOREIGN KEY (`field_id`) REFERENCES `{prefix}custom_fields` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -237,9 +237,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}contact_notes` (
     `updated_at` DATETIME   DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_contact_notes_contact` (`contact_id`, `is_pinned`, `created_at`),
-    CONSTRAINT `fk_contact_notes_contact`
+    CONSTRAINT `{prefix}fk_contact_notes_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_contact_notes_user`
+    CONSTRAINT `{prefix}fk_contact_notes_user`
         FOREIGN KEY (`user_id`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -272,7 +272,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}consent_log` (
     `created_at` DATETIME    NOT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_consent_contact` (`contact_id`, `channel`, `created_at`),
-    CONSTRAINT `fk_consent_contact`
+    CONSTRAINT `{prefix}fk_consent_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -296,8 +296,8 @@ CREATE TABLE IF NOT EXISTS `{prefix}activities` (
     KEY `ix_activities_entity` (`entity_type`, `entity_id`, `occurred_at`),
     KEY `ix_activities_contact` (`contact_id`, `occurred_at`),
     KEY `ix_activities_user` (`user_id`, `occurred_at`),
-    CONSTRAINT `fk_activities_user`
+    CONSTRAINT `{prefix}fk_activities_user`
         FOREIGN KEY (`user_id`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_activities_contact`
+    CONSTRAINT `{prefix}fk_activities_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

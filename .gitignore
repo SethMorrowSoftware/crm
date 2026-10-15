@@ -5,6 +5,10 @@ storage/cache/*
 storage/uploads/*
 storage/exports/*
 storage/backups/*
+# But the guards themselves ship, so a fresh deploy is protected before the
+# first backup is ever taken rather than after it.
+!storage/backups/.htaccess
+!storage/backups/index.html
 storage/sessions/*
 !storage/**/.gitkeep
 .DS_Store
@@ -12,3 +16,8 @@ storage/sessions/*
 # Local test scaffolding
 /tests/.env.local
 /tests/junit.xml
+
+# Agent tooling scratch space. .claude/ itself can hold committed project
+# config (skills, settings), but worktrees/ holds throwaway git worktrees —
+# nested checkouts of this same repository, created and removed automatically.
+/.claude/worktrees/

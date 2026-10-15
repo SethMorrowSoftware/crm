@@ -73,7 +73,7 @@ declare(strict_types=1);
         <div class="table-wrap">
             <table class="table">
                 <thead>
-                <tr><th>When</th><th>Who</th><th>Action</th><th>Record</th><th>Changes</th><th>IP</th></tr>
+                <tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">Action</th><th scope="col">Record</th><th scope="col">Changes</th><th scope="col">IP</th></tr>
                 </thead>
                 <tbody>
                 <?php foreach ($rows as $row): ?>

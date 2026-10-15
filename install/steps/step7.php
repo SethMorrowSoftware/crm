@@ -60,10 +60,14 @@ $seeds = $state['seeds'] ?? ['venue' => true, 'playbooks' => true, 'demo' => fal
             <div>
                 <label for="seed_demo">Example guests and bookings <span class="opt">— off by default</span></label>
                 <p class="hint">
-                    A handful of fictional families and parties, so the dashboard and pipelines have
-                    something in them while you learn the system. Leave this OFF for a real install:
-                    fake guests in a real contact list are a nuisance to unpick later.
-                    <em>Not yet implemented — this checkbox is recorded but seeds nothing in Phase 1.</em>
+                    Eight fictional families with children, eight party inquiries spread across the
+                    pipeline, bookings on the calendar and a few open tasks &mdash; so the dashboard,
+                    pipeline and calendar have something in them while you learn the system.
+                    Every address is on <code>example.com</code> and every phone number is in the
+                    reserved 555&#8209;01xx range, so <strong>no example guest can ever be
+                    contacted</strong>, and every row is tagged <code>demo-data</code> so you can
+                    find and delete the lot later. Still, leave this OFF for a real install if you
+                    can: a clean contact list is worth more than a populated demo.
                 </p>
             </div>
         </div>

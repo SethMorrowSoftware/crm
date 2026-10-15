@@ -234,7 +234,11 @@ function start_test_server(): ?array
         . "        'prefix'  => 'cc_',\n"
         . "        'socket'  => " . $export($config['socket']) . ",\n"
         . "    ],\n"
-        . "    'storage_path' => null,\n"
+        // Explicit, not null: the cache and the log have to land where this
+        // process expects them, so that clearing a rate-limit counter here
+        // clears the one the server just wrote. Relying on both sides to
+        // derive the same default from a null is how that stops being true.
+        . "    'storage_path' => " . $export(CC_ROOT . '/storage') . ",\n"
         . "    'session'      => [\n"
         . "        'name'             => 'castle_crm_test_session',\n"
         . "        'idle_timeout'     => 3600,\n"
@@ -242,7 +246,12 @@ function start_test_server(): ?array
         . "        'cookie_secure'    => false,\n"
         . "        'cookie_samesite'  => 'Lax',\n"
         . "    ],\n"
-        . "    'trust_proxy'  => false,\n"
+        // True only here, in a throwaway config for a loopback-only server, so
+        // each TestBrowser can present its own client address and not have the
+        // whole suite rate limited as one IP (see TestBrowser's constructor).
+        // The installer and config.sample.php both write false, and nothing in
+        // the application changes behaviour on this flag except Request::ip().
+        . "    'trust_proxy'  => true,\n"
         . "    'cron_token'   => " . $export($cronToken) . ",\n"
         . "    'log_level'    => 'error',\n"
         . "];\n";
@@ -265,8 +274,20 @@ function start_test_server(): ?array
     // Passed as an array so no intermediate shell is spawned: proc_terminate()
     // then signals the PHP server directly, instead of killing a wrapper and
     // leaving the server orphaned for the CI runner to complain about.
+    //
+    // apc.enable_cli=0 asks the server for Cache's FILE backend rather than
+    // APCu, so the backend does not differ between a developer's machine and
+    // CI for no stated reason. It is NOT what keeps the suites out of the rate
+    // limiter, and it is deliberately not described as making the server's
+    // cache clearable from here: that was tried, with this flag set and the
+    // files unlinked directly, and CI still answered 429 from the sixth POST.
+    // Why it did not work was never established — the flag should have been
+    // enough, which is the point. Nothing in this process can be SURE of
+    // reaching state the server process owns, so the suites no longer try;
+    // each TestBrowser presents its own client address instead.
     $command = [
         PHP_BINARY,
+        '-d', 'apc.enable_cli=0',
         '-S', '127.0.0.1:' . $port,
         '-t', CC_ROOT,
         CC_ROOT . '/tools/dev-server.php',
@@ -321,9 +342,29 @@ function seed_http_fixtures(): void
     App\Core\DB::disconnect();
     App\Core\DB::connect();
 
+    // Clear the rate-limit counters before the HTTP suite.
+    //
+    // They live in the file cache, which — unlike the database and the config
+    // file — survives between runs, so running the suite twice inside the
+    // window used to start failing with 429s that looked for all the world
+    // like broken authentication. Flushing here makes a run independent of the
+    // one before it.
+    //
+    // It is NOT what keeps the suites from rate limiting themselves within a
+    // run: this clears whichever backend THIS process resolves, and the
+    // counters that matter belong to the server process. Each TestBrowser
+    // presents its own client address instead. (This comment used to claim the
+    // throttle was "still exercised by the test that deliberately trips it".
+    // There was no such test — nothing covered the limiter at all until
+    // http/smoke got one.)
+    App\Core\Cache::flush();
+
     $accounts = [
         ['owner@test.invalid', 'Owner', 'owner', 'owner-test-passphrase-9'],
         ['desk@test.invalid',  'Front Desk Dana', 'front_desk', 'desk-test-passphrase-9'],
+        // Holds users_manage but not every permission — the profile the
+        // privilege-escalation tests need, and the one a real venue has.
+        ['gm@test.invalid',    'General Manager Gail', 'general_manager', 'gm-test-passphrase-9'],
     ];
 
     foreach ($accounts as [$email, $name, $roleSlug, $password]) {

@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Core\Audit;
+use App\Core\Backup;
 use App\Core\Cache;
 use App\Core\DB;
+use App\Core\Mailer;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Settings;
@@ -30,7 +32,33 @@ final class SettingsController extends Controller
                 'roles'     => (int) DB::value('SELECT COUNT(*) FROM {roles}'),
                 'playbooks' => (int) DB::value('SELECT COUNT(*) FROM {playbooks} WHERE is_active = 1'),
             ],
+            'mailDriverLabel' => $this->mailDriverLabel(),
+            'backupLabel'     => $this->backupLabel(),
         ]);
+    }
+
+    /** The tile subtitle should answer "is this configured?", not just name the page. */
+    private function mailDriverLabel(): string
+    {
+        return match (Mailer::driver()) {
+            'smtp'     => 'SMTP — ' . (Settings::get('mail.smtp_host') ?: 'no host set yet'),
+            'php_mail' => "Sending through this server's own mail.",
+            default    => 'Not sending yet — mail is written to the log only.',
+        };
+    }
+
+    private function backupLabel(): string
+    {
+        $count = count(Backup::all());
+        $last  = Settings::get('system.backup_last_run');
+
+        if ($count === 0) {
+            return 'No backups taken yet.';
+        }
+
+        return $count . ' stored'
+            . ($last !== null ? ', last ' . time_ago((string) $last) : '')
+            . '.';
     }
 
     // -----------------------------------------------------------------
@@ -126,12 +154,14 @@ final class SettingsController extends Controller
             'message_cap_per_week' => 'nullable|int|min:0|max:50',
             'lapse_days'           => 'nullable|int|min:30|max:730',
             'attribution_days'     => 'nullable|int|min:1|max:180',
+            'audit_retention_days' => 'nullable|int|min:0|max:3650',
         ], [
             'quiet_hours_start'    => 'Quiet hours start',
             'quiet_hours_end'      => 'Quiet hours end',
             'message_cap_per_week' => 'Marketing message cap',
             'lapse_days'           => 'Lapsed-guest window',
             'attribution_days'     => 'Attribution window',
+            'audit_retention_days' => 'Audit log retention',
         ]);
 
         if ($data instanceof Response) {
@@ -144,6 +174,8 @@ final class SettingsController extends Controller
             'system.message_cap_per_week' => (int) ($data['message_cap_per_week'] ?? 4),
             'system.lapse_days'           => (int) ($data['lapse_days'] ?? 120),
             'system.attribution_days'     => (int) ($data['attribution_days'] ?? 30),
+            'system.force_https'          => $request->bool('force_https'),
+            'system.audit_retention_days' => (int) ($data['audit_retention_days'] ?? 730),
         ]);
 
         Cache::flush();

@@ -9,6 +9,7 @@ use App\Core\Auth;
 use App\Core\DB;
 use App\Core\Encryption;
 use App\Core\Log;
+use App\Core\Mailer;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Session;
@@ -114,21 +115,40 @@ final class AuthController extends Controller
                 'created_at' => now_utc(),
             ]);
 
-            $link = rtrim((string) (\App\Core\Config::get('app_url') ?: ''), '/');
-            $link = ($link !== '' ? $link : '') . url('reset-password/' . $token);
+            $link = Mailer::absoluteUrl(url('reset-password/' . $token));
 
-            // Phase 1 has no mailer yet (it lands in Phase 4). Rather than
-            // pretend an email went out, the link is written to the log where
-            // an administrator with server access can retrieve it, and Safe
-            // Mode is reported so the operator knows why.
-            Log::notice('Password reset requested', [
-                'email'     => $email,
-                'link'      => $link,
-                'safe_mode' => Settings::safeMode(),
-                'note'      => 'Email delivery arrives in Phase 4; until then share this link directly.',
+            // Transactional: the person asked for this, so it is sent even
+            // without marketing consent. Safe Mode still redirects it to the
+            // owner, and the log driver still records it — so on a host with
+            // no mail provider configured the link remains recoverable from
+            // storage/logs/ rather than being lost.
+            $result = Mailer::sendTemplate('password-reset', $email, [
+                'name'       => $user['name'],
+                'reset_link' => $link,
+                'venue_name' => Settings::venueName(),
+                'expires_in' => 'one hour',
+            ], [
+                'kind'       => Mailer::TRANSACTIONAL,
+                'to_name'    => (string) $user['name'],
+                'contact_id' => null,
             ]);
 
-            Audit::event('password.reset_requested', ['email' => $email], 'user', (int) $user['id']);
+            if (!$result['sent']) {
+                // The operator needs to know the mail did not leave, and the
+                // user needs the link to exist somewhere retrievable.
+                Log::error('Password reset email could not be sent', [
+                    'email'  => $email,
+                    'reason' => $result['reason'],
+                    'link'   => $link,
+                    'note'   => 'Recover the link from this entry, or run tools/reset-password.php instead.',
+                ]);
+            }
+
+            Audit::event('password.reset_requested', [
+                'email'      => $email,
+                'mail_sent'  => $result['sent'],
+                'redirected' => $result['redirected'],
+            ], 'user', (int) $user['id']);
         }
 
         flash('info', $confirmation);

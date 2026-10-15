@@ -35,6 +35,7 @@ if ($isWeb) {
 
 require CC_ROOT . '/app/bootstrap.php';
 
+use App\Core\Backup;
 use App\Core\Config;
 use App\Core\DB;
 use App\Core\Log;
@@ -409,6 +410,39 @@ function cron_dailyMaintenance(): int
         $done++;
     } catch (Throwable $e) {
         Log::warning('Maintenance: audit purge failed', ['error' => $e->getMessage()]);
+    }
+
+    // --- Nightly database backup
+    //
+    // Last in the maintenance list, deliberately: a pruning sweep that failed
+    // should not stop the backup, and a backup that runs long should not have
+    // starved the cheap work that comes before it. The budget passed in is the
+    // remainder of this tick, so an oversized database aborts cleanly and
+    // leaves no half-written file — and says so on the backups page rather
+    // than failing silently.
+    try {
+        if (Settings::get('system.backup_nightly', true)) {
+            $result = Backup::create([
+                'deadline' => CC_START + 240.0,
+                'reason'   => 'nightly cron',
+            ]);
+
+            if ($result['ok']) {
+                Settings::set('system.backup_last_run', gmdate('Y-m-d H:i:s'));
+                Settings::forget('system.backup_last_error');
+                Backup::prune((int) Settings::get('system.backup_keep', 7));
+                cron_out('  Backup: ' . $result['filename'] . ' (' . $result['rows'] . ' rows).');
+            } else {
+                Settings::set('system.backup_last_error', (string) $result['error']);
+                Log::error('Nightly backup failed', ['error' => $result['error']]);
+                cron_out('  ! backup: ' . $result['error']);
+            }
+        }
+
+        $done++;
+    } catch (Throwable $e) {
+        Settings::set('system.backup_last_error', $e->getMessage());
+        Log::warning('Maintenance: backup failed', ['error' => $e->getMessage()]);
     }
 
     // --- Unlock accounts whose lockout has elapsed

@@ -663,6 +663,43 @@ function installer_finalise(array &$state): array
             'system.attribution_days'     => 30,
             'system.installed_at'         => gmdate('Y-m-d H:i:s'),
             'system.version'              => trim((string) @file_get_contents(CC_ROOT . '/VERSION')),
+            // Off by default: a fresh cPanel domain is plain HTTP until AutoSSL
+            // issues a certificate, and forcing HTTPS before then would lock
+            // the operator out of the application they just installed. They
+            // turn it on from Settings → System once the padlock appears.
+            'system.force_https'          => false,
+            'system.audit_retention_days' => 730,
+            // The URL this install was reached on while it was being set up.
+            //
+            // Recorded so a link in an email never has to be built from the
+            // request's Host header, which a crafted request controls: that is
+            // how a password-reset link gets pointed at somebody else's domain.
+            // The operator is using the real address right now, by definition,
+            // which makes this the one moment it can be captured for free.
+            'system.install_url'          => installer_currentBaseUrl(),
+        ]);
+
+        // --- Email defaults
+        //
+        // The LOG driver on purpose. Nothing leaves the server until somebody
+        // configures a provider on Settings → Email, which means a fresh
+        // install cannot email a guest even if Safe Mode were turned off on the
+        // same day. A password reset still works: the log driver writes the
+        // whole message, link included, to storage/logs/ where an
+        // administrator can retrieve it.
+        $mailDomain = preg_replace('/^www\./', '', explode(':', (string) ($_SERVER['HTTP_HOST'] ?? ''))[0]);
+
+        Settings::setMany([
+            'mail.driver'               => 'log',
+            'mail.from_email'           => $venue['email'] ?: ($mailDomain !== '' && $mailDomain !== null
+                ? 'noreply@' . $mailDomain
+                : 'noreply@localhost'),
+            'mail.from_name'            => $venue['name'],
+            'mail.reply_to'             => $venue['email'] ?: null,
+            'mail.smtp_port'            => 587,
+            'mail.smtp_encryption'      => 'tls',
+            'mail.smtp_verify_peer'     => true,
+            'mail.cost_per_email_cents' => 0,
         ]);
 
         // --- Owner account
@@ -701,6 +738,14 @@ function installer_finalise(array &$state): array
             ]);
         }
 
+        // --- Email templates (always)
+        //
+        // Not optional, because Mailer::sendTemplate() resolves by slug and
+        // refuses to send when the row is missing. Without this seed a
+        // password reset would fail with "no_template" on a brand-new install.
+        $seedTemplates = require CC_ROOT . '/install/seeds/templates.php';
+        $summary['seeds']['templates'] = $seedTemplates();
+
         // --- Optional seeds
         if (!empty($state['seeds']['venue'])) {
             $seedVenue = require CC_ROOT . '/install/seeds/venue.php';
@@ -710,6 +755,13 @@ function installer_finalise(array &$state): array
         if (!empty($state['seeds']['playbooks'])) {
             $seedPlaybooks = require CC_ROOT . '/install/seeds/playbooks.php';
             $summary['seeds']['playbooks'] = $seedPlaybooks();
+        }
+
+        // Last, because the example deals and bookings reference the pipelines
+        // and packages the venue seed creates.
+        if (!empty($state['seeds']['demo'])) {
+            $seedDemo = require CC_ROOT . '/install/seeds/demo.php';
+            $summary['seeds']['demo'] = $seedDemo();
         }
     });
 
@@ -810,6 +862,29 @@ PHP;
         @unlink($temp);
         throw new RuntimeException('Could not finalise config/config.php. Check the config folder permissions.');
     }
+}
+
+/**
+ * The base URL the operator is reaching this installer on.
+ *
+ * Captured because this is the only moment the application can learn its own
+ * address without asking the request — see system.install_url above. The
+ * installer lives one directory below the app root, so /install is stripped.
+ */
+function installer_currentBaseUrl(): string
+{
+    $host = explode('/', (string) ($_SERVER['HTTP_HOST'] ?? ''))[0];
+
+    if ($host === '' || str_contains($host, '@') || preg_match('/^[A-Za-z0-9.-]+(:\d{1,5})?$/', $host) !== 1) {
+        return '';
+    }
+
+    $secure = (($_SERVER['HTTPS'] ?? '') !== '' && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+        || (int) ($_SERVER['SERVER_PORT'] ?? 0) === 443;
+
+    $path = preg_replace('#/install(/[^/]*)?$#', '', (string) ($_SERVER['SCRIPT_NAME'] ?? '')) ?? '';
+
+    return ($secure ? 'https://' : 'http://') . $host . rtrim($path, '/');
 }
 
 /**

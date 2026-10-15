@@ -15,7 +15,7 @@ declare(strict_types=1);
 <section class="card">
     <div class="table-wrap">
         <table class="table">
-            <thead><tr><th>Name</th><th>Role</th><th>Last seen</th><th>State</th><th></th></tr></thead>
+            <thead><tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Last seen</th><th scope="col">State</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <tbody>
             <?php foreach ($users as $user): ?>
                 <?php $locked = !empty($user['locked_until']) && strtotime((string) $user['locked_until']) > time(); ?>

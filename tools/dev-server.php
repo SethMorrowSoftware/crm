@@ -20,7 +20,15 @@ declare(strict_types=1);
  */
 
 $root = dirname(__DIR__);
-$path = parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?: '/';
+
+// Cut the path out of REQUEST_URI by hand, for the same reason index.php does:
+// parse_url() reads a leading "//" as a protocol-relative authority and would
+// hand back a path with its first segment removed, so a request for
+// //config/config.php would slip past the deny rules below.
+$uri  = (string) ($_SERVER['REQUEST_URI'] ?? '/');
+$path = substr($uri, 0, strcspn($uri, '?#'));
+$path = (string) preg_replace('#/{2,}#', '/', $path);
+$path = $path === '' ? '/' : $path;
 
 // Mirror the .htaccess deny rules. The front controller checks these too, but
 // matching here keeps the dev server honest about what production serves.

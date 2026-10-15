@@ -21,16 +21,65 @@ final class Migration
     /**
      * MySQL error codes meaning "the thing you asked me to create is already
      * there". Tolerated, because that is the desired end state.
+     *
+     * Every code here must mean that and ONLY that. 1005 ("can't create
+     * table") used to be in this list on the theory that it is how older MySQL
+     * reports a duplicate foreign-key name — but it is also how MySQL reports
+     * a foreign key it refuses to build at all, such as one whose column type
+     * does not match the column it references. MEASURED on MariaDB 10.11: a
+     * release whose new table declared `contact_id INT UNSIGNED` against
+     * `contacts.id BIGINT UNSIGNED` failed with 1005 (errno 150), the table was
+     * NOT created, the file was recorded as applied, and Upgrade::run() then
+     * advanced system.version — so the next request saw nothing pending and the
+     * venue ran on a schema missing a table, with the marker claiming the
+     * upgrade had succeeded. That is the one failure the version marker exists
+     * to prevent.
+     *
+     * 1022 went for the same reason: it is "duplicate key" in the sense of a
+     * duplicate VALUE, which is a data conflict, not an object that already
+     * exists. It is back, but ONLY for a statement that adds a constraint —
+     * see meansAlreadyApplied() — because dropping it outright broke retries
+     * on MySQL 5.7.
+     *
+     * WHAT EACH ENGINE ACTUALLY REPORTS for a duplicate foreign-key constraint
+     * name, MEASURED rather than assumed — this comment previously claimed
+     * "1826 on MySQL 5.7+ and MariaDB" and was wrong about both:
+     *
+     *   MySQL 5.7.44     ALTER … ADD CONSTRAINT  →  1022 "Can't write;
+     *                    duplicate key in table '#sql-…'"   (CI, 2026-10-15)
+     *   MariaDB 10.11    ALTER … ADD CONSTRAINT  →  1005 + errno 121
+     *                    (and the same for CREATE TABLE)    (measured locally)
+     *   MySQL 8.0        tolerated — it passes the retry test, but WHICH of the
+     *                    codes below it uses was not measured. Do not write
+     *                    "1826" here as though it were established.
+     *
+     * The malformed-FK case differs again: 1005 + errno 150 on MariaDB, and
+     * 1215 "Cannot add foreign key constraint" on MySQL 5.7. Neither is
+     * tolerated, which is the point.
      */
     private const ALREADY_EXISTS = [
         1050, // table exists
         1060, // duplicate column
         1061, // duplicate key name
-        1022, // duplicate key
         1826, // duplicate foreign key constraint name
-        1005, // can't create table (usually a duplicate FK name on older MySQL)
         1831, // duplicate index
     ];
+
+    /**
+     * 1005 is ambiguous, so it is decided on the driver's own errno:
+     *   121 — duplicate constraint name. Already there; tolerate.
+     *   150 — the foreign key is malformed. A real error; must throw.
+     */
+    private const DUPLICATE_CONSTRAINT_ERRNO = 121;
+
+    /**
+     * MySQL 5.7's answer to a duplicate constraint name, and ONLY trusted when
+     * the statement is adding one. On its own it means a duplicate VALUE, so a
+     * data-migration INSERT hitting a real conflict reports the same number —
+     * and swallowing that would record a half-applied file as complete, which
+     * is the exact failure the narrowing in this release set out to stop.
+     */
+    private const DUPLICATE_ON_ADD = 1022;
 
     private string $schemaPath;
 
@@ -124,7 +173,7 @@ final class Migration
             } catch (PDOException $e) {
                 $code = (int) ($e->errorInfo[1] ?? 0);
 
-                if (in_array($code, self::ALREADY_EXISTS, true)) {
+                if ($this->meansAlreadyApplied($code, $e->getMessage(), $statement)) {
                     // Expected when re-running a partially applied file.
                     $this->messages[] = sprintf('%s: statement %d already applied.', $name, $index + 1);
                     continue;
@@ -153,6 +202,44 @@ final class Migration
             'batch'    => $batch,
             'ran_at'   => gmdate('Y-m-d H:i:s'),
         ]);
+    }
+
+    /**
+     * Does this failure mean the object already exists, and nothing else?
+     *
+     * Public so the behaviour can be tested directly: deciding it wrongly is
+     * how a half-applied release gets recorded as complete.
+     */
+    public static function meansAlreadyApplied(int $code, string $message, string $sql = ''): bool
+    {
+        if (in_array($code, self::ALREADY_EXISTS, true)) {
+            return true;
+        }
+
+        // 1022 is "already there" ONLY when the statement adds a constraint.
+        // Without the statement there is no way to tell it from a data
+        // conflict, so no $sql means no tolerance.
+        if ($code === self::DUPLICATE_ON_ADD && self::addsConstraint($sql)) {
+            return true;
+        }
+
+        // 1005 is only "already there" in its duplicate-constraint-name form.
+        return $code === 1005
+            && preg_match('/errno:?\s*(\d+)/i', $message, $m) === 1
+            && (int) $m[1] === self::DUPLICATE_CONSTRAINT_ERRNO;
+    }
+
+    /**
+     * Does this statement ADD a named constraint?
+     *
+     * Deliberately narrow: only ADD CONSTRAINT and ADD FOREIGN KEY, which are
+     * the nine non-idempotent statements in the shipped schema. An added
+     * UNIQUE/INDEX/KEY reports 1061, which is tolerated on its own merits, and
+     * anything that writes DATA must never reach this.
+     */
+    private static function addsConstraint(string $sql): bool
+    {
+        return preg_match('/\bADD\s+(?:CONSTRAINT\b|FOREIGN\s+KEY\b)/i', $sql) === 1;
     }
 
     /**

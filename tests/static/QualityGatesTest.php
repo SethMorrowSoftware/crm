@@ -172,10 +172,23 @@ Harness::test('the route table parses and is populated', function (): void {
 });
 
 Harness::test('every mutating route is CSRF-protected', function (): void {
+    // Exemptions are listed here with their reason, so a NEW un-protected
+    // route still fails this test. Adding to this list should feel costly.
+    $exempt = [
+        // RFC 8058 one-click unsubscribe: the recipient's mail provider
+        // submits this on their behalf, so no session token can exist. The
+        // signed token in the path is the authorisation.
+        'POST /u/{token:[A-Za-z0-9_-]+}',
+    ];
+
     $offenders = [];
 
     foreach (parsed_routes() as $route) {
         if (!in_array($route['method'], ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+            continue;
+        }
+
+        if (in_array($route['method'] . ' ' . $route['path'], $exempt, true)) {
             continue;
         }
 
@@ -540,7 +553,12 @@ Harness::test('every class file declares strict types', function (): void {
 });
 
 Harness::test('the protected directories carry a deny-all .htaccess', function (): void {
-    foreach (['app', 'config', 'storage'] as $directory) {
+    // storage/backups gets its own, shipped rather than created on first use:
+    // a dump of every guest's name, email and phone is the single most
+    // sensitive file this application writes, and the window between "the
+    // directory exists" and "the first backup created the guard" should not
+    // exist at all.
+    foreach (['app', 'config', 'storage', 'storage/backups'] as $directory) {
         $file = CC_ROOT . '/' . $directory . '/.htaccess';
 
         Assert::true(is_file($file), $directory . '/.htaccess must exist');
@@ -569,4 +587,69 @@ Harness::test('the sample config ships no real credentials', function (): void {
 
     Assert::matches("/'app_key'\s*=>\s*''/", $sample, 'app_key must be blank in the sample');
     Assert::matches("/'pass'\s*=>\s*''/", $sample, 'the DB password must be blank in the sample');
+});
+
+Harness::test('no unit test touches the database', function (): void {
+    // tests/unit is the suite CI's lint job runs with no MySQL service at all,
+    // which is what makes it the fast gate the other two jobs depend on. A
+    // single Settings::set() in there does not fail the test that wrote it —
+    // it ERRORS, which reads as a broken build rather than a misplaced test,
+    // and it takes the whole pipeline down with it because the matrix and the
+    // installer walk-through both need: lint. (That is not hypothetical: four
+    // link-host tests were written here and did exactly that.)
+    //
+    // The deny-list names the application services that open a connection on
+    // first use. Pure helpers on the same classes — Auth::hash(),
+    // Mailer::merge() — are fine and deliberately not listed.
+    // The FULLY-QUALIFIED spelling has to match too, and the first version of
+    // this gate did not catch it: its lookbehind was [A-Za-z0-9_\\], so a
+    // backslash SUPPRESSED the match and `App\Core\DB::value()` sailed through.
+    // That is not an exotic spelling — tests/unit/RouterTest.php already writes
+    // `App\Core\Request::capture()`, so it is the established style in this very
+    // directory. The gate reported 27/27 green on a file whose every line was a
+    // database call, while CI's lint job on the same tree exited 1. A gate that
+    // gives false assurance is worse than no gate, because the next person
+    // writes the call fully qualified, sees green, and pushes.
+    //
+    // A bare `use` of one of these in a unit file is flagged on its own line
+    // too, which closes the aliasing hole (`use App\Core\DB as Database;`)
+    // without trying to track aliases through the file.
+    $forbidden = ['DB', 'Settings', 'Cache', 'Audit', 'Migration', 'Backup', 'Upgrade', 'Model'];
+    $offenders = [];
+
+    foreach (glob(CC_ROOT . '/tests/unit/*.php') ?: [] as $file) {
+        $lines = preg_split('/\R/', (string) file_get_contents($file)) ?: [];
+
+        foreach ($lines as $number => $line) {
+            if (preg_match('/^\s*(\*|\/\/)/', $line) === 1) {
+                continue; // a comment may name one
+            }
+
+            foreach ($forbidden as $class) {
+                // Optional leading backslash, optional App\Core\ prefix. The
+                // lookbehind still stops MyDB:: and SubModel:: matching, but no
+                // longer stops a backslash.
+                $call = '/(?<![A-Za-z0-9_])\\\\?(?:App\\\\Core\\\\)?' . $class . '::/';
+
+                if (preg_match($call, $line) === 1) {
+                    $offenders[] = relative_path($file) . ':' . ($number + 1)
+                        . ' uses ' . $class . '::';
+                }
+
+                $import = '/^\s*use\s+\\\\?App\\\\Core\\\\' . $class . '\s*(;|\s+as\s)/';
+
+                if (preg_match($import, $line) === 1) {
+                    $offenders[] = relative_path($file) . ':' . ($number + 1)
+                        . ' imports ' . $class;
+                }
+            }
+        }
+    }
+
+    Assert::same(
+        [],
+        $offenders,
+        "a unit test must run with no database — move these to tests/integration:\n   "
+            . implode("\n   ", $offenders)
+    );
 });

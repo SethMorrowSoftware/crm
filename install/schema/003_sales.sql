@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}pipeline_stages` (
     `updated_at`  DATETIME    DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_pipeline_stages_pipeline` (`pipeline_id`, `sort_order`),
-    CONSTRAINT `fk_pipeline_stages_pipeline`
+    CONSTRAINT `{prefix}fk_pipeline_stages_pipeline`
         FOREIGN KEY (`pipeline_id`) REFERENCES `{prefix}pipelines` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -89,17 +89,17 @@ CREATE TABLE IF NOT EXISTS `{prefix}deals` (
     KEY `ix_deals_company` (`company_id`),
     -- Drives the stale-deal report and the idle trigger.
     KEY `ix_deals_idle` (`status`, `last_activity_at`),
-    CONSTRAINT `fk_deals_pipeline`
+    CONSTRAINT `{prefix}fk_deals_pipeline`
         FOREIGN KEY (`pipeline_id`) REFERENCES `{prefix}pipelines` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_deals_stage`
+    CONSTRAINT `{prefix}fk_deals_stage`
         FOREIGN KEY (`stage_id`) REFERENCES `{prefix}pipeline_stages` (`id`),
-    CONSTRAINT `fk_deals_contact`
+    CONSTRAINT `{prefix}fk_deals_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_deals_company`
+    CONSTRAINT `{prefix}fk_deals_company`
         FOREIGN KEY (`company_id`) REFERENCES `{prefix}companies` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_deals_owner`
+    CONSTRAINT `{prefix}fk_deals_owner`
         FOREIGN KEY (`owner_id`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_deals_lost_reason`
+    CONSTRAINT `{prefix}fk_deals_lost_reason`
         FOREIGN KEY (`lost_reason_id`) REFERENCES `{prefix}lost_reasons` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}deal_stage_history` (
     PRIMARY KEY (`id`),
     KEY `ix_deal_stage_history_deal` (`deal_id`, `created_at`),
     KEY `ix_deal_stage_history_stage` (`to_stage_id`),
-    CONSTRAINT `fk_deal_stage_history_deal`
+    CONSTRAINT `{prefix}fk_deal_stage_history_deal`
         FOREIGN KEY (`deal_id`) REFERENCES `{prefix}deals` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}quotes` (
     UNIQUE KEY `uq_quotes_token` (`public_token`),
     KEY `ix_quotes_deal` (`deal_id`),
     KEY `ix_quotes_status` (`status`),
-    CONSTRAINT `fk_quotes_deal`
+    CONSTRAINT `{prefix}fk_quotes_deal`
         FOREIGN KEY (`deal_id`) REFERENCES `{prefix}deals` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -164,6 +164,6 @@ CREATE TABLE IF NOT EXISTS `{prefix}quote_lines` (
     `sort_order`  SMALLINT     NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
     KEY `ix_quote_lines_quote` (`quote_id`, `sort_order`),
-    CONSTRAINT `fk_quote_lines_quote`
+    CONSTRAINT `{prefix}fk_quote_lines_quote`
         FOREIGN KEY (`quote_id`) REFERENCES `{prefix}quotes` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

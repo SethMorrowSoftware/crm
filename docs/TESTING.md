@@ -19,7 +19,7 @@ php tests/run.php --filter=validator,security
 php tests/run.php --stop
 
 # Refuse to report success if a suite silently skipped (what CI uses)
-php tests/run.php --require-db --require-http --min-tests=200
+php tests/run.php --require-db --require-http --min-tests=390
 
 # Prove the product's actual promise: that it installs on a bare host
 php tests/install/walk-installer.php
@@ -62,10 +62,25 @@ CI passes all three. If you add a suite and the count climbs, raise the
 
 Pure functions and classes. Fast enough to run on every save.
 
+"No database" is a contract, not a description: the CI lint job runs this layer
+with no MySQL service, and the other two jobs `needs: lint`. One stray
+`Settings::set()` in here does not fail its own test — it *errors*, which reads
+as a broken build rather than a misplaced test, and it takes the whole pipeline
+down. A static gate (`no unit test touches the database`) now enforces it,
+because that is exactly how four link-host tests were written into this layer
+and had to be moved back out.
+
 - **helpers** — escaping, money, phone normalisation, dates
 - **validator** — every rule, and the type-vs-length semantics of min/max
-- **router** — pattern compilation and matching, including constrained placeholders
+- **router** — pattern compilation and matching, constrained placeholders, and
+  request-path resolution: a subdirectory install, a filename inside a route
+  parameter, a `//`-prefixed path, traversal, an absolute-form request target
 - **security** — encryption round-trips, token entropy, password policy, the ACL catalogue, CSV formula injection
+- **mailer** — merge-tag substitution and its escaping, the HTML-to-text
+  fallback, the unsubscribe token (round trip, tampering, forgery, and that the
+  HMAC actually depends on the install's key), and that a configured `app_url`
+  beats the request's Host header. The rest of the link-host precedence falls
+  back through stored settings, so it lives in `integration/mailer`.
 
 ### `tests/static` — the quality gates, as executable rules
 
@@ -86,7 +101,51 @@ so they are tested:
 - Money columns are integers, never floats
 - Every seeded automation trigger has an emitter
 - No debugging calls, no BOMs, `strict_types` everywhere
+- No test in `tests/unit` touches the database (see that layer, above)
 - `config/config.php` is gitignored and the sample ships no credentials
+
+Two of the static suites measure rather than inspect:
+
+**`static/contrast`** computes WCAG contrast ratios from the stylesheet's own
+token values, for both themes, across every foreground/background pairing the
+application actually renders — 4.5:1 for text, 3:1 for the visible boundary of
+a control. The stylesheet's header claims it targets AA; this is what makes the
+claim checkable. It found three real failures the first time it ran.
+
+**`static/accessibility`** scans every view and installer step: every form
+control has a programmatic name, every `<th>` declares a scope, every `<img>`
+has alt text, no inline event handlers, no positive tabindex, no destructive
+action behind a GET link, and font sizes are relative so a browser's own text
+setting still works. The name detector is itself tested against fixtures —
+a static gate that cannot fail reads as coverage without being any.
+
+### Don't reset state the server owns — avoid needing to
+
+Two layers run in two processes: the tests here, and the front controller inside
+the test server. A test cannot reliably reset state the *server* owns. The
+rate limiter proved it twice.
+
+Several routes are rate limited per IP, and the password-reset suite makes ten
+POSTs against a 5-per-15-minute limit. It first cleared the counter with
+`Cache::flush()`, then by unlinking `storage/cache/*.cache`. Both passed locally
+and both left CI answering **429 from the sixth request on**, failing two tests
+on all five configurations: the counter lives in whichever cache backend the
+server process resolved, and neither call is guaranteed to reach it.
+
+The working answer removes the dependency rather than strengthening it: **each
+`TestBrowser` presents its own client address** via `X-Forwarded-For`, which the
+throwaway test config trusts (`trust_proxy` is true there and nowhere else).
+A browser keeps one address for its life, so a suite that wants to avoid the
+limiter takes a fresh browser, and a test that wants to *trip* it reuses one.
+
+Two consequences worth knowing:
+
+- `http/smoke` now covers the limiter properly — that it refuses, that it sends
+  `Retry-After`, and that it is per-address rather than global. Nothing covered
+  it before, while two comments in the suite claimed something did.
+- The server is still started with `apc.enable_cli=0` and an explicit
+  `storage_path`, so its cache backend cannot differ between a developer's
+  machine and CI. That is about reproducibility, not about the limiter.
 
 ### `tests/integration` — against a real database
 
@@ -101,6 +160,36 @@ installer uses, rather than a fixture that could drift from it.
 - Authentication: lockout, enumeration resistance, inactive and deleted accounts, hash upgrades
 - ACL: owner holds everything, front desk cannot see revenue, a party host is scoped to their own deals, a role-less user holds nothing, escalation is refused
 - Transactions roll back, savepoints nest, bound parameters cannot inject
+
+Four more integration suites cover the operator-facing machinery:
+
+- **mailer** — the send path against real rows: Safe Mode redirects to the
+  owner and refuses rather than falling through when there is no owner to
+  redirect to; a suppressed address is refused even for transactional mail;
+  marketing without consent is refused while the same guest's booking
+  confirmation is not; `do_not_contact` overrides everything; bulk mail carries
+  a working unsubscribe link and the postal address; a CRLF in a subject cannot
+  inject a header; and the message row records who the mail was *for*, not
+  where Safe Mode sent it
+- **backup** — that a dump is importable SQL and not merely non-empty: an
+  apostrophe and an injection payload in guest data both round-trip losslessly
+  through a replayed INSERT, NULL stays NULL, utf8mb4 survives, a run that
+  exceeds its deadline leaves no file at all, and `pathFor` refuses every
+  traversal shape
+- **seeds** — that no demo guest can ever be contacted (reserved domain,
+  reserved phone range), that every demo row is tagged so it can be deleted,
+  that seeded consent says in writing it is not real evidence, and that
+  deleting the demo contacts leaves no orphans
+- **upgrade** — a pending schema file is applied and recorded on the first
+  request after an upload; a failing file leaves the version marker alone so
+  the next request retries; and re-running a partially applied file completes
+  it
+- **tools** — the two CLI scripts, run as real subprocesses: the password
+  reset lists accounts without printing hashes, generates a password that
+  actually works, ends every live session for the account, applies the same
+  password policy as the web form, and is audited; the backup tool writes a
+  real dump, prunes, exports CSV to stdout with the count on stderr, and
+  refuses an unrecognised flag rather than ignoring it
 
 ### `tests/http` — a real browser against a real server
 
@@ -117,6 +206,22 @@ and no unit test would have caught any of them.
 - The only owner cannot be demoted, deactivated or deleted; the owner role cannot be edited
 - Web cron refuses a bad token and does not render a page with a good one
 - **No page emits a notice, warning or deprecation** at `E_ALL`
+
+And two further HTTP suites:
+
+- **public** — one-click unsubscribe from a client with no cookie jar at all,
+  which is how a mail provider arrives: the RFC 8058 POST works without a CSRF
+  token, a second click is harmless, an address with no contact record can
+  still unsubscribe, a tampered token unsubscribes nobody, the response is
+  identical for an address on file and one that is not, and the page is
+  `noindex`
+- **admin** — the operator pages: the stored SMTP password is never rendered
+  back into the form and a blank field keeps it; the front desk cannot reach
+  email settings, backups or export; a backup taken over HTTP downloads as a
+  real gzip stream and the download is audited with the actor; every traversal
+  shape on the download route fails to serve a file; lowering the retention
+  limit prunes immediately; and force-HTTPS redirects a GET, refuses a POST
+  rather than dropping its body, and can be turned off again
 
 ### `tests/install` — the product promise
 
@@ -137,6 +242,14 @@ works — including signing in as the account the installer created.
 | **lint** | PHP and JS syntax, plus the unit and static suites. Fails in seconds. |
 | **test** | The full suite on PHP 8.1 / 8.2 / 8.3 against MySQL 8.0, plus MariaDB 10.11 and MySQL 5.7 — the two things a cPanel host actually offers. |
 | **install** | The installer walk-through, using an unprivileged database user created the way cPanel would. |
+
+### One thing the runner does that is easy to miss
+
+It flushes the file cache before the HTTP suite. The rate-limit counters live
+there, and unlike the database and the throwaway config they survive between
+runs — so two runs inside five minutes used to start failing on 429s that
+looked exactly like broken authentication. The throttle itself is still
+exercised, by the test that deliberately trips it.
 
 The matrix uses `fail-fast: false` so one bad combination does not hide the
 others, and installs **only the extensions the installer hard-requires**, so CI

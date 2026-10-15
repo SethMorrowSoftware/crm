@@ -26,121 +26,7 @@ if ($baseUrl === '') {
     return;
 }
 
-/**
- * A tiny HTTP client with a cookie jar per "browser".
- */
-final class TestBrowser
-{
-    private string $jar;
-
-    public function __construct(private string $baseUrl, string $name)
-    {
-        $this->jar = sys_get_temp_dir() . '/cc-test-' . $name . '-' . getmypid() . '.cookies';
-        @unlink($this->jar);
-    }
-
-    public function __destruct()
-    {
-        @unlink($this->jar);
-    }
-
-    /**
-     * @param array<string,string>|null $post
-     * @return array{status:int,body:string,headers:string,location:string}
-     */
-    public function request(string $path, ?array $post = null, bool $follow = false): array
-    {
-        $handle = curl_init($this->baseUrl . $path);
-
-        if ($handle === false) {
-            throw new RuntimeException('Could not initialise cURL.');
-        }
-
-        $options = [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HEADER         => true,
-            CURLOPT_COOKIEJAR      => $this->jar,
-            CURLOPT_COOKIEFILE     => $this->jar,
-            CURLOPT_FOLLOWLOCATION => $follow,
-            CURLOPT_TIMEOUT        => 20,
-            CURLOPT_MAXREDIRS      => 5,
-        ];
-
-        if ($post !== null) {
-            $options[CURLOPT_POST] = true;
-            $options[CURLOPT_POSTFIELDS] = http_build_query($post);
-        }
-
-        curl_setopt_array($handle, $options);
-
-        $raw = curl_exec($handle);
-
-        if ($raw === false) {
-            $error = curl_error($handle);
-            curl_close($handle);
-
-            throw new RuntimeException('Request to ' . $path . ' failed: ' . $error);
-        }
-
-        $status     = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-        $headerSize = (int) curl_getinfo($handle, CURLINFO_HEADER_SIZE);
-        curl_close($handle);
-
-        $headers = substr((string) $raw, 0, $headerSize);
-        $body    = substr((string) $raw, $headerSize);
-
-        $location = '';
-
-        if (preg_match('/^Location:\s*(.+)$/mi', $headers, $match) === 1) {
-            $location = trim($match[1]);
-        }
-
-        return ['status' => $status, 'body' => $body, 'headers' => $headers, 'location' => $location];
-    }
-
-    public function get(string $path, bool $follow = false): array
-    {
-        return $this->request($path, null, $follow);
-    }
-
-    /** @param array<string,string> $data */
-    public function post(string $path, array $data, bool $follow = false): array
-    {
-        return $this->request($path, $data, $follow);
-    }
-
-    /** Fetch a page and pull its CSRF token out of the form. */
-    public function csrfToken(string $path): string
-    {
-        $response = $this->get($path);
-
-        if (preg_match('/name="_token" value="([a-f0-9]{64})"/', $response['body'], $match) === 1) {
-            return $match[1];
-        }
-
-        if (preg_match('/name="csrf-token" content="([a-f0-9]{64})"/', $response['body'], $match) === 1) {
-            return $match[1];
-        }
-
-        throw new RuntimeException('No CSRF token found on ' . $path);
-    }
-
-    /** @param array<string,string> $data */
-    public function postWithToken(string $tokenPath, string $path, array $data, bool $follow = false): array
-    {
-        $data['_token'] = $this->csrfToken($tokenPath);
-
-        return $this->post($path, $data, $follow);
-    }
-
-    public function login(string $email, string $password): array
-    {
-        return $this->postWithToken('/login', '/login', [
-            'email'    => $email,
-            'password' => $password,
-        ]);
-    }
-}
+require_once CC_ROOT . '/tests/TestBrowser.php';
 
 $owner = new TestBrowser($baseUrl, 'owner');
 $desk  = new TestBrowser($baseUrl, 'desk');
@@ -686,8 +572,20 @@ Harness::test('web cron runs with the right token and does not leak a page', fun
 
     // The bug this catches: bootstrap used to fall through to the router,
     // dispatch /cron.php as a route, 404, and send that HTML first.
+    //
+    // The 404 is looked for as a PAGE, never as the bare digits. cron's output
+    // embeds the nightly backup's filename, which carries a second-resolution
+    // UTC timestamp and a row count — so `notContains('404')` failed whenever
+    // the clock landed on a second whose HHMMSS contained those digits
+    // (measured: 502 of 86,400 seconds, ~0.6% per job and ~3% per push across
+    // five matrix jobs), for the whole of 2026-04-04, and on any day the row
+    // count passed through 404x. It was reproduced on a real run:
+    // "Backup: castle-crm-20261015-204041.sql.gz (751 rows)". A red build that
+    // reads as a routing regression and clears on a re-run is worse than no
+    // assertion, because it teaches whoever sees it to re-run CI.
     Assert::notContains('<!doctype html>', strtolower($response['body']));
-    Assert::notContains('404', $response['body']);
+    Assert::notContains('not found', strtolower($response['body']));
+    Assert::notContains('<html', strtolower($response['body']));
 });
 
 // -------------------------------------------------------------- rendering
@@ -730,4 +628,67 @@ Harness::test('no page leaks a filesystem path or credential', function () use (
         Assert::notContains('castle-test-pw', $body, $path);
         Assert::notContains('app_key', $body, $path);
     }
+});
+
+// ------------------------------------------------------------- rate limiting
+
+Harness::test('a route behind the throttle answers 429 once the limit is passed', function (): void {
+    // Nothing covered the rate limiter until this test, despite two comments in
+    // the suite claiming otherwise. It is a security control — the only thing
+    // standing between a scripted client and unlimited password-reset mail or
+    // login guesses — and the suites had quietly been arranging never to meet
+    // it, by clearing its counters.
+    //
+    // ONE browser, so every request carries the same client address: the limit
+    // is per IP, and the other suites rely on that by taking a fresh browser
+    // each time. A unique address of its own keeps this test independent of
+    // whatever has already run.
+    $browser = new TestBrowser(getenv('CC_TEST_BASE_URL') ?: '', 'throttle', '198.51.100.251');
+
+    // /forgot-password is throttle:5,15 and answers an unknown address exactly
+    // as it answers a known one, so this needs no fixture.
+    $statuses = [];
+
+    for ($attempt = 1; $attempt <= 7; $attempt++) {
+        $statuses[] = $browser->postWithToken('/forgot-password', '/forgot-password', [
+            'email' => 'throttle-probe@example.test',
+        ])['status'];
+    }
+
+    $limited = array_filter($statuses, static fn (int $status): bool => $status === 429);
+
+    Assert::notEmpty(
+        $limited,
+        'seven POSTs against a 5-per-15-minute limit must be refused at some point; got '
+            . implode(', ', $statuses)
+    );
+
+    // The first few must NOT be refused, or the limiter is simply rejecting
+    // everything and the test above would pass on a broken route.
+    Assert::notSame(429, $statuses[0], 'the first request must be allowed: ' . implode(', ', $statuses));
+
+    $response = $browser->postWithToken('/forgot-password', '/forgot-password', [
+        'email' => 'throttle-probe@example.test',
+    ]);
+
+    Assert::same(429, $response['status'], 'still limited');
+    Assert::matches('/Retry-After:\s*\d+/i', $response['headers'], 'a 429 must say when to come back');
+});
+
+Harness::test('the throttle is per client address, not global', function (): void {
+    // The property every other HTTP suite depends on. If this ever stops being
+    // true, those suites start failing in the middle with 429s that look like
+    // the feature under test is broken — which is exactly what happened on CI
+    // before each browser was given its own address.
+    $fresh = new TestBrowser(getenv('CC_TEST_BASE_URL') ?: '', 'throttle-other', '198.51.100.252');
+
+    $response = $fresh->postWithToken('/forgot-password', '/forgot-password', [
+        'email' => 'throttle-probe@example.test',
+    ]);
+
+    Assert::notSame(
+        429,
+        $response['status'],
+        'a different address must not inherit the previous browser\'s counter'
+    );
 });

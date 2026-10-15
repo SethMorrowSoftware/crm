@@ -22,6 +22,7 @@ use App\Core\Response;
 use App\Core\Router;
 use App\Core\Session;
 use App\Core\Settings;
+use App\Core\Upgrade;
 use App\Core\View;
 
 if (!defined('CC_ROOT')) {
@@ -58,6 +59,25 @@ spl_autoload_register(static function (string $class): void {
 });
 
 require CC_ROOT . '/app/helpers.php';
+
+/**
+ * Bring the database up to date when the code has been replaced.
+ *
+ * An upgrade on shared hosting is an unzip over the top of the old files;
+ * nothing runs afterwards. Comparing the shipped VERSION against the marker
+ * the last upgrade stored costs one string comparison per request, and skips
+ * everything else until there is actually a new release in place.
+ */
+function cc_apply_pending_upgrade(): void
+{
+    $shipped = trim((string) @file_get_contents(CC_ROOT . '/VERSION'));
+
+    if ($shipped === '' || $shipped === (string) Settings::get('system.version', '')) {
+        return;
+    }
+
+    Upgrade::run($shipped);
+}
 
 // -----------------------------------------------------------------------
 // Configuration
@@ -186,6 +206,7 @@ if (PHP_SAPI === 'cli' || defined('CC_WEB_CRON')) {
     if ($isInstalled) {
         DB::connect();
         Settings::load();
+        cc_apply_pending_upgrade();
     }
 
     return;
@@ -218,6 +239,40 @@ if (!$isInstalled) {
 
 DB::connect();
 Settings::load();
+cc_apply_pending_upgrade();
+
+// Force HTTPS, when the operator has turned it on.
+//
+// Deliberately off by default and settings-driven rather than hard-coded: a
+// fresh cPanel install is reachable over plain HTTP until AutoSSL finishes
+// issuing, and a redirect loop on first visit would lock the operator out of
+// their own installer. Once they have a certificate they turn this on, and
+// from then on a password or a guest's details never travel in the clear.
+if (!$request->isSecure() && Settings::get('system.force_https', false)) {
+    // Only ever redirect a safe, idempotent request. Bouncing a POST would
+    // silently drop the form body and look like data loss.
+    if ($request->isMethod('GET') || $request->isMethod('HEAD')) {
+        Response::redirect(
+            'https://' . $request->host() . ($_SERVER['REQUEST_URI'] ?? '/'),
+            301
+        )->send();
+
+        return;
+    }
+
+    Log::warning('Insecure request refused while force_https is on', [
+        'method' => $request->method(),
+        'path'   => $request->path(),
+        'ip'     => $request->ip(),
+    ]);
+
+    Response::html(View::renderError(400, 'This connection is not secure', [
+        'message' => 'Castle CRM is set to require HTTPS. Reload the page over https:// and try again.',
+    ]), 400)->send();
+
+    return;
+}
+
 Session::start($request);
 Audit::init($request);
 

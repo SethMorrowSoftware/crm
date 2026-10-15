@@ -30,11 +30,11 @@ CREATE TABLE IF NOT EXISTS `{prefix}forms` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_forms_slug` (`slug`),
     KEY `ix_forms_active` (`is_active`),
-    CONSTRAINT `fk_forms_pipeline`
+    CONSTRAINT `{prefix}fk_forms_pipeline`
         FOREIGN KEY (`pipeline_id`) REFERENCES `{prefix}pipelines` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_forms_stage`
+    CONSTRAINT `{prefix}fk_forms_stage`
         FOREIGN KEY (`stage_id`) REFERENCES `{prefix}pipeline_stages` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_forms_template`
+    CONSTRAINT `{prefix}fk_forms_template`
         FOREIGN KEY (`autoresponder_template_id`) REFERENCES `{prefix}templates` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}form_fields` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_form_fields` (`form_id`, `key`),
     KEY `ix_form_fields_form` (`form_id`, `sort_order`),
-    CONSTRAINT `fk_form_fields_form`
+    CONSTRAINT `{prefix}fk_form_fields_form`
         FOREIGN KEY (`form_id`) REFERENCES `{prefix}forms` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -80,11 +80,11 @@ CREATE TABLE IF NOT EXISTS `{prefix}form_submissions` (
     KEY `ix_form_submissions_form` (`form_id`, `created_at`),
     KEY `ix_form_submissions_contact` (`contact_id`),
     KEY `ix_form_submissions_spam` (`is_spam`, `created_at`),
-    CONSTRAINT `fk_form_submissions_form`
+    CONSTRAINT `{prefix}fk_form_submissions_form`
         FOREIGN KEY (`form_id`) REFERENCES `{prefix}forms` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_form_submissions_contact`
+    CONSTRAINT `{prefix}fk_form_submissions_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_form_submissions_deal`
+    CONSTRAINT `{prefix}fk_form_submissions_deal`
         FOREIGN KEY (`deal_id`) REFERENCES `{prefix}deals` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -127,11 +127,11 @@ CREATE TABLE IF NOT EXISTS `{prefix}survey_responses` (
     KEY `ix_survey_responses_contact` (`contact_id`),
     KEY `ix_survey_responses_booking` (`booking_id`),
     KEY `ix_survey_responses_unresolved` (`sentiment`, `resolved_at`),
-    CONSTRAINT `fk_survey_responses_survey`
+    CONSTRAINT `{prefix}fk_survey_responses_survey`
         FOREIGN KEY (`survey_id`) REFERENCES `{prefix}surveys` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_survey_responses_contact`
+    CONSTRAINT `{prefix}fk_survey_responses_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_survey_responses_booking`
+    CONSTRAINT `{prefix}fk_survey_responses_booking`
         FOREIGN KEY (`booking_id`) REFERENCES `{prefix}bookings` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -243,7 +243,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}referrals` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_referrals_code` (`code`),
     KEY `ix_referrals_referrer` (`referrer_contact_id`, `status`),
-    CONSTRAINT `fk_referrals_referrer`
+    CONSTRAINT `{prefix}fk_referrals_referrer`
         FOREIGN KEY (`referrer_contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -267,7 +267,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}coupons` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_coupons_code` (`code`),
     KEY `ix_coupons_active` (`is_active`, `starts_at`, `expires_at`),
-    CONSTRAINT `fk_coupons_campaign`
+    CONSTRAINT `{prefix}fk_coupons_campaign`
         FOREIGN KEY (`campaign_id`) REFERENCES `{prefix}campaigns` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -285,9 +285,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}coupon_redemptions` (
     PRIMARY KEY (`id`),
     KEY `ix_coupon_redemptions_coupon` (`coupon_id`, `redeemed_at`),
     KEY `ix_coupon_redemptions_contact` (`contact_id`),
-    CONSTRAINT `fk_coupon_redemptions_coupon`
+    CONSTRAINT `{prefix}fk_coupon_redemptions_coupon`
         FOREIGN KEY (`coupon_id`) REFERENCES `{prefix}coupons` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_coupon_redemptions_contact`
+    CONSTRAINT `{prefix}fk_coupon_redemptions_contact`
         FOREIGN KEY (`contact_id`) REFERENCES `{prefix}contacts` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -313,9 +313,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}tasks` (
     KEY `ix_tasks_assignee` (`assigned_to`, `status`, `due_at`),
     KEY `ix_tasks_entity` (`entity_type`, `entity_id`),
     KEY `ix_tasks_overdue` (`status`, `due_at`),
-    CONSTRAINT `fk_tasks_assignee`
+    CONSTRAINT `{prefix}fk_tasks_assignee`
         FOREIGN KEY (`assigned_to`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL,
-    CONSTRAINT `fk_tasks_creator`
+    CONSTRAINT `{prefix}fk_tasks_creator`
         FOREIGN KEY (`created_by`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -327,6 +327,6 @@ CREATE TABLE IF NOT EXISTS `{prefix}task_comments` (
     `created_at` DATETIME NOT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_task_comments_task` (`task_id`, `created_at`),
-    CONSTRAINT `fk_task_comments_task`
+    CONSTRAINT `{prefix}fk_task_comments_task`
         FOREIGN KEY (`task_id`) REFERENCES `{prefix}tasks` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

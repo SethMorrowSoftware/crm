@@ -44,9 +44,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}role_permissions` (
     `scope`         ENUM('all','team','own') NOT NULL DEFAULT 'all',
     PRIMARY KEY (`role_id`, `permission_id`),
     KEY `ix_role_permissions_permission` (`permission_id`),
-    CONSTRAINT `fk_role_permissions_role`
+    CONSTRAINT `{prefix}fk_role_permissions_role`
         FOREIGN KEY (`role_id`) REFERENCES `{prefix}roles` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_role_permissions_permission`
+    CONSTRAINT `{prefix}fk_role_permissions_permission`
         FOREIGN KEY (`permission_id`) REFERENCES `{prefix}permissions` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}users` (
     UNIQUE KEY `uq_users_email` (`email`),
     KEY `ix_users_role` (`role_id`),
     KEY `ix_users_active` (`is_active`, `deleted_at`),
-    CONSTRAINT `fk_users_role`
+    CONSTRAINT `{prefix}fk_users_role`
         FOREIGN KEY (`role_id`) REFERENCES `{prefix}roles` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}teams` (
     `updated_at` DATETIME    DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_teams_manager` (`manager_id`),
-    CONSTRAINT `fk_teams_manager`
+    CONSTRAINT `{prefix}fk_teams_manager`
         FOREIGN KEY (`manager_id`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -96,9 +96,9 @@ CREATE TABLE IF NOT EXISTS `{prefix}team_members` (
     `user_id` BIGINT UNSIGNED NOT NULL,
     PRIMARY KEY (`team_id`, `user_id`),
     KEY `ix_team_members_user` (`user_id`),
-    CONSTRAINT `fk_team_members_team`
+    CONSTRAINT `{prefix}fk_team_members_team`
         FOREIGN KEY (`team_id`) REFERENCES `{prefix}teams` (`id`) ON DELETE CASCADE,
-    CONSTRAINT `fk_team_members_user`
+    CONSTRAINT `{prefix}fk_team_members_user`
         FOREIGN KEY (`user_id`) REFERENCES `{prefix}users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}sessions` (
     PRIMARY KEY (`id`),
     KEY `ix_sessions_user` (`user_id`),
     KEY `ix_sessions_activity` (`last_activity`),
-    CONSTRAINT `fk_sessions_user`
+    CONSTRAINT `{prefix}fk_sessions_user`
         FOREIGN KEY (`user_id`) REFERENCES `{prefix}users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}audit_log` (
     KEY `ix_audit_created` (`created_at`),
     -- The actor is kept even if the user row goes: an audit row that loses its
     -- subject is still evidence.
-    CONSTRAINT `fk_audit_user`
+    CONSTRAINT `{prefix}fk_audit_user`
         FOREIGN KEY (`user_id`) REFERENCES `{prefix}users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -217,7 +217,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}notifications` (
     `created_at` DATETIME     NOT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_notifications_user_unread` (`user_id`, `read_at`),
-    CONSTRAINT `fk_notifications_user`
+    CONSTRAINT `{prefix}fk_notifications_user`
         FOREIGN KEY (`user_id`) REFERENCES `{prefix}users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}api_tokens` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_api_tokens_hash` (`token_hash`),
     KEY `ix_api_tokens_user` (`user_id`),
-    CONSTRAINT `fk_api_tokens_user`
+    CONSTRAINT `{prefix}fk_api_tokens_user`
         FOREIGN KEY (`user_id`) REFERENCES `{prefix}users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -260,7 +260,7 @@ CREATE TABLE IF NOT EXISTS `{prefix}webhook_deliveries` (
     `created_at`    DATETIME    NOT NULL,
     PRIMARY KEY (`id`),
     KEY `ix_webhook_deliveries_webhook` (`webhook_id`),
-    CONSTRAINT `fk_webhook_deliveries_webhook`
+    CONSTRAINT `{prefix}fk_webhook_deliveries_webhook`
         FOREIGN KEY (`webhook_id`) REFERENCES `{prefix}webhooks` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
