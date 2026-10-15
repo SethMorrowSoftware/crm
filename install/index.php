@@ -32,20 +32,9 @@ use App\Core\Settings;
 // Lock
 // ---------------------------------------------------------------------------
 
-$lockFile = __DIR__ . '/.lock';
-
-if (is_file($lockFile)) {
-    installer_lockout();
-    exit;
-}
-
-// ---------------------------------------------------------------------------
-// Installer session
-//
-// Not the application's DB-backed session — there is no database yet. A plain
-// PHP session carries the wizard's state between steps.
-// ---------------------------------------------------------------------------
-
+// The installer session has to start before the lock is checked, because
+// whoever just finished setup is allowed to see the finish page once (see
+// below) and that is recorded in their session.
 if (session_status() !== PHP_SESSION_ACTIVE) {
     session_name('castle_crm_install');
     session_start();
@@ -54,7 +43,22 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 $state = &$_SESSION['install'];
 $state ??= [];
 
-$step   = max(1, min(8, (int) ($_GET['step'] ?? 1)));
+$step = max(1, min(8, (int) ($_GET['step'] ?? 1)));
+
+$lockFile = __DIR__ . '/.lock';
+
+if (is_file($lockFile)) {
+    // Completing setup writes the lock, and the POST then redirects to step 8
+    // to show the summary. Without this exception the operator would be sent
+    // straight to the lockout page and would never see the cron line or the
+    // DNS records — the two things the install is useless without.
+    $justFinished = $step === 8 && !empty($state['complete']);
+
+    if (!$justFinished) {
+        installer_lockout();
+        exit;
+    }
+}
 $errors = [];
 $notices = [];
 

@@ -76,7 +76,11 @@ final class Encryption
 
         $ivLength = openssl_cipher_iv_length(self::CIPHER) ?: 12;
 
-        if (strlen($raw) <= $ivLength + self::TAG_LENGTH) {
+        // Strictly less than, not less-or-equal: an empty plaintext produces
+        // an empty ciphertext, so iv+tag with nothing after it is a valid
+        // payload meaning "". Rejecting it would make clearing a stored
+        // credential indistinguishable from a corrupt one.
+        if (strlen($raw) < $ivLength + self::TAG_LENGTH) {
             return null;
         }
 

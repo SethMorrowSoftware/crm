@@ -43,4 +43,13 @@ if ($path !== '/' && is_file($candidate)) {
     return false;
 }
 
+// Apache's DirectoryIndex: a request for a directory containing index.php runs
+// that file. The installer lives at /install/, so without this the dev server
+// would not reach it the way production does.
+if ($path !== '/' && is_dir($candidate) && is_file(rtrim($candidate, '/') . '/index.php')) {
+    require rtrim($candidate, '/') . '/index.php';
+
+    return true;
+}
+
 require $root . '/index.php';

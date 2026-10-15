@@ -198,15 +198,21 @@ if (PHP_SAPI === 'cli' || defined('CC_WEB_CRON')) {
 $request = Request::capture();
 $GLOBALS['cc_request'] = $request;
 
-// Not installed yet: everything funnels to the installer.
+// The installer is the entry point for this request and drives itself from
+// here. It must be checked before anything else: when install/index.php is the
+// running script, the base path derived from SCRIPT_NAME is /install, so the
+// request path resolves to "/" and the redirect below would otherwise send the
+// installer to /install/install/.
+if (defined('CC_INSTALLER')) {
+    return;
+}
+
+// Not installed yet, and this is not the installer: send the visitor there.
 if (!$isInstalled) {
     if (!str_starts_with($request->path(), '/install')) {
         Response::redirect(url('install/'))->send();
-
-        return;
     }
 
-    // install/index.php handles itself from here.
     return;
 }
 

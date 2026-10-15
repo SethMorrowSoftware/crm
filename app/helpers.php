@@ -85,6 +85,23 @@ if (!function_exists('clean_html')) {
 
         $allowed = '<p><br><strong><b><em><i><u><ul><ol><li><h2><h3><h4><blockquote><a><hr>';
 
+        // Remove these elements INCLUDING their contents first. strip_tags()
+        // only removes the tags, so "<script>alert(1)</script>" would survive
+        // as the visible text "alert(1)" — inert, but nonsense to show a
+        // guest, and a confusing thing to find in a saved template.
+        $html = (string) preg_replace(
+            '#<(script|style|iframe|object|embed|noscript|template)\b[^>]*>.*?</\1\s*>#is',
+            '',
+            $html
+        );
+
+        // An unclosed one would otherwise leave its content behind.
+        $html = (string) preg_replace(
+            '#<(script|style|iframe|object|embed|noscript|template)\b[^>]*>.*$#is',
+            '',
+            $html
+        );
+
         $stripped = strip_tags($html, $allowed);
 
         // Remove every attribute except href on an anchor, and force that href
