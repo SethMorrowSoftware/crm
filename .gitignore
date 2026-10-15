@@ -1,0 +1,11 @@
+config/config.php
+install/.lock
+storage/logs/*
+storage/cache/*
+storage/uploads/*
+storage/exports/*
+storage/backups/*
+storage/sessions/*
+!storage/**/.gitkeep
+.DS_Store
+*.log
