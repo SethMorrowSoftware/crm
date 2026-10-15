@@ -62,6 +62,14 @@ CI passes all three. If you add a suite and the count climbs, raise the
 
 Pure functions and classes. Fast enough to run on every save.
 
+"No database" is a contract, not a description: the CI lint job runs this layer
+with no MySQL service, and the other two jobs `needs: lint`. One stray
+`Settings::set()` in here does not fail its own test — it *errors*, which reads
+as a broken build rather than a misplaced test, and it takes the whole pipeline
+down. A static gate (`no unit test touches the database`) now enforces it,
+because that is exactly how four link-host tests were written into this layer
+and had to be moved back out.
+
 - **helpers** — escaping, money, phone normalisation, dates
 - **validator** — every rule, and the type-vs-length semantics of min/max
 - **router** — pattern compilation and matching, constrained placeholders, and
@@ -69,8 +77,10 @@ Pure functions and classes. Fast enough to run on every save.
   parameter, a `//`-prefixed path, traversal, an absolute-form request target
 - **security** — encryption round-trips, token entropy, password policy, the ACL catalogue, CSV formula injection
 - **mailer** — merge-tag substitution and its escaping, the HTML-to-text
-  fallback, and the unsubscribe token: round trip, tampering, forgery, and
-  that the HMAC actually depends on the install's key
+  fallback, the unsubscribe token (round trip, tampering, forgery, and that the
+  HMAC actually depends on the install's key), and that a configured `app_url`
+  beats the request's Host header. The rest of the link-host precedence falls
+  back through stored settings, so it lives in `integration/mailer`.
 
 ### `tests/static` — the quality gates, as executable rules
 
@@ -91,6 +101,7 @@ so they are tested:
 - Money columns are integers, never floats
 - Every seeded automation trigger has an emitter
 - No debugging calls, no BOMs, `strict_types` everywhere
+- No test in `tests/unit` touches the database (see that layer, above)
 - `config/config.php` is gitignored and the sample ships no credentials
 
 Two of the static suites measure rather than inspect:

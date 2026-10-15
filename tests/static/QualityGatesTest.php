@@ -588,3 +588,43 @@ Harness::test('the sample config ships no real credentials', function (): void {
     Assert::matches("/'app_key'\s*=>\s*''/", $sample, 'app_key must be blank in the sample');
     Assert::matches("/'pass'\s*=>\s*''/", $sample, 'the DB password must be blank in the sample');
 });
+
+Harness::test('no unit test touches the database', function (): void {
+    // tests/unit is the suite CI's lint job runs with no MySQL service at all,
+    // which is what makes it the fast gate the other two jobs depend on. A
+    // single Settings::set() in there does not fail the test that wrote it —
+    // it ERRORS, which reads as a broken build rather than a misplaced test,
+    // and it takes the whole pipeline down with it because the matrix and the
+    // installer walk-through both need: lint. (That is not hypothetical: four
+    // link-host tests were written here and did exactly that.)
+    //
+    // The deny-list names the application services that open a connection on
+    // first use. Pure helpers on the same classes — Auth::hash(),
+    // Mailer::merge() — are fine and deliberately not listed.
+    $forbidden = ['DB', 'Settings', 'Cache', 'Audit', 'Migration', 'Backup', 'Upgrade', 'Model'];
+    $offenders = [];
+
+    foreach (glob(CC_ROOT . '/tests/unit/*.php') ?: [] as $file) {
+        $lines = preg_split('/\R/', (string) file_get_contents($file)) ?: [];
+
+        foreach ($lines as $number => $line) {
+            if (preg_match('/^\s*(\*|\/\/)/', $line) === 1) {
+                continue; // a comment may name one
+            }
+
+            foreach ($forbidden as $class) {
+                if (preg_match('/(?<![A-Za-z0-9_\\\\])' . $class . '::/', $line) === 1) {
+                    $offenders[] = relative_path($file) . ':' . ($number + 1)
+                        . ' uses ' . $class . '::';
+                }
+            }
+        }
+    }
+
+    Assert::same(
+        [],
+        $offenders,
+        "a unit test must run with no database — move these to tests/integration:\n   "
+            . implode("\n   ", $offenders)
+    );
+});

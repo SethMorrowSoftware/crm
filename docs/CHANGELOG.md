@@ -144,7 +144,7 @@ by accident.
 
 ### Tests and CI
 
-- **404 tests, no test framework** — the same no-dependency constraint as the
+- **405 tests, no test framework** — the same no-dependency constraint as the
   application, so CI needs nothing but PHP.
 - Four layers: unit, static analysis over the source itself, integration
   against a real MySQL, and end-to-end over real HTTP against the real front
@@ -221,10 +221,19 @@ Fixed here:
   Mode address and mistyping the From address in one submit put the old address
   back, looking saved.
 
-The suite grew from 372 to **404 tests** to cover them. Each fix was
+The suite grew from 372 to **405 tests** to cover them. Each fix was
 mutation-checked: the password-reset suite, for instance, fails on three
 separate assertions when the token lookup is replaced with `LIMIT 1` — the
 mutation that previously left all 372 tests green.
+
+Four of those new tests were written into `tests/unit`, which by contract runs
+with no database at all — so they did not fail, they *errored*, and because the
+CI matrix and the installer walk-through both `needs: lint`, they took the whole
+pipeline down on the first push. They now live in `integration/mailer`, and a
+static gate asserts that no test under `tests/unit` names `DB::`, `Settings::`
+or any other service that opens a connection. That gate is the 405th test: the
+mistake was mine, and the layer contract was only written in prose until it
+caught nobody.
 
 One confirmed finding was deliberately **not** fixed here: `users_manage`
 allows a non-owner holding it to set the Owner's password, which defeats the
