@@ -25,6 +25,17 @@ final class Response
 
     private bool $sent = false;
 
+    /**
+     * A body produced at send time rather than held in memory.
+     *
+     * A database backup or a full contacts export can be larger than the whole
+     * PHP memory limit on shared hosting, so those responses hand over a
+     * callable that writes to the output buffer instead of a string.
+     *
+     * @var (callable():void)|null
+     */
+    private $streamer = null;
+
     public function __construct(string $body = '', int $status = 200)
     {
         $this->body   = $body;
@@ -107,6 +118,63 @@ final class Response
             ->header('Content-Type', 'text/csv; charset=UTF-8')
             ->header('Content-Disposition', 'attachment; filename="' . self::safeFilename($filename) . '"')
             ->header('Content-Length', (string) strlen($body));
+    }
+
+    /**
+     * Send a file from disk as a download, read in chunks.
+     *
+     * The file is never loaded into a string: a 600 MB backup downloads from a
+     * process with a 128 MB memory limit, which is the whole point.
+     */
+    public static function file(string $path, string $downloadName, string $contentType = 'application/octet-stream'): self
+    {
+        if (!is_file($path) || !is_readable($path)) {
+            return self::text('That file is no longer available.', 404);
+        }
+
+        $response = (new self())
+            ->header('Content-Type', $contentType)
+            ->header('Content-Disposition', 'attachment; filename="' . self::safeFilename($downloadName) . '"')
+            ->header('Content-Length', (string) filesize($path))
+            // A backup must never sit in a proxy cache or a browser's disk
+            // cache on a shared front-desk machine.
+            ->noCache()
+            ->header('X-Content-Type-Options', 'nosniff');
+
+        $response->streamer = static function () use ($path): void {
+            $handle = fopen($path, 'rb');
+
+            if ($handle === false) {
+                return;
+            }
+
+            while (!feof($handle)) {
+                echo (string) fread($handle, 262144);
+                flush();
+            }
+
+            fclose($handle);
+        };
+
+        return $response;
+    }
+
+    /**
+     * A download whose body is generated as it is sent.
+     *
+     * @param callable():void $writer Writes directly to php://output.
+     */
+    public static function stream(callable $writer, string $downloadName, string $contentType = 'text/plain; charset=UTF-8'): self
+    {
+        $response = (new self())
+            ->header('Content-Type', $contentType)
+            ->header('Content-Disposition', 'attachment; filename="' . self::safeFilename($downloadName) . '"')
+            ->noCache()
+            ->header('X-Content-Type-Options', 'nosniff');
+
+        $response->streamer = $writer;
+
+        return $response;
     }
 
     /**
@@ -204,7 +272,11 @@ final class Response
                 'file' => $file,
                 'line' => $line,
             ]);
-            echo $this->body;
+            if ($this->streamer !== null) {
+                ($this->streamer)();
+            } else {
+                echo $this->body;
+            }
 
             return;
         }
@@ -229,7 +301,11 @@ final class Response
 
         // 204 and 304 must not carry a body.
         if ($this->status !== 204 && $this->status !== 304) {
-            echo $this->body;
+            if ($this->streamer !== null) {
+                ($this->streamer)();
+            } else {
+                echo $this->body;
+            }
         }
 
         if (function_exists('fastcgi_finish_request')) {

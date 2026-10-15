@@ -111,6 +111,9 @@ function test_boot(bool $fresh = false): bool
     (require CC_ROOT . '/install/seeds/permissions.php')();
     (require CC_ROOT . '/install/seeds/venue.php')();
     (require CC_ROOT . '/install/seeds/playbooks.php')();
+    // Mirrors the installer, which runs this seed unconditionally: the
+    // password-reset path resolves a template by slug and fails without it.
+    (require CC_ROOT . '/install/seeds/templates.php')();
 
     Settings::load(true);
 
@@ -198,6 +201,7 @@ function test_reset_transactional_data(): void
         'notifications', 'contacts', 'households', 'children', 'companies',
         'deals', 'bookings', 'visits', 'conversations', 'messages',
         'automation_runs', 'tasks', 'consent_log', 'activities',
+        'suppressions', 'usage_ledger', 'booking_payments', 'taggables',
     ] as $table) {
         try {
             DB::pdo()->exec('DELETE FROM `cc_' . $table . '`');

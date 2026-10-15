@@ -169,8 +169,58 @@ $venueName = setting('venue.name', 'The Castle Fun Center');
         </div>
     </div>
 
+    <!-- ─────────────────────── Security & retention ──────────────────── -->
+    <h3 class="form-section-title form-section-divided">Security &amp; retention</h3>
+
+    <!-- An unchecked checkbox posts nothing, so the hidden input carries the
+         "off" value. Without it, saving this form could never turn the setting
+         back off again. -->
+    <input type="hidden" name="force_https" value="0">
+
+    <div class="field-check">
+        <input type="checkbox" id="force_https" name="force_https" value="1"
+               <?= !empty($system['force_https']) ? 'checked' : '' ?>>
+        <label for="force_https">Require HTTPS for every page</label>
+        <p class="field-hint">
+            Sends any plain-HTTP visitor to the <code>https://</code> address instead, and refuses a
+            form submission that arrives unencrypted rather than silently dropping it. Turn this on
+            as soon as your certificate works, so a password or a guest's details never travel in
+            the clear.
+        </p>
+    </div>
+
+    <?php if (!request()->isSecure()): ?>
+        <div class="alert alert-warning">
+            <?= icon('alert') ?>
+            <p>
+                <strong>You are reading this page over plain HTTP.</strong> Get a certificate working
+                first &mdash; in cPanel that is <em>SSL/TLS Status</em> &rarr; <em>Run AutoSSL</em>,
+                and it is free. Turning this on before <code>https://</code> works would lock you out
+                of your own installation.
+            </p>
+        </div>
+    <?php elseif (empty($system['force_https'])): ?>
+        <div class="alert alert-info">
+            <?= icon('check-circle') ?>
+            <p>HTTPS is working on this request, so it is safe to turn this on.</p>
+        </div>
+    <?php endif; ?>
+
+    <div class="field">
+        <label for="audit_retention_days">Keep audit log entries for</label>
+        <input type="number" id="audit_retention_days" name="audit_retention_days" min="0" max="3650"
+               value="<?= e(old('audit_retention_days') ?: ($system['audit_retention_days'] ?? 730)) ?>">
+        <p class="field-hint">
+            Days. The nightly job deletes entries older than this. <strong>0 keeps them forever</strong>,
+            which is the safest answer for a dispute and the worst one for a shared-hosting disk quota
+            &mdash; two years is a reasonable middle. Consent records are never pruned by this setting:
+            they are the evidence that a guest agreed to be contacted, so they are kept for as long as
+            the contact exists.
+        </p>
+    </div>
+
     <div class="form-actions">
-        <button type="submit" class="btn">Save guardrails</button>
+        <button type="submit" class="btn">Save settings</button>
         <a class="btn btn-ghost" href="<?= e(url('/settings')) ?>">Back</a>
     </div>
 </form>

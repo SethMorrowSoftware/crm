@@ -35,6 +35,13 @@ final class Request
 
     private string $path;
 
+    /**
+     * Resolved once per request, not once per process: a static cache here
+     * made the value leak between Request objects, which is wrong in the test
+     * suite and in any long-running worker.
+     */
+    private ?string $basePath = null;
+
     private ?string $rawBody = null;
 
     /** @var array<string,mixed>|null */
@@ -405,7 +412,7 @@ final class Request
     private function resolvePath(): string
     {
         // ?_route=/path is the fallback for hosts without mod_rewrite.
-        $raw = (string) ($this->query['_route'] ?? parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?? '/');
+        $raw = (string) ($this->query['_route'] ?? self::rawPath());
 
         // Strip the subdirectory the app is installed under, so routes are
         // always written from the application root.
@@ -432,22 +439,74 @@ final class Request
     }
 
     /**
+     * The request path, cut out of REQUEST_URI by hand.
+     *
+     * Deliberately NOT parse_url(). A URI beginning with two slashes is a
+     * protocol-relative URL, so parse_url('//app/thing') reports `app` as the
+     * HOST and `/thing` as the path — which silently drops the first segment.
+     * Routing on that is wrong (`//settings/mail` would resolve to `/mail`),
+     * and any check that looks for a protected first segment would be looking
+     * at a path that no longer has one.
+     *
+     * Cutting at the first '?' or '#' and collapsing the slashes ourselves has
+     * neither problem, and REQUEST_URI is never a full URL in practice — not
+     * even for an absolute-form request line, which only a proxy receives.
+     */
+    public static function rawPath(): string
+    {
+        $uri = (string) ($_SERVER['REQUEST_URI'] ?? '/');
+
+        foreach (['?', '#'] as $delimiter) {
+            $position = strpos($uri, $delimiter);
+
+            if ($position !== false) {
+                $uri = substr($uri, 0, $position);
+            }
+        }
+
+        // An absolute-form target (http://host/path) would otherwise be read
+        // as a path. Keep only what follows the authority.
+        if (preg_match('#^[a-z][a-z0-9+.-]*://[^/]*(/.*)?$#i', $uri, $match) === 1) {
+            $uri = $match[1] ?? '/';
+        }
+
+        $uri = (string) preg_replace('#/{2,}#', '/', $uri);
+
+        return $uri === '' ? '/' : $uri;
+    }
+
+    /**
      * The subdirectory this install is served from, derived from the front
      * controller's location — so the same code works at a domain root and at
      * /crm/ without configuration.
      */
     public function basePath(): string
     {
-        static $base = null;
-
-        if ($base !== null) {
-            return $base;
+        if ($this->basePath !== null) {
+            return $this->basePath;
         }
 
-        $script = (string) ($_SERVER['SCRIPT_NAME'] ?? '');
-        $dir    = rtrim(str_replace('\\', '/', dirname($script)), '/');
+        $script = str_replace('\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? ''));
 
-        return $base = ($dir === '/' || $dir === '.') ? '' : $dir;
+        // SCRIPT_NAME is only meaningful here when it actually names the front
+        // controller, which is how Apache and most FastCGI setups report it
+        // (`/index.php`, or `/crm/index.php` for a subdirectory install).
+        //
+        // PHP's built-in server reports something else: for a path whose last
+        // segment contains a dot it sets SCRIPT_NAME to the WHOLE REQUEST PATH,
+        // because it guesses the request is for a file. Taking dirname() of
+        // that strips real route segments — so a route with a filename in a
+        // parameter, such as /settings/backups/castle-crm-….sql.gz/download,
+        // arrived at the router as just /download and 404d. Some nginx
+        // configurations with fastcgi_split_path_info get this wrong the same
+        // way, so the guard belongs here rather than in the dev server.
+        if (!str_ends_with(strtolower($script), '.php')) {
+            return $this->basePath = '';
+        }
+
+        $dir = rtrim(dirname($script), '/');
+
+        return $this->basePath = ($dir === '/' || $dir === '.') ? '' : $dir;
     }
 
     /** @return array<string,string> */

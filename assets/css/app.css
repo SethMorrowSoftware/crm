@@ -23,9 +23,21 @@
     --ink:          #1b1f26;
     --ink-soft:     #3d454f;
     --muted:        #5b6472;
-    --faint:        #8b95a3;
+    /* Darker than it looks like it wants to be: .muted, .empty, breadcrumbs
+       and card meta are all real text in this colour, so it has to clear
+       4.5:1 against every surface it sits on, not merely look subdued. The
+       old #8b95a3 managed 3.0:1 on white. */
+    --faint:        #68717f;
     --line:         #e3e7ec;
     --line-strong:  #cdd4dc;
+    /* The visible boundary of a control. WCAG 1.4.11 asks 3:1 for that, which
+       a hairline the colour of a divider (--line-strong, 1.5:1) does not meet
+       — and an input whose edge you cannot find is not a cosmetic problem. */
+    --field-border: #828b98;
+    /* Text and icons ON a saturated fill: brand buttons, danger buttons, the
+       brand mark. White in light mode; in dark mode the fills are pastel, so
+       white on them fails and near-black is correct. */
+    --on-accent:    #ffffff;
     --bg:           #f6f7f9;
     --panel:        #ffffff;
     --panel-soft:   #fafbfc;
@@ -65,9 +77,11 @@
         --ink:         #e8eaed;
         --ink-soft:    #c9ced6;
         --muted:       #a8b0bb;
-        --faint:       #7d8694;
+        --faint:       #8a93a1;
         --line:        #2d333d;
         --line-strong: #3c444f;
+        --field-border: #767f8d;
+        --on-accent:   #14171c;
         --bg:          #14171c;
         --panel:       #1c2027;
         --panel-soft:  #22262e;
@@ -95,9 +109,11 @@
     --ink:         #e8eaed;
     --ink-soft:    #c9ced6;
     --muted:       #a8b0bb;
-    --faint:       #7d8694;
+    --faint:       #8a93a1;
     --line:        #2d333d;
     --line-strong: #3c444f;
+    --field-border: #767f8d;
+    --on-accent:   #14171c;
     --bg:          #14171c;
     --panel:       #1c2027;
     --panel-soft:  #22262e;
@@ -126,7 +142,11 @@ body {
     /* System stack: no web-font fetch, no layout shift, no third-party request */
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
                  "Helvetica Neue", Arial, sans-serif;
-    font-size: 15px;
+    /* 15px at a default 16px root, but expressed in rem so that a reader who
+       has raised their browser's default font size gets larger text here too.
+       A px value here would pin the body text and quietly ignore the first
+       accommodation most people with low vision ever set. */
+    font-size: .9375rem;
     line-height: 1.55;
     color: var(--ink);
     background: var(--bg);
@@ -147,6 +167,9 @@ a:hover { text-decoration: underline; }
 ul, ol { margin: 0 0 .75rem; padding-left: 1.25rem; }
 
 code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85em; }
+/* For a DNS value or a long token in a narrow table cell: break anywhere
+   rather than forcing the whole page to scroll sideways. */
+code.wrap { overflow-wrap: anywhere; word-break: break-word; }
 
 /* Focus is always visible. Removing it would make the app unusable by
    keyboard, which several of these screens are designed around. */
@@ -173,7 +196,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
 
 .skip-link {
     position: absolute; top: -3rem; left: .5rem; z-index: 100;
-    padding: .5rem 1rem; background: var(--brand); color: #fff;
+    padding: .5rem 1rem; background: var(--brand); color: var(--on-accent);
     border-radius: var(--radius-sm);
 }
 .skip-link:focus { top: .5rem; }
@@ -204,7 +227,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
 .brand-mark {
     flex: 0 0 2.2rem; height: 2.2rem;
     display: grid; place-items: center;
-    background: var(--brand); color: #fff; border-radius: var(--radius-sm);
+    background: var(--brand); color: var(--on-accent); border-radius: var(--radius-sm);
 }
 
 .brand-text { display: flex; flex-direction: column; min-width: 0; }
@@ -404,7 +427,7 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
 .playbook-card.is-active { border-left: 3px solid var(--ok); }
 .playbook-card-head { display: flex; align-items: center; justify-content: space-between; }
 .playbook-number-lg {
-    font-size: 1.5rem; font-weight: 700; color: var(--line-strong);
+    font-size: 1.5rem; font-weight: 700; color: var(--faint);
     font-variant-numeric: tabular-nums; line-height: 1;
 }
 .playbook-card-title { font-size: .98rem; }
@@ -449,21 +472,31 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
 .btn {
     display: inline-flex; gap: .4rem; align-items: center; justify-content: center;
     padding: .5rem 1rem; border: 1px solid transparent; border-radius: var(--radius-sm);
-    background: var(--brand); color: #fff;
+    background: var(--brand); color: var(--on-accent);
     font: inherit; font-size: .88rem; font-weight: 600;
     cursor: pointer; text-decoration: none; white-space: nowrap;
 }
-.btn:hover { background: var(--brand-dark); text-decoration: none; color: #fff; }
+.btn:hover { background: var(--brand-dark); text-decoration: none; color: var(--on-accent); }
 .btn:disabled { opacity: .55; cursor: not-allowed; }
 
-.btn-ghost { background: transparent; color: var(--ink-soft); border-color: var(--line-strong); }
+.btn-ghost { background: transparent; color: var(--ink-soft); border-color: var(--field-border); }
 .btn-ghost:hover { background: var(--bg); color: var(--ink); border-color: var(--faint); }
 
-.btn-danger { background: var(--bad); }
+.btn-danger { background: var(--bad); color: var(--on-accent); }
 .btn-danger:hover { background: var(--bad); filter: brightness(.9); }
 
 .btn-sm { padding: .3rem .65rem; font-size: .8rem; }
 .btn-block { width: 100%; }
+
+/* A destructive action that is not the primary one on the row: red text on a
+   ghost button rather than a solid red block, so a table of them does not read
+   as a wall of danger. */
+.btn-danger-text { color: var(--bad); }
+.btn-danger-text:hover { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+
+/* Buttons sitting side by side in a table cell. */
+.row-actions { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; white-space: nowrap; }
+.inline-form { display: inline; margin: 0; }
 
 .btn-icon {
     display: inline-grid; place-items: center;
@@ -486,7 +519,7 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
 .field input[type=number], .field input[type=date], .field input[type=time],
 .field input[type=tel], .field select, .field textarea {
     width: 100%; padding: .5rem .65rem;
-    border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+    border: 1px solid var(--field-border); border-radius: var(--radius-sm);
     background: var(--panel); color: var(--ink); font: inherit; font-size: .9rem;
 }
 
@@ -517,6 +550,7 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
 .form-hint { font-size: .8rem; color: var(--muted); }
 
 .form-section-title { margin: 1.5rem 0 .5rem; font-size: .9rem; }
+.form-section-divided { margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
 
 .filter-bar {
     display: grid; gap: .75rem;
@@ -755,7 +789,7 @@ ul.checks li:last-child { border-bottom: 0; }
 }
 
 @media (max-width: 38rem) {
-    body { font-size: 14px; }
+    body { font-size: .875rem; }
     .card { padding: 1rem; }
     .stat-row { grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); }
     .permission-row { grid-template-columns: auto 1fr; }

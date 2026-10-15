@@ -5,6 +5,10 @@ storage/cache/*
 storage/uploads/*
 storage/exports/*
 storage/backups/*
+# But the guards themselves ship, so a fresh deploy is protected before the
+# first backup is ever taken rather than after it.
+!storage/backups/.htaccess
+!storage/backups/index.html
 storage/sessions/*
 !storage/**/.gitkeep
 .DS_Store

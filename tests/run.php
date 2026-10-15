@@ -321,6 +321,18 @@ function seed_http_fixtures(): void
     App\Core\DB::disconnect();
     App\Core\DB::connect();
 
+    // Clear the rate-limit counters before the HTTP suite.
+    //
+    // They live in the file cache, which — unlike the database and the config
+    // file — survives between runs. The login route allows twelve attempts per
+    // five minutes per IP, and every request in this suite comes from
+    // 127.0.0.1, so running the suite twice inside five minutes used to start
+    // failing with 429s that looked for all the world like broken
+    // authentication. Flushing here makes a run independent of the one before
+    // it; the throttle itself is still exercised, by the test that deliberately
+    // trips it.
+    App\Core\Cache::flush();
+
     $accounts = [
         ['owner@test.invalid', 'Owner', 'owner', 'owner-test-passphrase-9'],
         ['desk@test.invalid',  'Front Desk Dana', 'front_desk', 'desk-test-passphrase-9'],

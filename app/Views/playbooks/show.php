@@ -58,7 +58,7 @@ declare(strict_types=1);
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
-                <thead><tr><th>Automation</th><th>Trigger</th><th>State</th></tr></thead>
+                <thead><tr><th scope="col">Automation</th><th scope="col">Trigger</th><th scope="col">State</th></tr></thead>
                 <tbody>
                 <?php foreach ($automations as $automation): ?>
                     <tr>

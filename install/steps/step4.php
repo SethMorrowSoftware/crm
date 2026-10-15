@@ -36,7 +36,7 @@ $applied   = $state['schema'] ?? null;
     <?php if ($pending !== []): ?>
         <h3>To apply</h3>
         <table>
-            <thead><tr><th>File</th><th>Contents</th></tr></thead>
+            <thead><tr><th scope="col">File</th><th scope="col">Contents</th></tr></thead>
             <tbody>
             <?php
             $descriptions = [

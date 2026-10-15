@@ -18,7 +18,7 @@ declare(strict_types=1);
 <section class="card">
     <div class="table-wrap">
         <table class="table">
-            <thead><tr><th>Role</th><th>People</th><th>Permissions</th><th></th></tr></thead>
+            <thead><tr><th scope="col">Role</th><th scope="col">People</th><th scope="col">Permissions</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <tbody>
             <?php foreach ($roles as $role): ?>
                 <tr>

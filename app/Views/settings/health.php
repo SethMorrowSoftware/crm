@@ -78,11 +78,11 @@ foreach ($checks as $check) {
     <div class="table-wrap">
         <table class="table">
             <tbody>
-            <tr><th>PHP version</th><td><?= e($phpInfo['version']) ?></td></tr>
-            <tr><th>Server API</th><td><?= e($phpInfo['sapi']) ?></td></tr>
-            <tr><th>Memory limit</th><td><?= e($phpInfo['memory_limit']) ?></td></tr>
-            <tr><th>Max execution time</th><td><?= e($phpInfo['max_execution']) ?>s</td></tr>
-            <tr><th>Max upload size</th><td><?= e($phpInfo['upload_max']) ?></td></tr>
+            <tr><th scope="col">PHP version</th><td><?= e($phpInfo['version']) ?></td></tr>
+            <tr><th scope="col">Server API</th><td><?= e($phpInfo['sapi']) ?></td></tr>
+            <tr><th scope="col">Memory limit</th><td><?= e($phpInfo['memory_limit']) ?></td></tr>
+            <tr><th scope="col">Max execution time</th><td><?= e($phpInfo['max_execution']) ?>s</td></tr>
+            <tr><th scope="col">Max upload size</th><td><?= e($phpInfo['upload_max']) ?></td></tr>
             </tbody>
         </table>
     </div>

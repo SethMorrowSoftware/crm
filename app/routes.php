@@ -34,6 +34,18 @@ $router->get('/reset-password/{token:[a-f0-9]{64}}', ['AuthController', 'showRes
 $router->post('/reset-password', ['AuthController', 'resetPassword'], ['guest', 'csrf', 'throttle:10,15']);
 
 // ---------------------------------------------------------------------------
+// Public, unauthenticated guest endpoints
+//
+// One-click unsubscribe must work from an email client with no login. The
+// signed token IS the authorisation, which is why the POST form is exempt
+// from CSRF: RFC 8058 has the recipient's mail provider submit it, so a
+// session token could never be present.
+// ---------------------------------------------------------------------------
+
+$router->get('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], ['throttle:60,5'], 'unsubscribe');
+$router->post('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], ['throttle:60,5']);
+
+// ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
 
@@ -64,6 +76,12 @@ $router->group('/settings', ['auth', 'can:settings'], function ($router): void {
     $router->get('/system', ['SettingsController', 'system'], [], 'settings.system');
     $router->post('/system', ['SettingsController', 'saveSystem'], ['csrf']);
 
+    // Email provider configuration holds a credential, so it carries its own
+    // permission rather than riding along with general settings.
+    $router->get('/mail', ['MailSettingsController', 'edit'], ['can:integrations_manage'], 'settings.mail');
+    $router->post('/mail', ['MailSettingsController', 'save'], ['csrf', 'can:integrations_manage']);
+    $router->post('/mail/test', ['MailSettingsController', 'test'], ['csrf', 'can:integrations_manage']);
+
     // Leaving Safe Mode is its own permission: it is the moment the app starts
     // messaging real guests, so it should not ride along with general settings.
     $router->post('/safe-mode', ['SettingsController', 'toggleSafeMode'], ['csrf', 'can:sending_override']);
@@ -91,6 +109,37 @@ $router->group('/settings/roles', ['auth', 'can:roles_manage'], function ($route
     $router->get('/{id:\d+}', ['RoleController', 'edit'], [], 'roles.edit');
     $router->post('/{id:\d+}', ['RoleController', 'update'], ['csrf']);
     $router->post('/{id:\d+}/delete', ['RoleController', 'destroy'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
+// Backups & data export
+//
+// `backup_manage` rather than `settings`: a downloaded backup is the whole
+// guest database in one file, so the permission to take one is deliberately
+// narrower than the permission to change a setting.
+// ---------------------------------------------------------------------------
+
+$router->group('/settings/backups', ['auth', 'can:backup_manage'], function ($router): void {
+    $router->get('', ['BackupController', 'index'], [], 'backups');
+    $router->post('', ['BackupController', 'create'], ['csrf', 'throttle:6,10']);
+    $router->post('/settings', ['BackupController', 'saveSettings'], ['csrf']);
+    $router->get('/export', ['BackupController', 'export'], ['throttle:20,10'], 'backups.export');
+
+    // The filename pattern matches what Backup::create() writes, and
+    // Backup::pathFor() re-validates it against the real directory before
+    // anything is opened. A route constraint alone is never the only guard on
+    // a path that reaches the filesystem.
+    $router->get(
+        '/{filename:castle-crm-[0-9]{8}-[0-9]{6}\.sql(?:\.gz)?}/download',
+        ['BackupController', 'download'],
+        ['throttle:20,10'],
+        'backups.download'
+    );
+    $router->post(
+        '/{filename:castle-crm-[0-9]{8}-[0-9]{6}\.sql(?:\.gz)?}/delete',
+        ['BackupController', 'destroy'],
+        ['csrf']
+    );
 });
 
 // ---------------------------------------------------------------------------

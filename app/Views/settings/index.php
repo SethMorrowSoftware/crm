@@ -2,14 +2,20 @@
 
 declare(strict_types=1);
 
-/** @var array<string,int> $counts */
+/**
+ * @var array<string,int> $counts
+ * @var string            $mailDriverLabel
+ * @var string            $backupLabel
+ */
 
 $sections = [
     ['Venue details', '/settings/venue', 'Name, address, phone, timezone and tax rate.', 'cog', 'settings'],
     ['System', '/settings/system', 'Safe Mode, quiet hours, message caps and retention windows.', 'power', 'settings'],
+    ['Email', '/settings/mail', $mailDriverLabel, 'message', 'integrations_manage'],
     ['Users', '/settings/users', $counts['users'] . ' accounts.', 'users', 'users_manage'],
     ['Roles & permissions', '/settings/roles', $counts['roles'] . ' roles.', 'lock', 'roles_manage'],
     ['Playbooks', '/playbooks', $counts['playbooks'] . ' of 8 active.', 'book', 'view_automations'],
+    ['Backups & export', '/settings/backups', $backupLabel, 'database', 'backup_manage'],
     ['System health', '/settings/health', 'Cron, the queue, extensions and HTTPS.', 'shield', 'settings'],
     ['Audit log', '/settings/audit', 'Who changed what, and when.', 'list', 'view_logs'],
 ];

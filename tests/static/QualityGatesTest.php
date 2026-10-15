@@ -172,10 +172,23 @@ Harness::test('the route table parses and is populated', function (): void {
 });
 
 Harness::test('every mutating route is CSRF-protected', function (): void {
+    // Exemptions are listed here with their reason, so a NEW un-protected
+    // route still fails this test. Adding to this list should feel costly.
+    $exempt = [
+        // RFC 8058 one-click unsubscribe: the recipient's mail provider
+        // submits this on their behalf, so no session token can exist. The
+        // signed token in the path is the authorisation.
+        'POST /u/{token:[A-Za-z0-9_-]+}',
+    ];
+
     $offenders = [];
 
     foreach (parsed_routes() as $route) {
         if (!in_array($route['method'], ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+            continue;
+        }
+
+        if (in_array($route['method'] . ' ' . $route['path'], $exempt, true)) {
             continue;
         }
 
@@ -540,7 +553,12 @@ Harness::test('every class file declares strict types', function (): void {
 });
 
 Harness::test('the protected directories carry a deny-all .htaccess', function (): void {
-    foreach (['app', 'config', 'storage'] as $directory) {
+    // storage/backups gets its own, shipped rather than created on first use:
+    // a dump of every guest's name, email and phone is the single most
+    // sensitive file this application writes, and the window between "the
+    // directory exists" and "the first backup created the guard" should not
+    // exist at all.
+    foreach (['app', 'config', 'storage', 'storage/backups'] as $directory) {
         $file = CC_ROOT . '/' . $directory . '/.htaccess';
 
         Assert::true(is_file($file), $directory . '/.htaccess must exist');
