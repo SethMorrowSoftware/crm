@@ -144,7 +144,7 @@ by accident.
 
 ### Tests and CI
 
-- **412 tests, no test framework** — the same no-dependency constraint as the
+- **413 tests, no test framework** — the same no-dependency constraint as the
   application, so CI needs nothing but PHP.
 - Four layers: unit, static analysis over the source itself, integration
   against a real MySQL, and end-to-end over real HTTP against the real front
@@ -221,7 +221,7 @@ Fixed here:
   Mode address and mistyping the From address in one submit put the old address
   back, looking saved.
 
-The suite grew from 372 to **412 tests** to cover them. Each fix was
+The suite grew from 372 to **413 tests** to cover them. Each fix was
 mutation-checked: the password-reset suite, for instance, fails on three
 separate assertions when the token lookup is replaced with `LIMIT 1` — the
 mutation that previously left all 372 tests green.
@@ -338,6 +338,35 @@ security fixes.**
 
 Every fix above is mutation-checked: the mutation that the old test tolerated
 now fails it.
+
+### The test that was added for CI to answer, and the bug it found
+
+One of those nine fixes deliberately put an open question to CI rather than
+settling it by assumption: whether MySQL 5.7 reports a duplicate foreign-key
+constraint name with a code this release still tolerates. It does not, and the
+matrix said so within two minutes.
+
+**MySQL 5.7.44 answers `1022 Can't write; duplicate key in table '#sql-…'`** —
+the code this release had dropped. So on MySQL 5.7, a schema file that died
+after any of the shipped schema's nine `ALTER TABLE … ADD CONSTRAINT`
+statements had succeeded **could never be completed**: every retry threw,
+`Upgrade::run()` reported failure, and the upgrade was wedged where before this
+release it recovered. Fresh installs were unaffected, which is why nothing else
+noticed. MySQL 5.7 is still common on shared hosting, so this mattered.
+
+1022 is tolerated again, but ONLY for a statement that adds a constraint. On its
+own it means a duplicate VALUE, so a data-migration `INSERT` hitting a real
+conflict reports the same number — and swallowing that is exactly the failure
+the narrowing existed to prevent. Both directions are pinned by test and
+mutation-checked: tolerating 1022 broadly fails on the `INSERT` case, dropping
+it fails on the `ADD CONSTRAINT` case.
+
+The retry test now also asks the engine what it says and holds the classifier to
+that answer, instead of to a hardcoded list — so an engine that reports
+something new names the number itself rather than costing another round of
+detective work. And the comment above `ALREADY_EXISTS` no longer claims
+"1826 on MySQL 5.7+ and MariaDB", which was wrong about both: MEASURED, 5.7.44
+gives 1022 and MariaDB 10.11 gives 1005 + errno 121.
 
 One confirmed finding was deliberately **not** fixed here: `users_manage`
 allows a non-owner holding it to set the Owner's password, which defeats the

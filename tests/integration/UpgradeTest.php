@@ -208,6 +208,69 @@ Harness::test('only genuine already-exists codes are tolerated', function (): vo
     }
 });
 
+Harness::test('1022 is already-applied only for a statement that adds a constraint', function (): void {
+    // MEASURED on CI, 2026-10-15: MySQL 5.7.44 answers a duplicate
+    // `ALTER TABLE … ADD CONSTRAINT` foreign-key name with
+    // "1022 Can't write; duplicate key in table '#sql-1_b'". This release had
+    // dropped 1022 outright, so on 5.7 a schema file that died after one of
+    // the shipped schema's nine ADD CONSTRAINT statements could never be
+    // completed: every retry threw and the upgrade was wedged, where before it
+    // recovered. The matrix found it because the retry test above finally
+    // exercises the tolerance.
+    //
+    // It is back for that statement shape ALONE. On its own, 1022 is a
+    // duplicate VALUE — a data conflict — so a data-migration INSERT that hits
+    // a real one reports the same number, and swallowing that would record a
+    // half-applied file as complete. That is the precise failure this
+    // release's narrowing existed to stop, so the narrow form is the whole
+    // point and this test is what keeps it narrow.
+    $duplicate = "Can't write; duplicate key in table '#sql-1_b'";
+
+    $addsOne = [
+        'ALTER TABLE `cc_contacts` ADD CONSTRAINT `cc_fk_contacts_owner` '
+            . 'FOREIGN KEY (`owner_id`) REFERENCES `cc_users` (`id`)',
+        "ALTER TABLE `cc_deals`\n  ADD CONSTRAINT `cc_fk_deals_contact`\n  FOREIGN KEY (`contact_id`)",
+        'alter table `cc_x` add foreign key (`a`) references `cc_y` (`id`)',
+    ];
+
+    foreach ($addsOne as $sql) {
+        Assert::true(
+            Migration::meansAlreadyApplied(1022, $duplicate, $sql),
+            'a retry must get past a constraint it already added: ' . $sql
+        );
+    }
+
+    $doesNot = [
+        // The dangerous one: real data conflict during a migration.
+        'INSERT INTO `cc_contacts` (`email`) SELECT `email` FROM `cc_legacy_contacts`',
+        'UPDATE `cc_contacts` SET `email` = LOWER(`email`)',
+        // An added index reports 1061, which is tolerated on its own merits —
+        // 1022 from one of these is not something to guess about.
+        'ALTER TABLE `cc_contacts` ADD UNIQUE KEY `uq_contacts_email` (`email`)',
+        'CREATE TABLE `cc_x` (`id` BIGINT UNSIGNED NOT NULL)',
+        // No statement context at all must never tolerate it.
+        '',
+    ];
+
+    foreach ($doesNot as $sql) {
+        Assert::false(
+            Migration::meansAlreadyApplied(1022, $duplicate, $sql),
+            '1022 must stay fatal here, or a data conflict is recorded as success: '
+                . ($sql === '' ? '(no statement)' : $sql)
+        );
+    }
+
+    // And 5.7's MALFORMED-fk code is still fatal, even on an ADD CONSTRAINT.
+    Assert::false(
+        Migration::meansAlreadyApplied(
+            1215,
+            'Cannot add foreign key constraint',
+            'ALTER TABLE `cc_x` ADD CONSTRAINT `cc_fk_x` FOREIGN KEY (`a`) REFERENCES `cc_y` (`id`)'
+        ),
+        "1215 is MySQL 5.7 refusing to BUILD the key, not finding it already there"
+    );
+});
+
 Harness::test('a malformed foreign key fails the upgrade instead of being recorded', function (): void {
     // MEASURED as the review reported it: contact_id INT UNSIGNED against
     // contacts.id BIGINT UNSIGNED is an ordinary slip, MySQL rejects the whole
@@ -324,11 +387,40 @@ Harness::test('a retry tolerates a foreign key the first attempt already added',
             static function (string $name) use ($pdo): void {
                 // The state a retry starts from: this statement already
                 // succeeded, and the file died somewhere after it.
-                $pdo->exec(
-                    'ALTER TABLE `cc_upgrade_fk_child` '
+                $add = 'ALTER TABLE `cc_upgrade_fk_child` '
                     . 'ADD CONSTRAINT `cc_fk_upgrade_probe_parent` '
                     . 'FOREIGN KEY (`parent_id`) REFERENCES `cc_upgrade_fk_parent` (`id`) '
-                    . 'ON DELETE SET NULL'
+                    . 'ON DELETE SET NULL';
+
+                $pdo->exec($add);
+
+                // Ask THIS engine what it says, and hold the classifier to that
+                // answer rather than to a hardcoded list. 5.7's code (1022) had
+                // to be learned from a CI failure; this way an engine that
+                // answers something new reports the number itself.
+                $engine = (string) DB::value('SELECT VERSION()');
+                $observed = null;
+
+                try {
+                    $pdo->exec($add);
+                } catch (Throwable $e) {
+                    $observed = $e;
+                }
+
+                Assert::notNull(
+                    $observed,
+                    'adding the same constraint twice should fail on ' . $engine
+                        . '; if it silently succeeds, this test is not testing anything'
+                );
+
+                $code = (int) (($observed instanceof PDOException ? $observed->errorInfo[1] : null) ?? 0);
+
+                Assert::true(
+                    Migration::meansAlreadyApplied($code, $observed->getMessage(), $add),
+                    'this engine reports ' . $code . ' for a duplicate constraint name and the '
+                        . 'runner does not tolerate it, so a half-applied release can never be '
+                        . 'completed here. Engine: ' . $engine . '. Message: '
+                        . $observed->getMessage()
                 );
 
                 // Caught, because an untolerated code THROWS here — and a bare

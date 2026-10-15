@@ -37,12 +37,25 @@ final class Migration
      *
      * 1022 went for the same reason: it is "duplicate key" in the sense of a
      * duplicate VALUE, which is a data conflict, not an object that already
-     * exists.
+     * exists. It is back, but ONLY for a statement that adds a constraint —
+     * see meansAlreadyApplied() — because dropping it outright broke retries
+     * on MySQL 5.7.
      *
-     * A genuinely duplicate constraint name reports 1826 on MySQL 5.7+ and
-     * MariaDB, which is still tolerated. For the older-MySQL case 1005 is
-     * accepted only when the driver message carries errno 121 — the
-     * duplicate-key-name variant — and never errno 150.
+     * WHAT EACH ENGINE ACTUALLY REPORTS for a duplicate foreign-key constraint
+     * name, MEASURED rather than assumed — this comment previously claimed
+     * "1826 on MySQL 5.7+ and MariaDB" and was wrong about both:
+     *
+     *   MySQL 5.7.44     ALTER … ADD CONSTRAINT  →  1022 "Can't write;
+     *                    duplicate key in table '#sql-…'"   (CI, 2026-10-15)
+     *   MariaDB 10.11    ALTER … ADD CONSTRAINT  →  1005 + errno 121
+     *                    (and the same for CREATE TABLE)    (measured locally)
+     *   MySQL 8.0        tolerated — it passes the retry test, but WHICH of the
+     *                    codes below it uses was not measured. Do not write
+     *                    "1826" here as though it were established.
+     *
+     * The malformed-FK case differs again: 1005 + errno 150 on MariaDB, and
+     * 1215 "Cannot add foreign key constraint" on MySQL 5.7. Neither is
+     * tolerated, which is the point.
      */
     private const ALREADY_EXISTS = [
         1050, // table exists
@@ -58,6 +71,15 @@ final class Migration
      *   150 — the foreign key is malformed. A real error; must throw.
      */
     private const DUPLICATE_CONSTRAINT_ERRNO = 121;
+
+    /**
+     * MySQL 5.7's answer to a duplicate constraint name, and ONLY trusted when
+     * the statement is adding one. On its own it means a duplicate VALUE, so a
+     * data-migration INSERT hitting a real conflict reports the same number —
+     * and swallowing that would record a half-applied file as complete, which
+     * is the exact failure the narrowing in this release set out to stop.
+     */
+    private const DUPLICATE_ON_ADD = 1022;
 
     private string $schemaPath;
 
@@ -151,7 +173,7 @@ final class Migration
             } catch (PDOException $e) {
                 $code = (int) ($e->errorInfo[1] ?? 0);
 
-                if ($this->meansAlreadyApplied($code, $e->getMessage())) {
+                if ($this->meansAlreadyApplied($code, $e->getMessage(), $statement)) {
                     // Expected when re-running a partially applied file.
                     $this->messages[] = sprintf('%s: statement %d already applied.', $name, $index + 1);
                     continue;
@@ -188,9 +210,16 @@ final class Migration
      * Public so the behaviour can be tested directly: deciding it wrongly is
      * how a half-applied release gets recorded as complete.
      */
-    public static function meansAlreadyApplied(int $code, string $message): bool
+    public static function meansAlreadyApplied(int $code, string $message, string $sql = ''): bool
     {
         if (in_array($code, self::ALREADY_EXISTS, true)) {
+            return true;
+        }
+
+        // 1022 is "already there" ONLY when the statement adds a constraint.
+        // Without the statement there is no way to tell it from a data
+        // conflict, so no $sql means no tolerance.
+        if ($code === self::DUPLICATE_ON_ADD && self::addsConstraint($sql)) {
             return true;
         }
 
@@ -198,6 +227,19 @@ final class Migration
         return $code === 1005
             && preg_match('/errno:?\s*(\d+)/i', $message, $m) === 1
             && (int) $m[1] === self::DUPLICATE_CONSTRAINT_ERRNO;
+    }
+
+    /**
+     * Does this statement ADD a named constraint?
+     *
+     * Deliberately narrow: only ADD CONSTRAINT and ADD FOREIGN KEY, which are
+     * the nine non-idempotent statements in the shipped schema. An added
+     * UNIQUE/INDEX/KEY reports 1061, which is tolerated on its own merits, and
+     * anything that writes DATA must never reach this.
+     */
+    private static function addsConstraint(string $sql): bool
+    {
+        return preg_match('/\bADD\s+(?:CONSTRAINT\b|FOREIGN\s+KEY\b)/i', $sql) === 1;
     }
 
     /**
