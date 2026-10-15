@@ -40,7 +40,7 @@ handoffs:
 | 8 | Hardening: security review, accessibility audit, load test, backup/restore | |
 
 Phase 1 is verified end to end against real MySQL 8.0, MariaDB 10.11 and MySQL
-5.7: **215 tests** plus a full installer walk-through. See [docs/TESTING.md](docs/TESTING.md).
+5.7: **364 tests** plus a full installer walk-through. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Install
 
@@ -51,6 +51,10 @@ Phase 1 is verified end to end against real MySQL 8.0, MariaDB 10.11 and MySQL
 5. Add the SPF/DKIM/DMARC records it gives you — or just click **Repair** in
    **cPanel → Email Deliverability**.
 6. Delete the `install/` folder.
+
+The long version, written for somebody who has only ever used cPanel to upload
+files, is [docs/INSTALL.md](docs/INSTALL.md) — including backups, restoring,
+and what to do when nobody can sign in.
 
 Requirements: PHP 8.1+, MySQL 5.7.8+/MariaDB 10.3+, and the extensions
 `pdo_mysql`, `mbstring`, `json`, `openssl`, `curl`, `fileinfo` — all standard.
@@ -95,8 +99,15 @@ today. [Spec §3.8](docs/SPEC.md) draws the line precisely.
 
 ## Documentation
 
+- [docs/INSTALL.md](docs/INSTALL.md) — installing, upgrading, backups, recovery
 - [docs/SPEC.md](docs/SPEC.md) — product and technical specification
+- [docs/PRIVACY.md](docs/PRIVACY.md) — what data is held, consent, retention,
+  and what the software refuses to do
+- [docs/API.md](docs/API.md) — the machine interfaces that exist today, and
+  the planned REST API
 - [docs/TESTING.md](docs/TESTING.md) — the test suite and CI
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) — what changed, and the bugs the
+  tests found
 
 ## Development
 
