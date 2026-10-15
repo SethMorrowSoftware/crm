@@ -228,7 +228,17 @@ Harness::test('a tampered token does not unsubscribe anybody', function (): void
     ]);
 
     $token = public_token('http-safe@example.test', $contactId);
-    $tampered = substr($token, 0, -2) . 'ZZ';
+
+    // Flip a bit of the SIGNATURE and re-encode, rather than mutating base64
+    // characters: the tail of a base64 string carries bits that no byte uses,
+    // so some character mutations decode identically and verify. Doing it that
+    // way made this test pass or fail depending on the contact's
+    // auto-increment id — green locally, red on one CI job in five.
+    $raw = (string) base64_decode(strtr($token, '-_', '+/'), true);
+    $raw[strlen($raw) - 1] = $raw[strlen($raw) - 1] === 'a' ? 'b' : 'a';
+    $tampered = rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
+
+    Assert::notSame($token, $tampered, 'the tamper must actually change the token');
 
     $response = public_request('/u/' . $tampered);
 

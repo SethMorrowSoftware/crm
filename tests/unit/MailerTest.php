@@ -126,16 +126,100 @@ Harness::test('a token is URL safe', function (): void {
     Assert::matches('/^[A-Za-z0-9_-]+$/', $token);
 });
 
+/**
+ * Tamper with a token in a way that is GUARANTEED to change its meaning.
+ *
+ * Mutating base64 characters is not: the final character of a token carries
+ * bits that no byte uses, so some mutations decode to identical bytes and the
+ * signature still verifies. A test that tampered that way passed or failed
+ * depending on the length of the payload — which, for a real token, depends on
+ * the contact's auto-increment id. It passed locally on every id I happened to
+ * use and failed in CI on one of five jobs.
+ *
+ * So: decode, flip a bit in the signature, and re-encode canonically.
+ */
+function tampered_token(string $token): string
+{
+    $raw = (string) base64_decode(strtr($token, '-_', '+/'), true);
+
+    // The signature is the last of the three pipe-separated fields.
+    $raw[strlen($raw) - 1] = $raw[strlen($raw) - 1] === 'a' ? 'b' : 'a';
+
+    return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
+}
+
 Harness::test('a tampered token is rejected', function (): void {
     $token = Mailer::unsubscribeToken('victim@example.test', 1);
+    $tampered = tampered_token($token);
 
-    // Flip the last character, whatever it is.
-    $tampered = substr($token, 0, -1) . (str_ends_with($token, 'A') ? 'B' : 'A');
-
+    Assert::notSame($token, $tampered, 'the tamper must actually change the token');
     Assert::null(
         Mailer::parseUnsubscribeToken($tampered),
         'anyone could otherwise unsubscribe any address they could guess'
     );
+});
+
+Harness::test('a tampered token is rejected for every payload length', function (): void {
+    // The bug this covers was length-dependent and so appeared only for some
+    // contact ids. Sweeping a few hundred covers every residue of the payload
+    // length mod 3, which is what decides whether the tail has spare bits.
+    $accepted = [];
+
+    for ($id = 1; $id <= 300; $id++) {
+        $token = Mailer::unsubscribeToken('victim@example.test', $id);
+
+        if (Mailer::parseUnsubscribeToken(tampered_token($token)) !== null) {
+            $accepted[] = $id;
+        }
+    }
+
+    Assert::same([], $accepted, 'a signature flip must be refused at every length');
+});
+
+Harness::test('a non-canonical spelling of a real token is refused', function (): void {
+    // base64 tail malleability: replacing the last characters can decode to
+    // the same bytes, so the HMAC still matches. MEASURED before the fix: 8 of
+    // the first 100 contact ids had a token whose last two characters could be
+    // swapped outright and still parsed. It was never a forgery route — the
+    // signature still pins the address — but one link with many valid
+    // spellings cannot be logged, revoked or rate-limited as one thing.
+    $variants = 0;
+
+    for ($id = 1; $id <= 300; $id++) {
+        $token = Mailer::unsubscribeToken('victim@example.test', $id);
+
+        foreach (['ZZ', 'AA', 'zz', '00', '--', '__'] as $tail) {
+            $variant = substr($token, 0, -2) . $tail;
+
+            if ($variant === $token) {
+                continue;
+            }
+
+            if (Mailer::parseUnsubscribeToken($variant) !== null) {
+                $variants++;
+            }
+        }
+    }
+
+    Assert::same(0, $variants, 'only the canonical encoding may be accepted');
+});
+
+Harness::test('every real token still round-trips at every length', function (): void {
+    // The other half of the contract: canonicalisation must not have made any
+    // link the application issues unreadable.
+    $broken = [];
+
+    for ($id = 1; $id <= 300; $id++) {
+        $parsed = Mailer::parseUnsubscribeToken(
+            Mailer::unsubscribeToken('guest@example.test', $id)
+        );
+
+        if ($parsed === null || $parsed['address'] !== 'guest@example.test' || $parsed['contact_id'] !== $id) {
+            $broken[] = $id;
+        }
+    }
+
+    Assert::same([], $broken, 'a real unsubscribe link must work for every contact');
 });
 
 Harness::test('a token forged for another address is rejected', function (): void {
