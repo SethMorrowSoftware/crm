@@ -173,6 +173,17 @@ the actor's name, the table and the row count.
 That log is the difference between a privacy incident you can describe and one
 you cannot.
 
+A separation like that only holds if the account holding it cannot be taken
+over by somebody who does not. It could be: a non-owner holding `users_manage`
+was able to set the **Owner's** password — leaving the Owner's role untouched,
+so the check on which roles you may grant never fired — and then sign in as
+them, inheriting `backup_manage` and everything else. That is fixed: you may
+only edit, deactivate or delete an account whose role is a subset of your own
+permissions, and only an Owner may act on the Owner. The rule is enforced in
+`Acl::mayManageUser()` and tested end to end over HTTP, including the check
+that a manager can still reset a front-desk password — a fix that broke
+ordinary support would be worse than the hole.
+
 ---
 
 ## 5. Retention

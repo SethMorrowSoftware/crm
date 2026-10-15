@@ -144,7 +144,7 @@ by accident.
 
 ### Tests and CI
 
-- **413 tests, no test framework** — the same no-dependency constraint as the
+- **418 tests, no test framework** — the same no-dependency constraint as the
   application, so CI needs nothing but PHP.
 - Four layers: unit, static analysis over the source itself, integration
   against a real MySQL, and end-to-end over real HTTP against the real front
@@ -221,7 +221,7 @@ Fixed here:
   Mode address and mistyping the From address in one submit put the old address
   back, looking saved.
 
-The suite grew from 372 to **413 tests** to cover them. Each fix was
+The suite grew from 372 to **418 tests** to cover them. Each fix was
 mutation-checked: the password-reset suite, for instance, fails on three
 separate assertions when the token lookup is replaced with `LIMIT 1` — the
 mutation that previously left all 372 tests green.
@@ -368,12 +368,29 @@ detective work. And the comment above `ALREADY_EXISTS` no longer claims
 "1826 on MySQL 5.7+ and MariaDB", which was wrong about both: MEASURED, 5.7.44
 gives 1022 and MariaDB 10.11 gives 1005 + errno 121.
 
-One confirmed finding was deliberately **not** fixed here: `users_manage`
-allows a non-owner holding it to set the Owner's password, which defeats the
-`backup_manage` separation this release's own PRIVACY.md describes. It is real,
-but it lives in Phase 1's user-management code that this release does not
-touch, and changing the authorisation model deserves its own review rather than
-being folded into a release about email and backups.
+**The one finding deferred from this release is now fixed.** A non-owner
+holding `users_manage` could set the **Owner's** password and sign in as them.
+The role system checked which role you may GRANT and never checked whose
+account you may ACT ON, so leaving the Owner's role untouched bypassed it
+entirely — and taking over the Owner inherits `backup_manage`, which is the
+permission `docs/PRIVACY.md` describes as the line between looking up one guest
+and downloading all of them.
+
+`Acl::mayManageUser()` now decides it: you may edit, deactivate or delete only
+an account whose role is a subset of your own permissions, and only an Owner
+may act on the Owner — checked separately from the subset rule, because a
+custom role carrying every permission in the catalogue would pass a subset test
+and "holds every permission" is still not "is the Owner". The guard is applied
+to the edit form, the update and the delete.
+
+Proven rather than asserted: with the rule reverted, the end-to-end test
+watches the Owner's password hash actually change under a general manager's
+POST. Two details were caught while writing it, both of the kind this release
+has been full of — the delete test initially passed with the fix reverted,
+because the *last-owner* guard was refusing the delete rather than the new
+rule, so it now seeds a second owner to get that guard out of the way; and the
+suite checks that a general manager can **still** reset a front-desk password,
+since a fix that broke ordinary support would be worse than the hole.
 
 ### Fixed during development
 

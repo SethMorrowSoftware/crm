@@ -362,6 +362,9 @@ function seed_http_fixtures(): void
     $accounts = [
         ['owner@test.invalid', 'Owner', 'owner', 'owner-test-passphrase-9'],
         ['desk@test.invalid',  'Front Desk Dana', 'front_desk', 'desk-test-passphrase-9'],
+        // Holds users_manage but not every permission — the profile the
+        // privilege-escalation tests need, and the one a real venue has.
+        ['gm@test.invalid',    'General Manager Gail', 'general_manager', 'gm-test-passphrase-9'],
     ];
 
     foreach ($accounts as [$email, $name, $roleSlug, $password]) {
