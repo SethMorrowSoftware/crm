@@ -424,7 +424,11 @@ final class Request
             $path = '/';
         }
 
-        return $path === '' ? '/' : rtrim($path, '/') ?: '/';
+        // Trailing slashes are stripped so '/contacts' and '/contacts/' are the
+        // same route; the root path survives as '/'.
+        $trimmed = rtrim($path, '/');
+
+        return $trimmed === '' ? '/' : $trimmed;
     }
 
     /**

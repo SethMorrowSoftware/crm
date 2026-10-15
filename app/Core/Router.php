@@ -152,36 +152,21 @@ final class Router
     {
         $params = [];
 
+        // Escape the literal parts of the path first, then substitute the
+        // placeholders. preg_quote escapes the braces too, so the second
+        // pattern matches their escaped form (\{ … \}) and un-escapes any
+        // constraint it finds inside.
         $regex = (string) preg_replace_callback(
-            '/\{([a-zA-Z_][a-zA-Z0-9_]*)(?::([^}]+))?\}/',
+            '/\\\\\{([a-zA-Z_][a-zA-Z0-9_]*)(?::(.+?))?\\\\\}/',
             static function (array $m) use (&$params): string {
                 $params[] = $m[1];
-                $constraint = $m[2] ?? '[^/]+';
+
+                $constraint = ($m[2] ?? '') !== '' ? stripslashes($m[2]) : '[^/]+';
 
                 return '(' . $constraint . ')';
             },
-            // Escape everything that is not a placeholder first.
             preg_quote($path, '#')
         );
-
-        // preg_quote escaped the braces and backslashes inside our placeholders,
-        // so run the replacement against the quoted string using the quoted form.
-        if (str_contains($path, '{')) {
-            $params = [];
-            $regex  = (string) preg_replace_callback(
-                '/\\\\\{([a-zA-Z_][a-zA-Z0-9_]*)(?::(.+?))?\\\\\}/',
-                static function (array $m) use (&$params): string {
-                    $params[] = $m[1];
-                    // Un-escape the constraint, which preg_quote mangled.
-                    $constraint = isset($m[2]) && $m[2] !== ''
-                        ? stripslashes($m[2])
-                        : '[^/]+';
-
-                    return '(' . $constraint . ')';
-                },
-                preg_quote($path, '#')
-            );
-        }
 
         return ['#^' . $regex . '$#', $params];
     }
