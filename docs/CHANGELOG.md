@@ -144,7 +144,7 @@ by accident.
 
 ### Tests and CI
 
-- **407 tests, no test framework** — the same no-dependency constraint as the
+- **409 tests, no test framework** — the same no-dependency constraint as the
   application, so CI needs nothing but PHP.
 - Four layers: unit, static analysis over the source itself, integration
   against a real MySQL, and end-to-end over real HTTP against the real front
@@ -221,7 +221,7 @@ Fixed here:
   Mode address and mistyping the From address in one submit put the old address
   back, looking saved.
 
-The suite grew from 372 to **407 tests** to cover them. Each fix was
+The suite grew from 372 to **409 tests** to cover them. Each fix was
 mutation-checked: the password-reset suite, for instance, fails on three
 separate assertions when the token lookup is replaced with `LIMIT 1` — the
 mutation that previously left all 372 tests green.
@@ -248,22 +248,37 @@ success. Calls six onwards were answered 429, no token was ever minted, and the
 two tests that need a real minted token failed. A developer's machine without
 APCu passed every time.
 
-Three things came out of it, because the environment-dependent bug was the
-smaller half of the problem:
+Clearing that counter from the test process was the obvious fix and it was the
+wrong one — twice. `Cache::flush()` was replaced with a direct unlink of
+`storage/cache/*.cache`, the server was pinned to the file backend, and CI came
+back red with the identical failure: nothing running in the test process is
+guaranteed to reach a counter the *server* process owns. The working answer
+removes the dependency instead. **Each `TestBrowser` presents its own client
+address**, via `X-Forwarded-For` and a `trust_proxy` that is true only in the
+throwaway config the runner writes; a browser keeps one address for its life, so
+a suite avoids the limiter by taking a fresh browser and a test trips it
+deliberately by reusing one.
 
-- `tests/run.php` starts the test server with `apc.enable_cli=0` and writes an
-  explicit `storage_path`, so both processes provably share one cache; the suite
-  now unlinks the counter files directly rather than trusting an API that can
-  succeed against the wrong store.
+Four things came out of it, and the environment-dependent bug was the smallest:
+
+- **The rate limiter had no test at all**, while two comments in the suite said
+  it was "exercised by the test that deliberately trips it". `http/smoke` now
+  covers it for real: that it refuses, that it sends `Retry-After`, and that it
+  is per-address rather than global — the property every other HTTP suite
+  depends on.
 - The failure said only **"Expected a value, got null"** — one sentence for a
   path containing eight mail-refusal reasons, a rate limiter and a redirect. It
-  now reports the HTTP status, and whether a `password_resets` row exists, which
-  separates "never minted" from "minted but not mailed" in the message itself.
+  now reports the HTTP status and whether a `password_resets` row exists, which
+  separates "never minted" from "minted but not mailed". That diagnostic named
+  the cause on its first run.
 - CI's failure step tailed 120 log lines, which ended *before* the http suites
-  had run, so the log explaining it was truncated away. It now prints the whole
-  application log and every server request line with its status code — a 429 was
-  invisible in CI output, and the rate limiter logs at WARNING while the test
-  server runs at `log_level=error`.
+  had run, so the log explaining it was truncated away. It prints the whole
+  application log and every server request line with its status code now — a
+  429 was invisible in CI output, because the limiter logs at WARNING while the
+  test server runs at `log_level=error`.
+- The test server is started with `apc.enable_cli=0` and an explicit
+  `storage_path`, so its cache backend cannot quietly differ between a
+  developer's machine and CI.
 
 The pattern worth keeping: **a test that reaches past the application to reset
 its state is only as reliable as its assumption about where that state lives.**

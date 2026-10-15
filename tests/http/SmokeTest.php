@@ -617,3 +617,66 @@ Harness::test('no page leaks a filesystem path or credential', function () use (
         Assert::notContains('app_key', $body, $path);
     }
 });
+
+// ------------------------------------------------------------- rate limiting
+
+Harness::test('a route behind the throttle answers 429 once the limit is passed', function (): void {
+    // Nothing covered the rate limiter until this test, despite two comments in
+    // the suite claiming otherwise. It is a security control — the only thing
+    // standing between a scripted client and unlimited password-reset mail or
+    // login guesses — and the suites had quietly been arranging never to meet
+    // it, by clearing its counters.
+    //
+    // ONE browser, so every request carries the same client address: the limit
+    // is per IP, and the other suites rely on that by taking a fresh browser
+    // each time. A unique address of its own keeps this test independent of
+    // whatever has already run.
+    $browser = new TestBrowser(getenv('CC_TEST_BASE_URL') ?: '', 'throttle', '198.51.100.251');
+
+    // /forgot-password is throttle:5,15 and answers an unknown address exactly
+    // as it answers a known one, so this needs no fixture.
+    $statuses = [];
+
+    for ($attempt = 1; $attempt <= 7; $attempt++) {
+        $statuses[] = $browser->postWithToken('/forgot-password', '/forgot-password', [
+            'email' => 'throttle-probe@example.test',
+        ])['status'];
+    }
+
+    $limited = array_filter($statuses, static fn (int $status): bool => $status === 429);
+
+    Assert::notEmpty(
+        $limited,
+        'seven POSTs against a 5-per-15-minute limit must be refused at some point; got '
+            . implode(', ', $statuses)
+    );
+
+    // The first few must NOT be refused, or the limiter is simply rejecting
+    // everything and the test above would pass on a broken route.
+    Assert::notSame(429, $statuses[0], 'the first request must be allowed: ' . implode(', ', $statuses));
+
+    $response = $browser->postWithToken('/forgot-password', '/forgot-password', [
+        'email' => 'throttle-probe@example.test',
+    ]);
+
+    Assert::same(429, $response['status'], 'still limited');
+    Assert::matches('/Retry-After:\s*\d+/i', $response['headers'], 'a 429 must say when to come back');
+});
+
+Harness::test('the throttle is per client address, not global', function (): void {
+    // The property every other HTTP suite depends on. If this ever stops being
+    // true, those suites start failing in the middle with 429s that look like
+    // the feature under test is broken — which is exactly what happened on CI
+    // before each browser was given its own address.
+    $fresh = new TestBrowser(getenv('CC_TEST_BASE_URL') ?: '', 'throttle-other', '198.51.100.252');
+
+    $response = $fresh->postWithToken('/forgot-password', '/forgot-password', [
+        'email' => 'throttle-probe@example.test',
+    ]);
+
+    Assert::notSame(
+        429,
+        $response['status'],
+        'a different address must not inherit the previous browser\'s counter'
+    );
+});

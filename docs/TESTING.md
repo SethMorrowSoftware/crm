@@ -119,21 +119,33 @@ action behind a GET link, and font sizes are relative so a browser's own text
 setting still works. The name detector is itself tested against fixtures —
 a static gate that cannot fail reads as coverage without being any.
 
-### Resetting state the server owns
+### Don't reset state the server owns — avoid needing to
 
-Two layers run in two processes: the tests run here, the front controller runs
-in the test server. Anything a test resets by reaching past HTTP — a rate-limit
-counter, a cache entry — has to be stored where *both* processes can see it, or
-the reset silently applies to the wrong copy and succeeds.
+Two layers run in two processes: the tests here, and the front controller inside
+the test server. A test cannot reliably reset state the *server* owns. The
+rate limiter proved it twice.
 
-So `tests/run.php` starts the server with `apc.enable_cli=0` and an explicit
-`storage_path`, pinning it to the file cache, and the suites clear those files
-directly instead of calling `Cache::flush()` — which clears whichever backend
-the calling process happens to resolve. This is not hypothetical tidiness: with
-APCu present only on CI, the password-reset suite passed locally and failed on
-all five CI configurations, because the flush cleared a per-process segment the
-server could not see and the rate limiter answered 429 from the sixth request
-on.
+Several routes are rate limited per IP, and the password-reset suite makes ten
+POSTs against a 5-per-15-minute limit. It first cleared the counter with
+`Cache::flush()`, then by unlinking `storage/cache/*.cache`. Both passed locally
+and both left CI answering **429 from the sixth request on**, failing two tests
+on all five configurations: the counter lives in whichever cache backend the
+server process resolved, and neither call is guaranteed to reach it.
+
+The working answer removes the dependency rather than strengthening it: **each
+`TestBrowser` presents its own client address** via `X-Forwarded-For`, which the
+throwaway test config trusts (`trust_proxy` is true there and nowhere else).
+A browser keeps one address for its life, so a suite that wants to avoid the
+limiter takes a fresh browser, and a test that wants to *trip* it reuses one.
+
+Two consequences worth knowing:
+
+- `http/smoke` now covers the limiter properly — that it refuses, that it sends
+  `Retry-After`, and that it is per-address rather than global. Nothing covered
+  it before, while two comments in the suite claimed something did.
+- The server is still started with `apc.enable_cli=0` and an explicit
+  `storage_path`, so its cache backend cannot differ between a developer's
+  machine and CI. That is about reproducibility, not about the limiter.
 
 ### `tests/integration` — against a real database
 

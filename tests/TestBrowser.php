@@ -19,10 +19,42 @@ final class TestBrowser
 {
     private string $jar;
 
-    public function __construct(private string $baseUrl, string $name)
+    private string $clientIp;
+
+    private static int $browsers = 0;
+
+    /**
+     * Each browser gets its own client address, sent as X-Forwarded-For, which
+     * the throwaway test config tells the server to trust.
+     *
+     * The routes that matter are rate limited per IP, and every request in
+     * these suites otherwise arrives from 127.0.0.1 — so a suite making more
+     * than a handful of POSTs to one route was answered 429 part way through,
+     * and read as the feature being broken rather than as the limiter working.
+     * Clearing the counter between requests was tried first and is not
+     * reliable: it lives in whichever cache backend the SERVER process
+     * resolved, and a test running in this process cannot be sure of reaching
+     * it. Giving each browser its own address needs no such assumption.
+     *
+     * A browser keeps ONE address for its lifetime, deliberately: a test that
+     * wants the limiter to trip reuses a browser (or passes $clientIp), and one
+     * that does not want to fight it takes a fresh browser.
+     *
+     * 198.51.100.0/24 is TEST-NET-2, reserved for documentation, so these can
+     * never collide with anything real.
+     */
+    public function __construct(private string $baseUrl, string $name, ?string $clientIp = null)
     {
         $this->jar = sys_get_temp_dir() . '/cc-test-' . $name . '-' . getmypid() . '.cookies';
         @unlink($this->jar);
+
+        self::$browsers++;
+        $this->clientIp = $clientIp ?? '198.51.100.' . (self::$browsers % 254 + 1);
+    }
+
+    public function clientIp(): string
+    {
+        return $this->clientIp;
     }
 
     public function __destruct()
@@ -50,6 +82,7 @@ final class TestBrowser
             CURLOPT_FOLLOWLOCATION => $follow,
             CURLOPT_TIMEOUT        => 20,
             CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_HTTPHEADER     => ['X-Forwarded-For: ' . $this->clientIp],
         ];
 
         if ($post !== null) {

@@ -246,7 +246,12 @@ function start_test_server(): ?array
         . "        'cookie_secure'    => false,\n"
         . "        'cookie_samesite'  => 'Lax',\n"
         . "    ],\n"
-        . "    'trust_proxy'  => false,\n"
+        // True only here, in a throwaway config for a loopback-only server, so
+        // each TestBrowser can present its own client address and not have the
+        // whole suite rate limited as one IP (see TestBrowser's constructor).
+        // The installer and config.sample.php both write false, and nothing in
+        // the application changes behaviour on this flag except Request::ip().
+        . "    'trust_proxy'  => true,\n"
         . "    'cron_token'   => " . $export($cronToken) . ",\n"
         . "    'log_level'    => 'error',\n"
         . "];\n";
@@ -270,14 +275,13 @@ function start_test_server(): ?array
     // then signals the PHP server directly, instead of killing a wrapper and
     // leaving the server orphaned for the CI runner to complain about.
     //
-    // apc.enable_cli=0 pins the server to Cache's FILE backend, and it is not a
-    // detail. Several HTTP tests have to clear the server's rate-limit counters
-    // between requests, and a test running in this process can only do that if
-    // the store is on disk where both processes can see it: APCu is per-process
-    // shared memory, so a counter in the server's segment is unreachable from
-    // here. That is precisely how CI diverged from a developer's machine — a
-    // box without APCu passed, CI's PHP had it, and the reset-password suite
-    // went red on all five configurations while every local run was green.
+    // apc.enable_cli=0 pins the server to Cache's FILE backend, so the cache a
+    // run leaves behind is on disk where the next run's flush above can clear
+    // it, and so the backend does not silently differ between a developer's
+    // machine and CI. It is NOT what keeps the suites out of the rate limiter —
+    // that was tried and does not work, because nothing in this process can be
+    // sure of reaching a counter the server process owns. Each TestBrowser
+    // presents its own client address instead.
     $command = [
         PHP_BINARY,
         '-d', 'apc.enable_cli=0',
@@ -338,13 +342,18 @@ function seed_http_fixtures(): void
     // Clear the rate-limit counters before the HTTP suite.
     //
     // They live in the file cache, which — unlike the database and the config
-    // file — survives between runs. The login route allows twelve attempts per
-    // five minutes per IP, and every request in this suite comes from
-    // 127.0.0.1, so running the suite twice inside five minutes used to start
-    // failing with 429s that looked for all the world like broken
-    // authentication. Flushing here makes a run independent of the one before
-    // it; the throttle itself is still exercised, by the test that deliberately
-    // trips it.
+    // file — survives between runs, so running the suite twice inside the
+    // window used to start failing with 429s that looked for all the world
+    // like broken authentication. Flushing here makes a run independent of the
+    // one before it.
+    //
+    // It is NOT what keeps the suites from rate limiting themselves within a
+    // run: this clears whichever backend THIS process resolves, and the
+    // counters that matter belong to the server process. Each TestBrowser
+    // presents its own client address instead. (This comment used to claim the
+    // throttle was "still exercised by the test that deliberately trips it".
+    // There was no such test — nothing covered the limiter at all until
+    // http/smoke got one.)
     App\Core\Cache::flush();
 
     $accounts = [

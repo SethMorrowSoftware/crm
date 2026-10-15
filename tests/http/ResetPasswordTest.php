@@ -54,41 +54,22 @@ require_once CC_ROOT . '/tests/TestBrowser.php';
  * (The log driver records the body too, but the test runner configures the
  * server with log_level=error, so its notice is filtered out.)
  */
-/**
- * Clear the server's rate-limit counters.
- *
- * /forgot-password allows 5 POSTs per 15 minutes per IP, and every request in
- * this suite comes from 127.0.0.1 — so without clearing the counters, the sixth
- * call onwards is answered with a 429 and no token is minted at all.
- *
- * The files are unlinked directly rather than going through Cache::flush(),
- * because that call clears whichever backend THIS process resolves, and the
- * counter that matters belongs to the SERVER process. The two agree only on the
- * file backend, which tests/run.php pins the server to with apc.enable_cli=0;
- * with APCu in play, flush() clears a segment nobody else can see and reports
- * success. Cache::flush() is still called, for this process's own entries.
- *
- * The throttle itself remains exercised, by the smoke suite's own test for it.
- */
-function clear_rate_limits(): int
-{
-    $cleared = 0;
-
-    foreach (glob(CC_ROOT . '/storage/cache/*.cache') ?: [] as $file) {
-        if (@unlink($file)) {
-            $cleared++;
-        }
-    }
-
-    App\Core\Cache::flush();
-
-    return $cleared;
-}
-
 function request_reset(string $email): array
 {
-    clear_rate_limits();
-
+    // A FRESH browser per call, which is what keeps this suite out of the rate
+    // limiter: /forgot-password is throttle:5,15 and this suite makes ten
+    // requests, but the limit is per client address and each browser presents
+    // its own (see TestBrowser's constructor).
+    //
+    // Clearing the counter was tried first, twice, and is a dead end worth
+    // recording: the counter lives in whichever cache backend the SERVER
+    // process resolved, so neither Cache::flush() from here nor unlinking
+    // storage/cache/*.cache is guaranteed to reach it. Both passed locally and
+    // both left CI answering 429 from the sixth request on — a green suite on
+    // one machine and two failures on five CI configurations.
+    //
+    // The limiter is covered for real by the http/smoke tests that trip it
+    // deliberately, which is new: nothing covered it before.
     $browser = new TestBrowser(getenv('CC_TEST_BASE_URL') ?: '', 'reset-' . bin2hex(random_bytes(3)));
     $response = $browser->postWithToken('/forgot-password', '/forgot-password', ['email' => $email], true);
 
@@ -148,10 +129,12 @@ function mint_failure_detail(string $email, array $response): string
     return 'no reset link was recorded for ' . $email . '. '
         . 'POST /forgot-password returned ' . $status . '. '
         . ($status === 429
-            ? 'That is the rate limiter: the server\'s counter was not cleared, so the mint never ran. '
-                . 'clear_rate_limits() unlinks storage/cache/*.cache, which only reaches the server '
-                . 'when it is on the file backend — check that tests/run.php still starts it with '
-                . 'apc.enable_cli=0. '
+            ? 'That is the rate limiter, so the mint never ran. This suite avoids it by giving '
+                . 'each TestBrowser its own client address, which needs trust_proxy => true in '
+                . 'the config tests/run.php writes and an X-Forwarded-For on every request — '
+                . 'check both are still in place. Do NOT answer this by clearing the counter: '
+                . 'it lives in the server process\'s cache backend and this process cannot be '
+                . 'sure of reaching it. '
             : '')
         . ($minted
             ? 'A password_resets row EXISTS, so the token was minted and the MAIL was refused — '
