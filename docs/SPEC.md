@@ -1,6 +1,6 @@
 # Castle CRM — Product & Technical Specification
 
-**Version:** 1.0 (draft)
+**Version:** 1.1 (draft — revised after reviewing the CEplay codebase)
 **Date:** 2026-10-15
 **Owner:** The Castle Fun Center — Chester, NY
 **Status:** Approved for Phase 1 implementation
@@ -18,6 +18,16 @@ It is modelled on [FEC Playbook](https://fecplaybook.com/), a commercial SaaS pr
 family entertainment centers, but re-architected as a **single-tenant application that
 installs on an ordinary cPanel shared host** via a web-based installer, using only PHP,
 MySQL, and vanilla HTML/CSS/JS.
+
+Castle CRM is not the Castle's first in-house system. The venue already runs **CEplay**
+(`ceplay.thecastlefuncenter.com`), a PHP/SQLite application that automates the CenterEdge
+arcade card system and reports on the POS database. CEplay establishes the venue's real
+technical facts — CenterEdge Advantage as the POS, a read-only MSSQL reporting path, a
+deferred-value Castle Card, ~2 decades of card-ledger history — and a house style Castle
+CRM deliberately matches. §3.7 and §3.8 record those facts and draw the boundary between
+the two applications; getting that boundary right is the single most important design
+decision in this document, because almost everything Castle CRM wants to know about a
+guest already exists somewhere in CenterEdge.
 
 ### 1.1 Why this exists
 
@@ -154,10 +164,18 @@ it is a valid party *main activity*.
 ### 3.2 Admission & payment model
 
 Admission is **free**; each activity is priced separately and paid from a **Castle Card**
-loaded at a POS or kiosk. This matters architecturally: there is no gate-scan "visit"
-event to hang automation on. Castle CRM therefore derives a visit from (a) POS/card
-transaction import, (b) a party booking's completion, or (c) an online ticket purchase —
-see §8.3.
+loaded at a POS register or a self-service kiosk.
+
+Two consequences shape the whole design:
+
+1. **There is no gate scan.** Nothing in the venue emits "a guest arrived", so there is no
+   native visit event to hang automation on. Castle CRM has to *derive* a visit — see §8.3.
+2. **The Castle defers card value.** Loading a card is stored value, not a sale, so a load
+   never appears in the POS `Sales` table; it exists only in the card ledger
+   (`PlayerCardTrans`). Any revenue figure that ignores this undercounts the kiosks badly,
+   because card value is most of what a kiosk sells. CEplay learned this the hard way and
+   Castle CRM inherits the lesson: **loads and goods are counted separately and never
+   added together without saying so.**
 
 ### 3.3 Party packages (seed data)
 
@@ -203,6 +221,76 @@ targeting for field trips.
 > public website via search and may be stale. They are seeded as *editable defaults*, and
 > the installer's final step prompts an operator to confirm them. No business logic
 > depends on a hard-coded price.
+
+### 3.7 Existing systems (confirmed from the CEplay codebase)
+
+| System | What it is | Castle CRM's relationship |
+|---|---|---|
+| **CenterEdge Advantage** | The POS, card system, and — importantly — the **party/event booking and deposit system of record**. Evidence: a dedicated "Birthday Parties" register (station 60), party-desk stations (SueDesktop, 260), `Receipt.EventType ≠ 0` for pre-event party and group payments, and tender type 9 = *Party Deposit*. | Read from it. Never the authority on a confirmed booking or a payment. |
+| **CenterEdge card REST API** | Kiosoft-derived card API: SHA-1 auth with token caching, paginated. Cards, balances, transactions, games, kiosks, privileges, time plays, system transactions. | Optional read for card lookup; a possible write path for season-pass card issuance (§3.8). |
+| **CenterEdge MSSQL / SQL Server DB** | The reporting surface, accessed **read-only**. Needs `pdo_sqlsrv`, `pdo_dblib`, or ODBC on the host. | The primary source for visits, spend, and party payments. |
+| **CEplay** | PHP 7.4+/SQLite/vanilla-JS app: arcade pause-group automation, Tag Board, kiosk control, and ~15 POS analytics pages. Custom RBAC (27 permission keys), AES-256-CBC encrypt-then-MAC credentials, CSRF, action log, cron + per-minute watchdog. | Sibling, not parent. §3.8 draws the line. |
+| **Slack** | Already in use — CEplay posts staff birthday and work-anniversary bots to it. | Castle CRM adds Slack as an **internal** notification channel (manager alerts, detractor escalation), reusing a channel staff already watch. |
+
+**Known POS tables** (measured by CEplay against this venue, not guessed):
+
+| Table | Holds | Caveat |
+|---|---|---|
+| `PlayerCardTrans` | The card ledger: loads, game plays, ticket credits, adjustments, wipes, combines. ~20 years deep. | The *only* place card loads exist. Card number is the join key. |
+| `Sales` | Goods sold, by item (`InvNo`) and category. | `ShiftDate` is midnight-stamped → **day grain only**. `CostSold` is empty at this venue, so no margin. Party revenue books on the **event date**, not the payment date. |
+| `Receipt` | Money taken per station, with `EventType`, `VoidReceipt`, `FailedReceipt`. | `EventType ≠ 0` is party/group event payments taken **before** the event. Codes 28/74/90/92/96 are **unverified**. |
+| `ReaderSales` | Reader/attraction sales, used as a tie-out reference. | |
+| `Inventory` / `Item` | Item and deal definitions (`InvNo`). | |
+| `Division` | Revenue divisions. `DivNo 808` = Go Kart Readers. | |
+| `Employee` + time-clock punches | Staff identity and wages. | Contains `FingerprintTemplate` — **never select it**. |
+
+### 3.8 System-of-record map
+
+The failure mode to avoid is two systems both believing they own a booking. This table is
+binding: where a column says "CenterEdge", Castle CRM's copy is a cache that may be
+refreshed or discarded, and Castle CRM must never present it as authoritative or write it back.
+
+| Thing | System of record | Castle CRM's role |
+|---|---|---|
+| Card balance, plays, tickets | CenterEdge | Read-only display |
+| Card loads / stored value | CenterEdge (`PlayerCardTrans`) | Read for visit + spend derivation |
+| Goods and attraction sales | CenterEdge (`Sales`) | Read for revenue reporting |
+| **Confirmed party booking, its deposit and balance** | **CenterEdge** | Mirror + enrich. Castle CRM holds the *inquiry* and the *quote*; once it is a real reservation, CenterEdge owns it |
+| **Party / group inquiry, quote, follow-up, loss reason** | **Castle CRM** | Sole owner — this does not exist in the POS today |
+| Guest contact details, consent, household, children | **Castle CRM** | Sole owner (see the identity note below) |
+| Conversations, campaigns, automations, reviews, NPS | **Castle CRM** | Sole owner |
+| Memberships / season passes | **Shared** — CenterEdge holds the card and its privileges; Castle CRM holds the lifecycle, renewal state, and comms | Pending question 4, §14 |
+| Arcade game and kiosk state, pause schedules | **CEplay** | Out of scope. Castle CRM never pauses a game |
+| Per-game, per-reader, per-station analytics | **CEplay** | Out of scope. Castle CRM links out rather than rebuilding |
+| Staff birthdays and work anniversaries | **CEplay** | Out of scope — note the collision: CEplay's "birthdays" are *staff*, Castle CRM's are *guests'* |
+
+**Division of labour in one line.** CEplay answers *"how is the venue performing?"*.
+Castle CRM answers *"who is the guest, and what happens next?"*.
+
+**Guest identity is the hard part.** The card API's `CustomerInfo`
+(`{ id, firstName?, lastName, emailAddress?, phoneNumber?, birthDate? }`) is a
+**write-side** schema — it is supplied when creating a card or a transaction and is *not*
+returned by `GET /cards/{cardNumber}`. So the card system can hold a guest's email and
+phone, but Castle CRM cannot assume it can read them back, and coverage is likely thin
+(most guests buy a card without giving a name). Therefore:
+
+- **The card number is the join key**, not email. `contacts.external_pos_id` stores it, and
+  `visits` links through it.
+- A POS-derived contact starts as a near-empty record: a card number, a visit history, and
+  a spend total. It becomes a *marketable* contact only when a guest supplies an email or
+  phone through a form, a party booking, a waiver, or a Text Club opt-in — each of which
+  writes a `consent_log` row. This is the right outcome anyway: a card number is not consent.
+- Castle CRM's growth metric is therefore **identified-and-consented guests**, not raw
+  contact count, and the dashboard reports it that way.
+
+### 3.9 Why MySQL when CEplay uses SQLite
+
+CEplay is read-mostly with one writer; SQLite in WAL mode suits it exactly. Castle CRM is
+write-heavy and concurrent — queued campaign sends, automation runs advancing every minute,
+staff editing deals simultaneously — and SQLite serialises writers. MySQL is also what the
+Castle's cPanel host provides natively, and the user specified it. The two databases stay
+separate; the integration seam is the shared **read-only MSSQL** connection and, optionally,
+CEplay's HTTP API (§12.1), never a cross-write.
 
 ---
 
@@ -288,6 +376,7 @@ examples.
 | Background work | Single cron entry → `cron.php` | Only server config required |
 | Sessions | Database-backed | Survives shared-host session GC |
 | PHP extensions | `pdo_mysql`, `mbstring`, `json`, `openssl`, `curl`, `fileinfo` (all standard) | Installer hard-checks these |
+| POS feed | `pdo_sqlsrv`, `pdo_dblib`, or ODBC — **optional** | Read-only CenterEdge MSSQL access. Absent, the app runs fully and POS-dependent features show a "not connected" state (§8.3) |
 | Optional | `zip` (backup export), `gd`/`imagick` (image resize), `intl` | Degrade gracefully |
 
 ### 5.2 Directory layout
@@ -415,6 +504,24 @@ Permissions are granular strings (`contacts.view`, `deals.delete`, `campaigns.se
 
 Record-level scoping: `all` / `team` / `own` per permission, so a Party Host sees only
 their assigned deals while a Sales Manager sees the team's.
+
+**Convention borrowed from CEplay.** The Castle's staff already navigate one permission
+model, so Castle CRM uses the same shape: roles are **data** (editable in Settings, not a
+hard-coded enum), permission keys split into `view_*` keys that control page visibility —
+unticking one hides the nav item, bounces the route, *and* closes the matching read API —
+and feature keys that gate actions. Castle CRM adds the scope dimension CEplay lacks,
+because a CRM has per-record ownership that an arcade-automation tool does not.
+
+The same safety rails apply: only an Owner manages roles; the last active Owner cannot be
+demoted, deactivated, or deleted; a user may only assign roles whose permissions are a
+**subset of their own**, so no one can escalate themselves; a role in use cannot be deleted;
+and an unknown or corrupt role slug resolves to **zero** permissions rather than defaulting
+open. Sessions re-validate permissions periodically so a role change takes effect without
+forcing a re-login.
+
+Money is a permission, not a given: `view_revenue` gates every dollar figure, mirroring
+CEplay, so a floor-staff role can work the inbox and the Tag-Board-equivalent views without
+seeing guest spend or lifetime value.
 
 ---
 
@@ -761,13 +868,36 @@ under ~200ms on shared hosting.
 
 Because admission is free (§3.2) there is no turnstile event. Four sources, in priority order:
 
-1. **POS / Castle Card import** — CSV or scheduled API pull; matched to a contact by
-   external POS id, then email, then normalised phone. Unmatched rows create a
-   minimal contact flagged `source=pos_import` for later enrichment.
-2. **Booking completion** — a booking moving to `completed` writes a visit for the host
-   contact and, if `booking_guests` are known, for each guardian.
-3. **Online ticket purchase** — ticket redemption (or purchase date, configurably) writes a visit.
+1. **CenterEdge card ledger** — the primary source. A nightly job reads `PlayerCardTrans`
+   over a trailing window and collapses each card's activity into one visit per card per
+   business day: `spend_cents` from paid loads plus reader spend, `attractions` from the
+   games played, and `external_ref` = the card number. Matched to a contact by
+   `external_pos_id` (card number), then email, then normalised phone. An unmatched card
+   creates a minimal contact flagged `source=pos_import` with **no consent** — it is a
+   visit history, not a marketing target (§3.8).
+2. **Party / group event payment** — a `Receipt` row with `EventType ≠ 0` identifies an
+   event payment, and the matching `Sales` rows on the event date identify the event itself.
+   This is how Castle CRM learns that a party it quoted actually happened, which closes the
+   loop on quote→booking attribution without Castle CRM owning the reservation.
+3. **Booking completion** — a Castle CRM booking moving to `completed` writes a visit for the
+   host contact and, where `booking_guests` are known, for each guardian. Used when the POS
+   path is unavailable, and deduplicated against source 2 on `(contact, date)`.
 4. **Manual / front-desk check-in** — staff look up a contact and record a visit.
+
+**Deduplication.** The same real visit can arrive from several sources, so visits are keyed
+on `(contact_id, visit_date, source_priority)` and a lower-priority source never overwrites
+a higher one. A visit already attested by the card ledger is not re-created by a booking.
+
+**Day-grain honesty.** `Sales.ShiftDate` is midnight-stamped, so anything derived from
+`Sales` is day-grain only; hour-of-day analysis is possible from `PlayerCardTrans` and
+`Receipt` but not from `Sales`. Reports state which grain they are on rather than implying
+an hourly precision the source cannot support.
+
+**Driver dependency.** All of the above needs an MSSQL PDO driver on the Castle CRM host.
+Castle CRM therefore treats POS import as an **optional capability**: without a driver the
+application installs and runs fully, the POS-dependent widgets show a "not connected"
+state with a link to the setup page, and visits fall back to sources 3 and 4. The installer
+detects the driver and says so plainly rather than failing.
 
 `visits` is the spine of retention automation: `last_visit_at`, `visit_count`, and
 `lifetime_value_cents` are denormalised onto `contacts` by a nightly job plus an
@@ -1210,7 +1340,10 @@ nodding to the Castle's castle-and-dragon identity in accents only.
 
 | System | Method |
 |---|---|
-| POS / Castle Card (CenterEdge, Embed, Intercard, …) | Scheduled CSV drop import, or API pull where available; field-mapping UI persisted as a reusable profile |
+| **CenterEdge MSSQL** (primary) | Read-only PDO connection (`pdo_sqlsrv` / `pdo_dblib` / ODBC), single-`SELECT` guarded, admin-editable queries, credentials encrypted at rest. Queries target `PlayerCardTrans`, `Sales`, `Receipt`, `ReaderSales` per §3.7. Optional capability — absent driver degrades gracefully (§8.3) |
+| **CenterEdge card REST API** | SHA-1 auth with token caching, paginated fetch-all. Read: card balance, transactions, privileges, time plays. Optional write: `POST /cards/{n}` to issue a season-pass card. Capability-gated from `GET /capabilities` |
+| **CEplay** | Optional. Deep-link from Castle CRM's reports into CEplay's per-game and per-station analytics rather than rebuilding them. If a shared sign-on is wanted, the seam is a signed handoff token — never a shared session or a cross-database write (§3.9) |
+| **Slack** | Incoming webhook for internal alerts (detractor escalation, SLA breach, manager digest), reusing the workspace CEplay already posts to |
 | Online ticketing / booking platform | Webhook in, or CSV import |
 | Google Business Profile | OAuth, reviews read + reply write |
 | Yelp / Facebook / TripAdvisor | API where permitted, CSV otherwise |
@@ -1260,8 +1393,15 @@ delivery log and manual replay.
 | **4** | Communicate: mail/SMS drivers, templates, inbox, segments, campaigns, Text Club, usage ledger | |
 | **5** | Automate: engine, builder UI, 111 seeded automations, playbook registry and activation | |
 | **6** | Improve: surveys, review routing, review inbox, review wall, memberships, full reporting suite | |
-| **7** | Integrate: POS import, GBP, webhooks, REST API, iCal, weather | |
+| **7** | Integrate: CenterEdge MSSQL import, card API, GBP, Slack, webhooks, REST API, iCal, weather | |
 | **8** | Harden: security review, accessibility audit, load test at 50k contacts, docs, backup/restore, update channel | |
+
+> **Phasing risk.** Phase 7 carries the CenterEdge integration, but open questions 3 and 6
+> (§14) could invert the plan. If guest email/phone coverage in the POS turns out to be
+> near zero, the import is worth far less than list-building, and Phases 4–6 are correctly
+> ordered. If coverage is good *and* an MSSQL driver is reachable, the import should be
+> pulled forward to Phase 3 — tens of thousands of guests with real visit history would
+> make every later playbook land harder. **Answer question 3 before committing to Phase 4.**
 
 ### 13.1 Acceptance criteria for Phase 1
 
@@ -1288,22 +1428,26 @@ delivery log and manual replay.
 
 ## 14. Open questions for the Castle
 
-These are seeded with defaults so nothing blocks, but confirming them improves accuracy:
+These are seeded with defaults so nothing blocks, but confirming them improves accuracy.
+Questions resolved by the CEplay codebase are marked **answered** and kept for the record.
 
-1. **POS system** — which one (CenterEdge / Embed / Intercard / other), and does the
-   current plan include API access or only report exports?
-2. **Online booking** — what currently takes party bookings, and should Castle CRM read
-   from it, write to it, or replace the inquiry step only?
-3. **Current party package prices and the 7-day notice rule** — still accurate (§3.3)?
-4. **Season pass / membership** — does a pass product exist today, and what are its tiers?
-5. **SMS** — is there an existing Twilio/other account and a registered 10DLC brand, or
-   does Castle CRM need to start that (2–4 week carrier lead time)?
-6. **Sending domain** — which domain/subdomain should send mail, and who controls DNS?
-7. **Team shape** — how many staff, which roles, and who owns party vs group inquiries?
-8. **Event Center** — should it be a separate pipeline from corporate groups (weddings
-   behave very differently from a field trip)?
-9. **Donation budget** — annual figure and approver?
-10. **Existing lists** — what contact data exists today, in what format, and how large?
+| # | Question | Status |
+|---|---|---|
+| 1 | **POS system** | **Answered** — CenterEdge Advantage, with a Kiosoft-derived card REST API and a read-only MSSQL reporting path (§3.7) |
+| 2 | **Timezone / locale** | **Answered** — `America/New_York` |
+| 3 | **Does CenterEdge hold usable guest email and phone?** | **Open, and the most important question in this document.** `CustomerInfo` is write-side only (§3.8). Someone needs to run an Explorer query against the customer tables and report the **fill rate** for email and phone. If it is near zero, Castle CRM's first job is list-building, and the Text Club and forms matter more than the import |
+| 4 | **Party/event booking in CenterEdge** | **Partly answered** — the POS clearly takes party deposits and event payments. Open: does Advantage expose a structured reservation record (room, time, package, headcount) that Castle CRM can read, or only the money? This decides whether §8.5's booking module mirrors the POS or runs ahead of it |
+| 5 | **`Receipt.EventType` codes 28 / 74 / 90 / 92 / 96** | Open — CEplay flags these as unverified. Needed to attribute party revenue correctly in §8.3 source 2 |
+| 6 | **MSSQL driver on the Castle CRM host** | Open — is `pdo_sqlsrv`/`pdo_dblib`/ODBC available where Castle CRM will live, and can that host reach the POS server? If Castle CRM sits on cPanel shared hosting the answer is probably no, and the POS feed needs a push from the venue side instead of a pull |
+| 7 | **Season pass / membership** | Open — does a pass product exist today? CEplay's tender list includes a "Member" type, which hints at one |
+| 8 | **SMS** | Open — existing Twilio account and a registered 10DLC brand, or start fresh? Carrier lead time is 2–4 weeks and gates Playbook 06 |
+| 9 | **Sending domain** | Open — which domain/subdomain sends mail, and who controls DNS? |
+| 10 | **Current party prices and the 7-day notice rule** | Open — §3.3 came from the public site and needs confirming |
+| 11 | **Team shape** | Open — headcount, roles, and who owns party vs group inquiries |
+| 12 | **Event Center** | Open — separate pipeline from corporate groups? Weddings behave nothing like a field trip |
+| 13 | **Donation budget** | Open — annual figure and approver |
+| 14 | **Existing lists** | Open — what contact data exists today, in what format, how large, and with what consent provenance |
+| 15 | **CEplay relationship** | Open — shared sign-on wanted, or two separate logins? And should Castle CRM deep-link into CEplay's analytics or stay self-contained? |
 
 ---
 
@@ -1320,6 +1464,11 @@ These are seeded with defaults so nothing blocks, but confirming them improves a
 | **Safe Mode** | Install state where all outbound messaging is redirected to the owner |
 | **Text Club** | The opt-in SMS marketing list |
 | **Castle Card** | The Castle's stored-value card used to pay for attractions |
+| **CenterEdge Advantage** | The Castle's POS and card system; also the system of record for party reservations and deposits |
+| **CEplay** | The Castle's existing in-house app: arcade automation plus POS analytics. Castle CRM's sibling, not its parent (§3.8) |
+| **Deferred value** | A card load is stored value, not a sale — so it appears in the card ledger and never in `Sales` (§3.2) |
+| **`PlayerCardTrans`** | The CenterEdge card ledger: ~20 years of loads, plays, tickets, and adjustments. Castle CRM's primary visit source |
+| **Identified-and-consented guest** | A contact with a reachable channel *and* a logged consent record. Castle CRM's real growth metric, as distinct from raw contact count |
 | **Run sheet** | The printed operational brief a party host works from |
 | **10DLC** | Carrier registration required to send A2P SMS from a US local number |
 | **SLA** | The response-time commitment on a lead or task, tracked and escalated |
