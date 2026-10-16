@@ -181,7 +181,9 @@ $grouped = $catalogue;
             <p class="field-hint">
                 Leave everything unticked for &ldquo;anything that account can do&rdquo;. Ticking
                 some narrows it further &mdash; a token that only reads is the right default for
-                anything that only needs to read. These are the only permissions
+                anything that only needs to read. <strong>Delete is its own tick</strong>, as it
+                is its own permission everywhere else: a token that may edit a guest cannot
+                remove one unless you say so. These are the only permissions
                 <code>/api/v1</code> consults; the rest of the catalogue has no effect on a
                 token, so it is not offered here.
             </p>

@@ -133,10 +133,19 @@ function ha_token(int $userId, string $name, array $abilities = ['*'], ?string $
  * One API call. Deliberately NOT a TestBrowser: the whole point is that this
  * carries a bearer token and no cookie jar at all.
  *
+ * `$body` takes a scalar as well as an array, so a test can send a body that
+ * is NOT a JSON object — a bare string, a number, a list — which is exactly
+ * the shape a handler must refuse rather than cast.
+ *
  * @return array{status:int,body:string,json:array<mixed>,headers:string}
  */
-function ha_call(string $method, string $path, ?string $token, ?array $body = null, array $extraHeaders = []): array
-{
+function ha_call(
+    string $method,
+    string $path,
+    ?string $token,
+    array|string|int|null $body = null,
+    array $extraHeaders = []
+): array {
     $base = getenv('CC_TEST_BASE_URL') ?: '';
 
     $handle  = curl_init();
@@ -801,7 +810,22 @@ Harness::test('a visit cannot be recorded on a DELETED guest either', function (
 });
 
 Harness::test('A VISIT NEEDS A REAL CONTACT, so the id space cannot be walked', function () use ($full): void {
-    foreach ([999999999, 1, -1, 0] as $id) {
+    /*
+     * An id proven ABSENT, computed here — not a literal.
+     *
+     * This read `[999999999, 1, -1, 0]`, and 1 is a real guest on any
+     * database that has one: the demo seed's first contact, which
+     * `integration/seeds` loads a few suites earlier. The assertion then
+     * depended on an unrelated suite's cleanup, and when it did not hold the
+     * test did not merely fail — it recorded a real visit on a real guest
+     * through `VisitRecorder`, moving their visit count, last-visit date and
+     * lifetime value, and `ha_clear()` would not have removed it because that
+     * guest's source is not `hatest`. A test that asserts a record does not
+     * exist must establish that itself.
+     */
+    $absent = (int) DB::value('SELECT COALESCE(MAX(id), 0) FROM {contacts}') + 1000;
+
+    foreach ([$absent, $absent + 7, 999999999, -1, 0] as $id) {
         $response = ha_call('POST', '/api/v1/visits', $full, [
             'contact_id' => $id,
             'visit_date' => gmdate('Y-m-d', time() - 86400),
@@ -1105,6 +1129,183 @@ Harness::test('moving a stage needs deals_manage, and the deal has to be in scop
         0,
         (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $theirs])
     );
+
+    ha_clear();
+});
+
+// ================== what the stage endpoint and a board move refuse
+
+Harness::test('A STAGE IS NAMED BY A STRING OR AN ID, and nothing else is coerced into one', function () use ($full): void {
+    ha_clear();
+
+    $stages = DB::all(
+        'SELECT id, name FROM {pipeline_stages}
+          WHERE pipeline_id = (SELECT MIN(pipeline_id) FROM {pipeline_stages})
+          ORDER BY sort_order, id'
+    );
+
+    Assert::greaterThan(2, count($stages));
+
+    $created = ha_call('POST', '/api/v1/deals', $full, ['title' => 'HA type walk', 'source' => 'hatest']);
+    $id      = (int) $created['json']['data']['id'];
+
+    // Park it away from the top of the board, so a wrong move is visible.
+    Assert::same(
+        200,
+        ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, ['stage_id' => (int) $stages[2]['id']])['status']
+    );
+
+    $parked  = (int) DB::value('SELECT stage_id FROM {deals} WHERE id = :id', ['id' => $id]);
+    $history = (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id]);
+
+    /*
+     * `true` WAS A MOVE. `(string) true` is "1", which the resolver reads as
+     * stage id 1 — the top of the first board on every seeded install. So a
+     * client whose stage field carried a flag rather than a name walked the
+     * deal backwards and got a 200 saying it had. MEASURED before the fix.
+     */
+    foreach ([true, false, ['stage'], ['id' => 3], 1.5, null] as $rubbish) {
+        foreach (['stage', 'stage_id'] as $field) {
+            $response = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, [$field => $rubbish]);
+
+            Assert::same(
+                422,
+                $response['status'],
+                $field . ' = ' . var_export($rubbish, true) . ' must be refused, not cast'
+            );
+        }
+    }
+
+    // Not moved, and no history row written by any of it.
+    Assert::same($parked, (int) DB::value('SELECT stage_id FROM {deals} WHERE id = :id', ['id' => $id]));
+    Assert::same(
+        $history,
+        (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id])
+    );
+
+    // And the real forms still work, so the guard narrowed rather than broke.
+    Assert::same(
+        200,
+        ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, ['stage' => (string) $stages[1]['name']])['status']
+    );
+    Assert::same(
+        200,
+        ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, ['stage_id' => (int) $stages[0]['id']])['status']
+    );
+
+    ha_clear();
+});
+
+Harness::test('MOVING A DEAL TO ANOTHER BOARD TAKES ITS STAGE WITH IT', function () use ($full): void {
+    ha_clear();
+
+    $here  = (int) DB::value('SELECT MIN(pipeline_id) FROM {pipeline_stages}');
+    $there = (int) DB::value('SELECT MIN(pipeline_id) FROM {pipeline_stages} WHERE pipeline_id > :p', ['p' => $here]);
+
+    if ($there <= 0) {
+        Assert::true(true, 'this install has only one pipeline, so there is no board to move to');
+
+        return;
+    }
+
+    $created = ha_call('POST', '/api/v1/deals', $full, ['title' => 'HA board move', 'source' => 'hatest']);
+    $id      = (int) $created['json']['data']['id'];
+
+    $stages = DB::all(
+        'SELECT id, name FROM {pipeline_stages} WHERE pipeline_id = :p ORDER BY sort_order, id',
+        ['p' => $here]
+    );
+
+    // Move it along its own board first, so the board move has a real
+    // from-stage to record.
+    ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, ['stage_id' => (int) $stages[1]['id']]);
+
+    $before = (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id]);
+
+    /*
+     * `pipeline_id` is writable and `stage_id` is not, and that pairing left a
+     * deal on a board it had no stage on: MEASURED as `pipeline_id: 2,
+     * stage_id: 1` with stage 1 belonging to pipeline 1. No page renders that
+     * sensibly and every stage-keyed report mis-attributes it.
+     */
+    $moved = ha_call('PATCH', '/api/v1/deals/' . $id, $full, ['pipeline_id' => $there]);
+
+    Assert::same(200, $moved['status']);
+
+    $row = DB::first(
+        'SELECT d.pipeline_id, d.stage_id, d.stage_entered_at, d.status, s.pipeline_id AS stage_pipeline
+           FROM {deals} d JOIN {pipeline_stages} s ON s.id = d.stage_id
+          WHERE d.id = :id',
+        ['id' => $id]
+    );
+
+    Assert::same($there, (int) $row['pipeline_id'], 'it is on the board that was asked for');
+    Assert::same(
+        $there,
+        (int) $row['stage_pipeline'],
+        'AND ITS STAGE BELONGS TO THAT BOARD — the whole point'
+    );
+    Assert::notNull($row['stage_entered_at'], 'the stage clock restarted');
+
+    // It is the first stage of the new board, not an arbitrary one.
+    Assert::same(
+        (int) DB::value(
+            'SELECT id FROM {pipeline_stages} WHERE pipeline_id = :p ORDER BY sort_order, id LIMIT 1',
+            ['p' => $there]
+        ),
+        (int) $row['stage_id']
+    );
+
+    // And it is recorded as the move it is, so the history does not jump.
+    Assert::same(
+        $before + 1,
+        (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id]),
+        'a board move is a stage move and leaves a history row'
+    );
+
+    // A pipeline that does not exist is refused rather than stranding it.
+    $nowhere = ha_call('PATCH', '/api/v1/deals/' . $id, $full, ['pipeline_id' => 99999999]);
+
+    Assert::same(422, $nowhere['status']);
+    Assert::same(
+        $there,
+        (int) DB::value('SELECT pipeline_id FROM {deals} WHERE id = :id', ['id' => $id]),
+        'and it stayed where it was'
+    );
+
+    // Naming the board it is already on changes nothing and writes no history.
+    $same = ha_call('PATCH', '/api/v1/deals/' . $id, $full, ['pipeline_id' => $there, 'title' => 'HA board move 2']);
+
+    Assert::same(200, $same['status']);
+    Assert::same(
+        $before + 1,
+        (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id]),
+        'no second history row for a no-op'
+    );
+
+    ha_clear();
+});
+
+Harness::test('no body, a non-object body and a huge body are all refused, never a 500', function () use ($full): void {
+    ha_clear();
+
+    $created = ha_call('POST', '/api/v1/deals', $full, ['title' => 'HA body walk', 'source' => 'hatest']);
+    $id      = (int) $created['json']['data']['id'];
+
+    foreach ([
+        'an array body'  => [1, 2, 3],
+        'a string body'  => 'Deposit Paid',
+        'a number body'  => 7,
+        'an empty body'  => [],
+    ] as $label => $body) {
+        $response = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, $body);
+
+        Assert::true(
+            in_array($response['status'], [400, 422], true),
+            $label . ' gave ' . $response['status']
+        );
+        Assert::notContains('/home/', $response['body'], $label . ' must not carry a path');
+    }
 
     ha_clear();
 });

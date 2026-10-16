@@ -82,9 +82,22 @@ final class ApiTokenController extends Controller
      * `view_revenue` is added by hand because it gates money on every
      * resource rather than belonging to one.
      *
+     * **EVERY PERMISSION THE API CONSULTS HAS TO BE OFFERED HERE**, which is
+     * not a tidiness point: an ability a token cannot be given is a capability
+     * that only a `['*']` token has. When DELETE stopped reusing the write
+     * permission, this list still named only read and write — so a token could
+     * be scoped to read and edit contacts but never to delete one, and an
+     * operator who needed that had to leave every box unticked and mint a
+     * token carrying everything its account can do. A narrowing fix that
+     * pushes people onto the widest credential available has made things
+     * worse. `tests/unit/ApiTokenTest.php` now asserts the two lists agree.
+     *
+     * Public so that test can read it; it is a catalogue of labels with no
+     * I/O and nothing private in it.
+     *
      * @return array<string,array<string,string>>
      */
-    private static function apiPermissions(): array
+    public static function apiPermissions(): array
     {
         $groups = [];
 
@@ -98,7 +111,24 @@ final class ApiTokenController extends Controller
                 $write = (string) $definition['write'];
                 $groups[$label][$write] = 'Write — ' . (Acl::CATALOG[$write][1] ?? $write);
             }
+
+            // Only where there is really something to delete into: a resource
+            // with no `deleted_at` answers 405 whatever a token carries, and a
+            // checkbox for it would promise a power it cannot grant.
+            if ($definition['delete'] !== null && $definition['soft_delete']) {
+                $delete = (string) $definition['delete'];
+                $groups[$label][$delete] = 'Delete — ' . (Acl::CATALOG[$delete][1] ?? $delete);
+            }
         }
+
+        /*
+         * The two writes that are their own endpoints rather than a field, so
+         * they are named by `ApiController` directly and would otherwise be
+         * missing from this list for the same reason delete was: recording
+         * consent and moving a deal between stages.
+         */
+        $groups['Contacts']['contacts_manage'] ??= 'Write — ' . (Acl::CATALOG['contacts_manage'][1] ?? 'contacts_manage');
+        $groups['Deals']['deals_manage']       ??= 'Write — ' . (Acl::CATALOG['deals_manage'][1] ?? 'deals_manage');
 
         $groups['Money'] = [
             'view_revenue' => 'See money: without this, every total comes back empty',

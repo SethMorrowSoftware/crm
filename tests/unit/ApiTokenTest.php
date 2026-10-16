@@ -20,8 +20,10 @@ declare(strict_types=1);
  * cleaned to `[]`, stored as `[]`, and read back as full access.
  */
 
+use App\Controllers\ApiTokenController;
 use App\Core\Acl;
 use App\Core\ApiToken;
+use App\Services\ApiResource;
 use Tests\Assert;
 use Tests\Harness;
 
@@ -118,4 +120,75 @@ Harness::test('cleaning an ability list keeps only real permissions, and can emp
     $all = ApiToken::cleanAbilities(array_keys(Acl::CATALOG));
 
     Assert::count(count(Acl::CATALOG), $all);
+});
+
+Harness::test('EVERY PERMISSION THE API CONSULTS CAN BE PUT ON A TOKEN', function (): void {
+    /*
+     * THE GATE FOR THE MISTAKE THAT FOLLOWED THE LAST FIX.
+     *
+     * When DELETE stopped reusing the write permission, the token page's
+     * checkbox list still named only read and write — it is built from
+     * `ApiResource::RESOURCES`' `read` and `write` keys. So `contacts_delete`,
+     * `deals_delete` and `bookings_cancel` were permissions the API demanded
+     * and the page could not grant: a token could be scoped to read and edit
+     * contacts but never to delete one, and an operator who needed that had to
+     * leave every box unticked, which mints a token carrying everything its
+     * account can do. A narrowing fix that pushes people onto the widest
+     * available credential has made things worse, and nothing failed to say so.
+     *
+     * So this asserts the two lists agree, rather than the delete keys
+     * specifically: the next permission that splits off cannot become
+     * un-mintable the same way.
+     */
+    $offered = [];
+
+    foreach (ApiTokenController::apiPermissions() as $permissions) {
+        foreach (array_keys($permissions) as $slug) {
+            $offered[(string) $slug] = true;
+        }
+    }
+
+    $needed = [
+        // Named by ApiController directly rather than by a resource entry:
+        // money scrubbing, the consent endpoint, and the deal stage endpoint.
+        'view_revenue'    => 'money is scrubbed without it',
+        'contacts_manage' => 'the consent endpoint and POST /visits',
+        'deals_manage'    => 'the deal stage endpoint',
+    ];
+
+    foreach (ApiResource::RESOURCES as $name => $definition) {
+        $needed[(string) $definition['read']] = $name . ' reads';
+
+        if ($definition['write'] !== null && $definition['writable'] !== []) {
+            $needed[(string) $definition['write']] = $name . ' writes';
+        }
+
+        // Only where DELETE can really happen: a resource with no
+        // `deleted_at` answers 405 whatever a token carries, so offering a
+        // checkbox for it would promise a power it cannot grant.
+        if ($definition['delete'] !== null && $definition['soft_delete']) {
+            $needed[(string) $definition['delete']] = $name . ' deletes';
+        }
+    }
+
+    foreach ($needed as $slug => $why) {
+        Assert::true(
+            isset($offered[$slug]),
+            $slug . ' is consulted by the API (' . $why . ') but cannot be ticked on a token'
+        );
+
+        // And it has to be a real permission, or ticking it would be a no-op
+        // that looks like a grant.
+        Assert::hasKey($slug, Acl::CATALOG, $slug . ' is offered on the token page but is not a permission');
+    }
+
+    // The other direction: nothing is offered that the API never consults,
+    // which would be a checkbox that silently does nothing.
+    foreach (array_keys($offered) as $slug) {
+        Assert::hasKey(
+            $slug,
+            $needed,
+            $slug . ' is offered on the token page but the API never asks for it'
+        );
+    }
 });

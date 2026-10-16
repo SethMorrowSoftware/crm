@@ -245,15 +245,31 @@ being able to remove them.
 
 | Resource | GET | POST / PATCH | DELETE |
 |---|---|---|---|
-| contacts, households, companies, visits | `view_contacts` | `contacts_manage` | `contacts_delete` |
-| deals | `view_deals` | `deals_manage` | `deals_delete` |
+| contacts | `view_contacts` | `contacts_manage` | `contacts_delete` |
+| companies | `view_contacts` | `contacts_manage` | `contacts_delete` |
+| households | `view_contacts` | `contacts_manage` | — not deletable |
+| visits | `view_contacts` | `contacts_manage` — POST only, through the visit recorder | — not deletable |
+| deals | `view_deals` | `deals_manage` (a stage move too) | `deals_delete` |
 | bookings | `view_bookings` | `bookings_manage` | `bookings_cancel` |
-| tasks | `view_tasks` | `inbox_assign` | — |
-| memberships, messages, conversations, form-submissions, reviews | the matching `view_*` | — | — |
+| tasks | `view_tasks` | `inbox_assign` | — not deletable |
+| memberships, messages, conversations, form-submissions, reviews | the matching `view_*` | — read-only | — not deletable |
+
+"Not deletable" means exactly that: DELETE answers **405** before any
+permission is consulted, so granting one changes nothing.
 
 A refused call answers **403** and names the permission it wanted
 (`{"error": "...", "permission": "contacts_delete"}`), so an integration can
 report something a venue can act on.
+
+**DELETE on a booking is a soft delete, not the cancellation workflow.** It
+takes `bookings_cancel` because that is what removing a party from the
+calendar needs, but it stamps `deleted_at` and stops there — it does not
+record a reason, warn about a deposit, or fire the cancellation
+notifications. Cancelling a party properly is a page, not an endpoint.
+
+**Each ability is its own tick when you create a token** (Settings → API
+tokens), delete included. A token scoped to read and write contacts cannot
+delete one unless the delete box is ticked.
 
 **And each permission's SCOPE applies to the call it governs.** A role can
 hold `view_contacts` at *everyone* and `contacts_manage` at *their own* —

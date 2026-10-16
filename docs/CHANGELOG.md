@@ -974,6 +974,37 @@ reachable by accident — which is exactly why they needed finding.
   say so. An empty list now grants nothing, such a token is refused at
   creation with the names that were not recognised, and a row already holding
   one says so on the page instead of showing a blank cell.
+- **A delete permission a token could not be given.** The fix above made
+  DELETE check `contacts_delete` / `deals_delete` / `bookings_cancel` — and the
+  token page's ability list is built from each resource's read and write
+  permission only, so there was no box to tick for any of them. A token could
+  be scoped to read and edit guests and never to delete one; an operator who
+  needed that had to leave every box unticked, which mints a token carrying
+  everything its account can do. A narrowing fix whose practical effect is to
+  push people onto the widest available credential has made things worse. The
+  delete permission is now offered beside read and write, and a test asserts
+  that **every permission the API consults can be put on a token** — and that
+  nothing is offered which the API never asks for — so the next permission
+  that splits off cannot become un-mintable the same way.
+- **A deal could be left on a board it had no stage on.** `pipeline_id` is
+  writable and `stage_id` deliberately is not, and those two facts together
+  meant a PATCH naming only the pipeline moved the deal to a new board while
+  its stage still belonged to the old one. Measured: `pipeline_id 2, stage_id
+  1` with stage 1 belonging to pipeline 1 — a state no page renders sensibly
+  and every stage-keyed report mis-attributes. The web's edit form cannot
+  produce it, because there the pipeline follows the chosen stage. Here the
+  caller names the board, so the stage follows it: the deal enters the first
+  stage of the board it is moving to, through the same transition as any other
+  move, with the history row and the events. A pipeline that does not exist is
+  refused rather than applied.
+- **A stage named by something that is not a name or an id.** `(string) true`
+  is `"1"`, which the resolver reads as stage id 1 — the top of the first
+  board. So a client whose stage field carried a flag rather than a name moved
+  the deal backwards and got a 200 saying it had. An array could not be cast at
+  all, which made this the one write in the API that could answer 500. Only a
+  string or an integer is accepted now, anything else is a 422 that says so,
+  and the move is wrapped like every other write so no input can produce a
+  fatal.
 - **Imported money is parsed by integer arithmetic**, not through a float.
   The reported half-cent loss did not reproduce — PHP's `round()` compensates,
   measured over 3,000,001 values — but the correctness of a venue's imported

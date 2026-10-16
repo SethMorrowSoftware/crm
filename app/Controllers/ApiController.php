@@ -400,10 +400,84 @@ final class ApiController extends Controller
             $data['updated_at'] = gmdate('Y-m-d H:i:s');
         }
 
+        /*
+         * MOVING A DEAL TO ANOTHER BOARD IS A MOVE, NOT A FIELD.
+         *
+         * `pipeline_id` is writable and `stage_id` deliberately is not, and
+         * those two facts together left a hole this diff opened: a PATCH
+         * naming only `pipeline_id` put the deal on a new board while its
+         * `stage_id` still pointed at a stage of the OLD one. MEASURED: a deal
+         * came back `pipeline_id: 2, stage_id: 1` with stage 1 belonging to
+         * pipeline 1 — a deal on a board it has no stage on, which no page
+         * renders sensibly and which every report keyed to a stage
+         * mis-attributes.
+         *
+         * The web's edit form cannot produce that, because there the pipeline
+         * follows the chosen STAGE (`DealController::update()` sets
+         * `pipeline_id` from `$stage['pipeline_id']`). Here the caller names
+         * the board, so the stage follows it: the deal enters the first stage
+         * of the pipeline it is being moved to, through `DealStage` — the
+         * clock, the SLA, the status, the history row and the events — because
+         * that is what has actually happened to it.
+         */
+        $boardMove = null;
+
+        if ($name === 'deals' && array_key_exists('pipeline_id', $data)) {
+            $wantedPipeline = (int) $data['pipeline_id'];
+            $currentStage   = (int) ($existing['stage_id'] ?? 0);
+
+            $stillFits = $currentStage > 0 && DB::exists(
+                'SELECT id FROM {pipeline_stages} WHERE id = :id AND pipeline_id = :p',
+                ['id' => $currentStage, 'p' => $wantedPipeline]
+            );
+
+            if (!$stillFits) {
+                $stage = $this->firstStageOf($wantedPipeline);
+
+                if ($stage === null) {
+                    return Response::json([
+                        'error' => 'There is no pipeline with that id, or it has no stages.',
+                    ], 422);
+                }
+
+                $now  = gmdate('Y-m-d H:i:s');
+                $data = array_merge($data, DealStage::columns($existing, $stage, $now));
+                $data['pipeline_id'] = (int) $stage['pipeline_id'];
+
+                $boardMove = ['stage' => $stage, 'from' => $currentStage, 'at' => $now];
+            }
+        }
+
         try {
-            DB::update($definition['table'], $data, 'id = :id', ['id' => (int) $existing['id']]);
+            if ($boardMove === null) {
+                DB::update($definition['table'], $data, 'id = :id', ['id' => (int) $existing['id']]);
+            } else {
+                // The row and its history row together: a move recorded half
+                // way is a deal whose stage clock no report can read.
+                DB::transaction(static function () use ($definition, $data, $existing, $boardMove): void {
+                    DB::update($definition['table'], $data, 'id = :id', ['id' => (int) $existing['id']]);
+
+                    DealStage::recordMove(
+                        (int) $existing['id'],
+                        (int) $boardMove['from'],
+                        (int) $boardMove['stage']['id'],
+                        $existing,
+                        (string) $boardMove['at']
+                    );
+                });
+            }
         } catch (Throwable $e) {
             return $this->writeFailed($e, 'update', $name);
+        }
+
+        if ($boardMove !== null) {
+            Event::fire('deal.stage_changed', [
+                'id'            => (int) $existing['id'],
+                'from_stage_id' => $boardMove['from'] > 0 ? (int) $boardMove['from'] : null,
+                'to_stage_id'   => (int) $boardMove['stage']['id'],
+            ]);
+
+            DealStage::fireOutcome((int) $existing['id'], $boardMove['stage']);
         }
 
         Audit::record(
@@ -616,10 +690,31 @@ final class ApiController extends Controller
             return Response::json(['error' => 'Send a JSON object.'], 400);
         }
 
-        // By NAME or by id: an integration written against this venue's board
-        // knows "Deposit chased", and one written against the product knows
-        // neither, so both are accepted exactly as an automation step is.
-        $wanted = trim((string) ($input['stage'] ?? $input['stage_id'] ?? ''));
+        /*
+         * By NAME or by id: an integration written against this venue's board
+         * knows "Deposit chased", and one written against the product knows
+         * neither, so both are accepted exactly as an automation step is.
+         *
+         * A STRING OR AN INTEGER, AND NOTHING ELSE IS COERCED INTO ONE. This
+         * read `trim((string) ($input['stage'] ?? ...))`, and `(string) true`
+         * is `"1"` — which `DealStage::resolve()` reads as stage id 1, the top
+         * of the first board. So a client whose stage field carried a flag
+         * rather than a name moved the deal to the top of its pipeline and got
+         * a 200 saying so: a real transition, a history row, the stage clock
+         * reset. An array or object cannot be cast at all, and the warning
+         * that raises is promoted to an exception in development, which made
+         * this the one write in this controller that could answer 500.
+         */
+        $named = $input['stage'] ?? $input['stage_id'] ?? null;
+
+        if (!is_string($named) && !is_int($named)) {
+            return Response::json([
+                'error' => 'Name the stage to move to, as "stage" (its name) or "stage_id" '
+                    . '(a number). Anything else is refused rather than guessed at.',
+            ], 422);
+        }
+
+        $wanted = trim((string) $named);
 
         if ($wanted === '') {
             return Response::json([
@@ -628,7 +723,14 @@ final class ApiController extends Controller
         }
 
         $before = $deal;
-        $result  = DealStage::move((int) $deal['id'], $wanted);
+
+        try {
+            $result = DealStage::move((int) $deal['id'], $wanted);
+        } catch (Throwable $e) {
+            // The same shape store() and update() use, so no input can make
+            // this endpoint the only one that answers 500.
+            return $this->writeFailed($e, 'move', 'deals');
+        }
 
         /*
          * Already in that stage is NOT an error: it is the right answer, and
@@ -905,13 +1007,7 @@ final class ApiController extends Controller
              * the velocity report instead of a row with no `stage_entered_at`.
              */
             $pipelineId = (int) ($data['pipeline_id'] ?? 0);
-
-            $stage = $pipelineId > 0
-                ? DB::first(
-                    'SELECT * FROM {pipeline_stages} WHERE pipeline_id = :p ORDER BY sort_order, id LIMIT 1',
-                    ['p' => $pipelineId]
-                )
-                : DB::first('SELECT * FROM {pipeline_stages} ORDER BY pipeline_id, sort_order LIMIT 1');
+            $stage      = $this->firstStageOf($pipelineId);
 
             if ($stage === null) {
                 throw new RuntimeException($pipelineId > 0
@@ -972,6 +1068,28 @@ final class ApiController extends Controller
         };
 
         return $id;
+    }
+
+    /**
+     * The stage a deal opens in, or lands in when it moves to another board.
+     *
+     * The top of the named pipeline, or of the first pipeline when none is
+     * named — so the common case, a website form posting a lead, needs no
+     * knowledge of this venue's board. Shared by create and by a board move
+     * so the two cannot pick differently.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function firstStageOf(int $pipelineId): ?array
+    {
+        if ($pipelineId > 0) {
+            return DB::first(
+                'SELECT * FROM {pipeline_stages} WHERE pipeline_id = :p ORDER BY sort_order, id LIMIT 1',
+                ['p' => $pipelineId]
+            );
+        }
+
+        return DB::first('SELECT * FROM {pipeline_stages} ORDER BY pipeline_id, sort_order, id LIMIT 1');
     }
 
     /** A short, stable alias so a column reference is never ambiguous. */
