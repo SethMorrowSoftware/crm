@@ -377,10 +377,29 @@ Harness::test('seeds are idempotent', function (): void {
 Harness::test('Safe Mode defaults to on when unset', function (): void {
     // The most important default in the application: an install with no
     // settings row must still refuse to message guests.
-    Settings::forget('system.safe_mode');
-    Settings::load(true);
+    //
+    // And it is PUT BACK afterwards. Settings are global and the suites share
+    // one database, so leaving the row deleted hands every later suite an
+    // install with no Safe Mode setting at all — which is only harmless today
+    // because `seed_http_fixtures()` happens to write it again before the
+    // browser suites. A test that removes a guard has to restore it, or the
+    // failure it eventually causes lands in a different file.
+    $before = Settings::get('system.safe_mode');
 
-    Assert::true(Settings::safeMode(), 'absent configuration must mean protected');
+    try {
+        Settings::forget('system.safe_mode');
+        Settings::load(true);
+
+        Assert::true(Settings::safeMode(), 'absent configuration must mean protected');
+    } finally {
+        if ($before === null) {
+            Settings::forget('system.safe_mode');
+        } else {
+            Settings::set('system.safe_mode', $before);
+        }
+
+        Settings::load(true);
+    }
 });
 
 Harness::test('settings round-trip with their types', function (): void {

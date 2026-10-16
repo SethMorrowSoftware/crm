@@ -50,6 +50,7 @@ $nav = [
         'label' => 'Growth',
         'items' => [
             ['Marketing', '/marketing', 'view_marketing', 'megaphone'],
+            ['Campaigns', '/campaigns', 'view_marketing', 'megaphone'],
             ['Segments', '/segments', 'view_marketing', 'target'],
             ['Playbooks', '/playbooks', 'view_automations', 'book'],
             ['Reputation', '/reputation', 'view_reputation', 'star'],

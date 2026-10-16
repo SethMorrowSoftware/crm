@@ -107,6 +107,7 @@ $stats = [
     'triggers'    => 0,
     'rollups'     => 0,
     'woken'       => 0,
+    'campaign_sends' => 0,
     'maintenance' => 0,
     'errors'      => 0,
 ];
@@ -177,7 +178,48 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Nightly maintenance — once a day, not every minute
+// 4. Walk any sending campaign forward by one chunk
+//
+// Forty thousand recipients is not a web request. The send button freezes the
+// audience and leaves the campaign in `sending`; this moves it along a batch
+// at a time, so a big send proceeds at a rate the provider and the venue's
+// hosting can both take, and a browser tab closing cannot interrupt it.
+//
+// Every recipient still goes through Mailer::send() / Sms::send() with their
+// contact id attached, so consent, the suppression list, do-not-contact, the
+// weekly cap and quiet hours apply per person exactly as they would to a
+// reply typed in the inbox.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $sentThisTick = 0;
+
+        foreach (App\Controllers\CampaignController::dueCampaigns() as $campaignId) {
+            if (!$budgetLeft()) {
+                // Out of time rather than out of work. The next tick picks up
+                // where this one stopped — which is the whole point of
+                // freezing the audience rather than re-deriving it.
+                break;
+            }
+
+            $sentThisTick += App\Controllers\CampaignController::sendChunk($campaignId);
+        }
+
+        $stats['campaign_sends'] = $sentThisTick;
+
+        if ($sentThisTick > 0) {
+            cron_out('  ' . $sentThisTick . ' campaign message(s) attempted.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: campaign send failed', ['error' => $e->getMessage()]);
+        cron_out('  ! campaign send: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 5. Nightly maintenance — once a day, not every minute
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft() && cron_shouldRunDaily()) {
@@ -193,7 +235,7 @@ if ($budgetLeft() && cron_shouldRunDaily()) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Heartbeat
+// 6. Heartbeat
 // ---------------------------------------------------------------------------
 
 Settings::set('system.cron_last_run', gmdate('Y-m-d H:i:s'));
@@ -209,11 +251,12 @@ $elapsed = round(microtime(true) - CC_START, 2);
 
 cron_out(sprintf(
     'Done in %ss. Jobs: %d, automations due: %d, conversations woken: %d, '
-        . 'maintenance tasks: %d, errors: %d.',
+        . 'campaign messages: %d, maintenance tasks: %d, errors: %d.',
     $elapsed,
     $stats['jobs'],
     $stats['automations'],
     $stats['woken'],
+    $stats['campaign_sends'],
     $stats['maintenance'],
     $stats['errors']
 ));

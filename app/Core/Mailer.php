@@ -1028,6 +1028,15 @@ final class Mailer
                 'status'            => 'queued',
                 'provider'          => self::driver(),
                 'error_message'     => $redirected ? 'Safe Mode: redirected to the owner' : null,
+                // The price goes on the MESSAGE as well as the usage ledger,
+                // because a campaign's actual cost is summed from these rows.
+                // Recording it only in the ledger left every email campaign
+                // reporting $0.00 beside its estimate however the venue had
+                // priced email, which reads either as broken sending or as
+                // free postage. The column is DECIMAL(10,4), so a tenth of a
+                // cent per email survives to be summed rather than rounding
+                // to nothing forty thousand times.
+                'cost_cents'        => self::unitCostCents(),
                 'created_at'        => now_utc(),
             ]);
         } catch (Throwable $e) {
@@ -1071,6 +1080,19 @@ final class Mailer
         }
     }
 
+    /**
+     * What one email costs, in cents.
+     *
+     * Already cents, unlike the SMS setting's thousandths — so it is used as
+     * it stands. Negative is refused: a provider that pays the venue to send
+     * mail does not exist, and a negative price would make a campaign's cost
+     * fall as it reached more people.
+     */
+    private static function unitCostCents(): float
+    {
+        return max(0.0, (float) Settings::get('mail.cost_per_email_cents', 0));
+    }
+
     /** Record the send against the usage ledger, so cost is visible. */
     private static function meter(?int $messageId): void
     {
@@ -1079,7 +1101,7 @@ final class Mailer
                 'channel'         => 'email',
                 'direction'       => 'outbound',
                 'units'           => 1,
-                'unit_cost_cents' => (float) Settings::get('mail.cost_per_email_cents', 0),
+                'unit_cost_cents' => self::unitCostCents(),
                 'entity_type'     => 'messages',
                 'entity_id'       => $messageId,
                 'provider'        => self::driver(),

@@ -545,6 +545,28 @@ $router->group('/segments', ['auth', 'can:view_marketing'], function ($router): 
     $router->post('/{id:\d+}/delete', ['SegmentController', 'destroy'], ['csrf', 'can:campaigns_manage']);
 });
 
+// ---------------------------------------------------------------------------
+// Campaigns — one message to a lot of people
+//
+// `view_marketing` to look, `campaigns_manage` to build, and `campaigns_send`
+// to actually CONTACT anybody. That last split is the point: somebody can
+// write and cost a campaign without being able to send it, which is how a
+// venue reviews one before it goes out.
+// ---------------------------------------------------------------------------
+
+$router->group('/campaigns', ['auth', 'can:view_marketing'], function ($router): void {
+    $router->get('', ['CampaignController', 'index'], [], 'campaigns');
+    $router->get('/new', ['CampaignController', 'create'], ['can:campaigns_manage'], 'campaigns.create');
+    $router->post('', ['CampaignController', 'store'], ['csrf', 'can:campaigns_manage']);
+    $router->get('/{id:\d+}', ['CampaignController', 'show'], [], 'campaigns.show');
+    $router->get('/{id:\d+}/edit', ['CampaignController', 'edit'], ['can:campaigns_manage'], 'campaigns.edit');
+    $router->post('/{id:\d+}', ['CampaignController', 'update'], ['csrf', 'can:campaigns_manage']);
+    $router->post('/{id:\d+}/test', ['CampaignController', 'test'], ['csrf', 'can:campaigns_send']);
+    $router->post('/{id:\d+}/send', ['CampaignController', 'send'], ['csrf', 'can:campaigns_send']);
+    $router->post('/{id:\d+}/pause', ['CampaignController', 'pause'], ['csrf', 'can:campaigns_send']);
+    $router->post('/{id:\d+}/resume', ['CampaignController', 'resume'], ['csrf', 'can:campaigns_send']);
+});
+
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
 $router->get('/reputation', ['PlaceholderController', 'reputation'], ['auth', 'can:view_reputation'], 'reputation');
 $router->get('/memberships', ['PlaceholderController', 'memberships'], ['auth', 'can:view_memberships'], 'memberships');
