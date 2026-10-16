@@ -631,6 +631,26 @@ final class InboxController extends Controller
             'keyword'         => $keyword,
         ]);
 
+        /*
+         * A recognised keyword is its own moment, fired as well as rather
+         * than instead of `message.received`.
+         *
+         * A venue writes an automation on a keyword — the radio promotion's
+         * word, CASTLE for the Text Club — and it must not have to express
+         * "an inbound text whose body is exactly this" as a condition on
+         * every inbound message. The keyword is in the payload either way,
+         * so an automation on `message.received` can still read it.
+         */
+        if ($channel === 'sms' && $keyword !== null && $keyword !== '') {
+            Event::fire('sms.keyword_received', [
+                'conversation_id' => $conversationId,
+                'message_id'      => $messageId,
+                'contact_id'      => $contactId,
+                'keyword'         => $keyword,
+                'from'            => $from,
+            ]);
+        }
+
         return [
             'conversation_id' => $conversationId,
             'message_id'      => $messageId,

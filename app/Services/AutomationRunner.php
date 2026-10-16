@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Core\Audit;
 use App\Core\DB;
 use App\Core\Event;
+use App\Core\Http;
 use App\Core\Log;
 use App\Core\Mailer;
 use App\Core\Settings;
@@ -135,12 +136,41 @@ final class AutomationRunner
             return null;
         }
 
-        $last = $contactId === null ? null : DB::first(
-            'SELECT started_at, finished_at FROM {automation_runs}
-              WHERE automation_id = :a AND contact_id = :c
-              ORDER BY id DESC LIMIT 1',
-            ['a' => $automationId, 'c' => $contactId]
-        );
+        /*
+         * ONCE PER ENTITY WHERE THERE IS ONE, once per guest where there is
+         * not. The two are different questions and getting it wrong breaks
+         * in both directions:
+         *
+         *   - Deduplicating a "fourteen days before the party" trigger by
+         *     GUEST means a family booking two parties gets one reminder, and
+         *     the second party's waivers are never chased.
+         *   - Not deduplicating by entity at all means the same party is
+         *     enrolled on every scan — one reminder a minute for a day.
+         *
+         * So an entity, when the trigger names one, is enrolled at most once
+         * per automation, whatever the run-once-per-guest flag says. That
+         * flag is about the GUEST, and a scanner that names a booking is not
+         * asking about the guest.
+         */
+        if ($entityType !== null && $entityId !== null) {
+            if (DB::exists(
+                'SELECT id FROM {automation_runs}
+                  WHERE automation_id = :a AND entity_type = :t AND entity_id = :e
+                  LIMIT 1',
+                ['a' => $automationId, 't' => $entityType, 'e' => $entityId]
+            )) {
+                return null;
+            }
+        }
+
+        $last = $contactId === null || ($entityType !== null && $entityId !== null)
+            ? null
+            : DB::first(
+                'SELECT started_at, finished_at FROM {automation_runs}
+                  WHERE automation_id = :a AND contact_id = :c
+                  ORDER BY id DESC LIMIT 1',
+                ['a' => $automationId, 'c' => $contactId]
+            );
 
         $allowed = AutomationEngine::canEnrol(
             $last,
@@ -465,6 +495,10 @@ final class AutomationRunner
                 'add_tag'     => $ok(self::tag($config, $run, true)),
                 'remove_tag'  => $ok(self::tag($config, $run, false)),
                 'update_field' => $ok(self::updateField($config, $run)),
+                'notify_user' => $ok(self::notifyUser($config, $run, $subject)),
+                'move_deal_stage' => self::moveDeal($config, $run, $ok, $failed),
+                'issue_coupon'    => self::issueCoupon($config, $run, $ok, $failed),
+                'webhook'         => self::callWebhook($config, $run, $subject, $automation, $ok, $failed),
 
                 // Not yet built. Recorded as SKIPPED with the reason rather
                 // than silently treated as done: a venue whose automation
@@ -761,6 +795,346 @@ final class AutomationRunner
         ], 'id = :id', ['id' => $contactId]);
 
         return ['set' => $field];
+    }
+
+    /**
+     * Tell somebody at the venue.
+     *
+     * TWO deliveries, because one is not enough on its own: a row in
+     * `notifications` for the bell in the app, and a transactional email,
+     * because a venue manager is not sitting in the CRM at 7am when the
+     * waiver chase runs. The email is the one that actually reaches them
+     * today, and it is TRANSACTIONAL — this is staff mail about their own
+     * work, not marketing, and it must not be filtered by a consent flag on
+     * some guest record that happens to share the address.
+     *
+     * The notification is written even when the email fails: the venue should
+     * be able to see what the automation decided to tell them, whatever the
+     * mail server did.
+     *
+     * @param array<string,mixed> $config
+     * @param array<string,mixed> $run
+     * @param array<string,mixed> $subject
+     * @return array<string,mixed>
+     */
+    private static function notifyUser(array $config, array $run, array $subject): array
+    {
+        $userId = self::assignee($config);
+
+        if ($userId === null) {
+            return ['skipped' => 'there is nobody to notify'];
+        }
+
+        $user = DB::first(
+            'SELECT id, name, email, is_active FROM {users} WHERE id = :id',
+            ['id' => $userId]
+        );
+
+        if ($user === null || (int) $user['is_active'] !== 1) {
+            // Deliberately not an error. Staff leave, and an automation that
+            // named them must keep working for everybody else.
+            return ['skipped' => 'that user is no longer active'];
+        }
+
+        $tags    = self::mergeTags($subject);
+        $message = Mailer::mergeText((string) ($config['message'] ?? ''), $tags);
+        $title   = trim((string) ($config['title'] ?? ''));
+        $title   = $title === ''
+            ? mb_substr($message, 0, 120)
+            : Mailer::mergeText($title, $tags);
+
+        $link = self::link($run);
+
+        try {
+            DB::insert('notifications', [
+                'user_id'    => $userId,
+                'type'       => 'automation',
+                'title'      => mb_substr($title === '' ? 'An automation needs you' : $title, 0, 200),
+                'body'       => $message === '' ? null : $message,
+                'link'       => $link,
+                'created_at' => now_utc(),
+            ]);
+        } catch (Throwable $e) {
+            Log::error('Could not write a notification', ['user' => $userId, 'error' => $e->getMessage()]);
+        }
+
+        $email = trim((string) ($user['email'] ?? ''));
+        $sent  = false;
+
+        if ($email !== '' && ($config['email'] ?? true) !== false) {
+            $result = Mailer::send([
+                'to'                => $email,
+                'to_name'           => (string) ($user['name'] ?? ''),
+                'subject'           => $title === '' ? 'Castle CRM' : $title,
+                'html'              => '<p>' . nl2br(e($message)) . '</p>'
+                    . ($link === null ? '' : '<p><a href="' . e(Mailer::absoluteUrl($link)) . '">Open it in Castle CRM</a></p>'),
+                'automation_run_id' => (int) $run['id'],
+                'kind'              => Mailer::TRANSACTIONAL,
+            ]);
+
+            $sent = ($result['sent'] ?? false) === true;
+        }
+
+        return ['user_id' => $userId, 'emailed' => $sent];
+    }
+
+    /**
+     * Move the deal this run is about.
+     *
+     * Shares `DealStage` with the pipeline board, so an automated move sets
+     * the same columns, writes the same history row and fires the same won or
+     * lost event as a manager dragging the card. A run that is not about a
+     * deal is SKIPPED rather than failed: "move the deal" in a playbook that
+     * also runs for walk-in guests is an authoring slip, not a breakage, and
+     * failing the run would stop the messages after it.
+     *
+     * @param array<string,mixed> $config
+     * @param array<string,mixed> $run
+     * @return array{status:string, output:array<string,mixed>, error:?string, branch:?string, stop:?string, reason:?string}
+     */
+    private static function moveDeal(array $config, array $run, callable $ok, callable $failed): array
+    {
+        $dealId = (string) ($run['entity_type'] ?? '') === 'deals'
+            ? (int) ($run['entity_id'] ?? 0)
+            : 0;
+
+        if ($dealId <= 0 && $run['contact_id'] !== null) {
+            // The guest's own live deal, newest first. A contact with no open
+            // deal gives nothing, which is the skip below.
+            $dealId = (int) (DB::value(
+                "SELECT id FROM {deals}
+                  WHERE contact_id = :c AND deleted_at IS NULL AND status = 'open'
+                  ORDER BY id DESC LIMIT 1",
+                ['c' => (int) $run['contact_id']]
+            ) ?? 0);
+        }
+
+        if ($dealId <= 0) {
+            return $ok(['skipped' => 'this run is not about a deal']);
+        }
+
+        $moved = DealStage::move($dealId, (string) ($config['stage'] ?? ''));
+
+        if (!$moved['moved'] && $moved['reason'] !== null && str_starts_with($moved['reason'], 'there is no stage')) {
+            // A stage name that matches nothing is a FAILURE, not a skip: the
+            // automation says what it intends to do and cannot do it, and a
+            // silent skip would leave a venue believing their pipeline was
+            // being kept up to date.
+            return $failed($moved['reason']);
+        }
+
+        return $ok(array_filter($moved, static fn ($value): bool => $value !== null));
+    }
+
+    /**
+     * Give this guest a coupon.
+     *
+     * The coupon itself is a venue-wide offer with a code, a value and its own
+     * limits; what an automation does is RECORD that this guest has been given
+     * it, which is why this writes a redemption row with no redemption. The
+     * alternative — a coupon row per guest — would fill the offers list with
+     * thousands of single-use codes and break the venue's own reporting on how
+     * an offer performed.
+     *
+     * A coupon the venue has not created is NOT invented here. An automation
+     * that could create offers could create one with any value, and the step
+     * is authored in a playbook that ships with the product.
+     *
+     * @param array<string,mixed> $config
+     * @param array<string,mixed> $run
+     * @return array{status:string, output:array<string,mixed>, error:?string, branch:?string, stop:?string, reason:?string}
+     */
+    private static function issueCoupon(array $config, array $run, callable $ok, callable $failed): array
+    {
+        $code      = strtoupper(trim((string) ($config['code'] ?? '')));
+        $contactId = $run['contact_id'] === null ? null : (int) $run['contact_id'];
+
+        if ($code === '') {
+            return $failed('this step has no coupon code in it');
+        }
+
+        if ($contactId === null) {
+            return $ok(['skipped' => 'there is no guest on this run to give a coupon to']);
+        }
+
+        $coupon = DB::first(
+            'SELECT id, code, name, type, value, max_per_contact, max_redemptions,
+                    redemption_count, is_active, starts_at, expires_at
+               FROM {coupons} WHERE code = :c',
+            ['c' => $code]
+        );
+
+        if ($coupon === null) {
+            return $failed('there is no coupon with the code "' . $code . '"');
+        }
+
+        if ((int) $coupon['is_active'] !== 1) {
+            return $ok(['skipped' => 'the "' . $code . '" offer is switched off']);
+        }
+
+        $now = now_utc();
+
+        if ($coupon['expires_at'] !== null && (string) $coupon['expires_at'] < $now) {
+            // Not a failure: an offer running out is the venue's own doing,
+            // and the rest of the sequence should still run.
+            return $ok(['skipped' => 'the "' . $code . '" offer has expired']);
+        }
+
+        $already = (int) DB::value(
+            'SELECT COUNT(*) FROM {coupon_redemptions} WHERE coupon_id = :id AND contact_id = :c',
+            ['id' => (int) $coupon['id'], 'c' => $contactId]
+        );
+
+        // `max_per_contact` is the venue's own rule about how many times one
+        // family may have an offer, and it is the reason re-running a
+        // playbook does not hand out a second one.
+        if ($already >= max(1, (int) $coupon['max_per_contact'])) {
+            return $ok(['skipped' => 'this guest already has the "' . $code . '" offer']);
+        }
+
+        $issuedId = DB::insert('coupon_redemptions', [
+            'coupon_id'        => (int) $coupon['id'],
+            'contact_id'       => $contactId,
+            // ISSUED, not redeemed. `redeemed_at` stays NULL and
+            // `discount_cents` stays 0 until the code is used at the till, so
+            // nothing counts an offer going out as an offer coming back —
+            // see 009_automation.sql.
+            'discount_cents'   => 0,
+            'issued_at'        => $now,
+            'issued_by_run_id' => (int) $run['id'],
+            'redeemed_at'      => null,
+        ]);
+
+        Event::fire('coupon.issued', [
+            'coupon_id'  => (int) $coupon['id'],
+            'code'       => (string) $coupon['code'],
+            'contact_id' => $contactId,
+            'issue_id'   => $issuedId,
+            'run_id'     => (int) $run['id'],
+        ]);
+
+        return $ok([
+            'coupon_id' => (int) $coupon['id'],
+            'code'      => (string) $coupon['code'],
+            'issued'    => true,
+        ]);
+    }
+
+    /**
+     * Call a URL.
+     *
+     * The escape hatch that makes the engine useful beyond what ships: a
+     * venue wires an automation to their own kitchen printer, a Slack
+     * channel, a spreadsheet. Bounded by `Core\Http` — short timeouts, no
+     * redirects, no inward addresses, and only the first few hundred bytes of
+     * the reply kept.
+     *
+     * The payload names IDs, not personal data. An operator can add fields by
+     * hand if they want them, but a webhook step that shipped sending a
+     * guest's phone number and email to a third party by default would be a
+     * privacy decision made for the venue rather than by it.
+     *
+     * @param array<string,mixed> $config
+     * @param array<string,mixed> $run
+     * @param array<string,mixed> $subject
+     * @param array<string,mixed> $automation
+     * @return array{status:string, output:array<string,mixed>, error:?string, branch:?string, stop:?string, reason:?string}
+     */
+    private static function callWebhook(
+        array $config,
+        array $run,
+        array $subject,
+        array $automation,
+        callable $ok,
+        callable $failed
+    ): array {
+        $url = trim((string) ($config['url'] ?? ''));
+
+        if ($url === '') {
+            return $failed('this step has no URL in it');
+        }
+
+        $refusal = Http::refuse($url);
+
+        if ($refusal !== null) {
+            return $failed($refusal);
+        }
+
+        $payload = [
+            'event'      => 'automation.step',
+            'automation' => [
+                'id'   => (int) $automation['id'],
+                'name' => (string) ($automation['name'] ?? ''),
+            ],
+            'run_id'     => (int) $run['id'],
+            'contact_id' => $run['contact_id'] === null ? null : (int) $run['contact_id'],
+            'entity'     => [
+                'type' => $run['entity_type'] ?? null,
+                'id'   => $run['entity_id'] === null ? null : (int) $run['entity_id'],
+            ],
+            'sent_at'    => now_utc(),
+        ];
+
+        if (is_array($config['payload'] ?? null)) {
+            $tags = self::mergeTags($subject);
+
+            foreach ($config['payload'] as $key => $value) {
+                $payload['data'][(string) $key] = is_string($value)
+                    ? Mailer::mergeText($value, $tags)
+                    : $value;
+            }
+        }
+
+        $headers = [];
+
+        if (($config['secret'] ?? '') !== '') {
+            // A shared secret the receiver can check, as a header rather than
+            // in the body or the URL: a URL with a secret in it ends up in
+            // the step log, in a proxy log and in a bug report.
+            $headers['X-Castle-Signature'] = hash_hmac(
+                'sha256',
+                json_encode($payload, JSON_UNESCAPED_SLASHES) ?: '',
+                (string) $config['secret']
+            );
+        }
+
+        $result = Http::postJson($url, $payload, $headers);
+
+        if (!$result['ok']) {
+            /*
+             * FAILED, so the run retries with backoff.
+             *
+             * A webhook is usually the step the rest of the sequence depends
+             * on — the kitchen ticket, the door code — and an endpoint that
+             * was down for a minute is exactly what the retry schedule is
+             * for. The URL is not repeated in the error: it is on the step.
+             */
+            return $failed(
+                'the webhook answered ' . ($result['status'] === 0 ? 'nothing' : (string) $result['status'])
+                . ($result['error'] === null ? '' : ': ' . $result['error'])
+            );
+        }
+
+        return $ok(['status' => $result['status'], 'ms' => $result['ms']]);
+    }
+
+    /** Where in the app a run's subject can be looked at. */
+    private static function link(array $run): ?string
+    {
+        $id = $run['entity_id'] === null ? 0 : (int) $run['entity_id'];
+
+        $path = match ((string) ($run['entity_type'] ?? '')) {
+            'deals'    => '/deals/',
+            'bookings' => '/bookings/',
+            'contacts' => '/contacts/',
+            default    => null,
+        };
+
+        if ($path !== null && $id > 0) {
+            return $path . $id;
+        }
+
+        return $run['contact_id'] === null ? null : '/contacts/' . (int) $run['contact_id'];
     }
 
     // =================================================================
@@ -1136,6 +1510,9 @@ final class AutomationRunner
             'visit', 'visits'       => 'visits',
             'membership', 'memberships' => 'memberships',
             'contact', 'contacts'   => 'contacts',
+            'child', 'children'     => 'children',
+            'task', 'tasks'         => 'tasks',
+            'conversation', 'conversations' => 'conversations',
             default                 => null,
         };
     }

@@ -6,6 +6,7 @@ namespace App\Controllers;
 
 use App\Core\Audit;
 use App\Core\DB;
+use App\Core\Event;
 use App\Core\Log;
 use App\Core\Mailer;
 use App\Core\Request;
@@ -56,8 +57,10 @@ final class PublicController extends Controller
             ['c' => 'email', 'a' => $address]
         );
 
+        $unsubscribed = null;
+
         if (!$already) {
-            DB::transaction(static function () use ($address, $parsed, $request): void {
+            DB::transaction(static function () use ($address, $parsed, $request, &$unsubscribed): void {
                 DB::insert('suppressions', [
                     'channel'    => 'email',
                     'address'    => $address,
@@ -77,6 +80,8 @@ final class PublicController extends Controller
                     );
                     $contactId = $found === null ? null : (int) $found;
                 }
+
+                $unsubscribed = $contactId;
 
                 if ($contactId !== null) {
                     DB::update('contacts', [
@@ -104,6 +109,18 @@ final class PublicController extends Controller
             });
 
             Audit::event('contact.unsubscribed', ['address' => $address, 'via' => 'one-click']);
+
+            // After the transaction, and only when a contact was found: an
+            // unsubscribe for an address nobody matches has nothing an
+            // automation could act on. A venue's "confirm the removal and ask
+            // why" sequence hangs off this.
+            if ($unsubscribed !== null) {
+                Event::fire('contact.consent_revoked', [
+                    'contact_id' => $unsubscribed,
+                    'channel'    => 'email',
+                    'source'     => 'one-click unsubscribe link',
+                ]);
+            }
         }
 
         // RFC 8058 wants a 200 with no body requirement for the POST form.

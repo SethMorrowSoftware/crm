@@ -16,6 +16,7 @@ declare(strict_types=1);
 
 use App\Core\Acl;
 use App\Core\Event;
+use App\Services\AutomationTriggers;
 use Tests\Assert;
 use Tests\Harness;
 
@@ -569,34 +570,259 @@ Harness::test('the event catalogue is well formed', function (): void {
         Assert::matches('/^[a-z_]+\.[a-z_]+$/', (string) $name, 'event name: ' . $name);
         Assert::notEmpty($description, 'description for ' . $name);
     }
+
+    // Every event named as PENDING has to be IN the catalogue, or the
+    // automation pages cannot label it and `isDeliverable()` — which asks the
+    // catalogue first — would call it deliverable by omission.
+    $orphans = array_diff(array_keys(Event::PENDING), array_keys(Event::CATALOG));
+
+    Assert::same([], array_values($orphans), 'PENDING names an event the catalogue does not: '
+        . implode(', ', $orphans));
+
+    // An event cannot be both a trigger and internal.
+    $both = array_intersect(array_keys(Event::INTERNAL), array_keys(Event::CATALOG));
+
+    Assert::same([], array_values($both), 'both a trigger and internal: ' . implode(', ', $both));
 });
 
-Harness::test('every seeded automation trigger is a real event or a known kind', function (): void {
-    // A seeded automation pointing at an event that does not exist would never
-    // fire, and nobody would notice until a guest was not followed up.
+/**
+ * Every event name the application actually fires.
+ *
+ * Parsed rather than grepped, because the interesting fires are not plain
+ * literals: `Event::fire('booking.' . $to, …)` and
+ * `Event::fire($granted ? 'contact.consent_granted' : 'contact.consent_revoked', …)`
+ * are both real, and a line-based search reads the first as nothing and the
+ * second as two events on one line.
+ *
+ * So the first argument of each call is scanned for string literals, and each
+ * one is taken as either a whole event name or — when it ends in a dot — a
+ * PREFIX, which covers every catalogue entry in that namespace. That is
+ * deliberately loose: it cannot tell which of `booking.held` and
+ * `booking.confirmed` a dynamic fire can actually produce. It is tight
+ * everywhere there is no dynamic fire, which is most places, and it is
+ * exactly as tight as a reader of the code would be.
+ *
+ * @return array{names:list<string>,prefixes:list<string>}
+ */
+function fired_event_names(): array
+{
+    $names    = [];
+    $prefixes = [];
+
+    $classish = [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED];
+
+    foreach (project_php_files() as $file) {
+        $tokens = token_get_all((string) file_get_contents($file));
+        $count  = count($tokens);
+
+        for ($i = 2; $i < $count; $i++) {
+            if (!is_array($tokens[$i]) || $tokens[$i][0] !== T_STRING || $tokens[$i][1] !== 'fire') {
+                continue;
+            }
+
+            if (!is_array($tokens[$i - 1]) || $tokens[$i - 1][0] !== T_DOUBLE_COLON) {
+                continue;
+            }
+
+            $class = $tokens[$i - 2];
+
+            if (!is_array($class)
+                || !in_array($class[0], $classish, true)
+                || !str_ends_with((string) $class[1], 'Event')) {
+                continue;
+            }
+
+            $open = $i + 1;
+
+            while ($open < $count && $tokens[$open] !== '(') {
+                $open++;
+            }
+
+            $depth = 0;
+
+            for ($k = $open; $k < $count; $k++) {
+                $token = $tokens[$k];
+
+                if ($token === '(' || $token === '[') {
+                    $depth++;
+                    continue;
+                }
+
+                if ($token === ')' || $token === ']') {
+                    $depth--;
+
+                    if ($depth <= 0) {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                // The end of the FIRST argument: the payload after it is full
+                // of strings that are not event names.
+                if ($token === ',' && $depth === 1) {
+                    break;
+                }
+
+                if (is_array($token) && $token[0] === T_CONSTANT_ENCAPSED_STRING) {
+                    $literal = trim((string) $token[1], "'\"");
+
+                    if (preg_match('/^[a-z_]+\.[a-z_]+$/', $literal) === 1) {
+                        $names[$literal] = true;
+                    } elseif (preg_match('/^[a-z_]+\.$/', $literal) === 1) {
+                        $prefixes[$literal] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    ksort($names);
+    ksort($prefixes);
+
+    return ['names' => array_keys($names), 'prefixes' => array_keys($prefixes)];
+}
+
+function event_is_fired(string $event, array $fired): bool
+{
+    if (in_array($event, $fired['names'], true)) {
+        return true;
+    }
+
+    foreach ($fired['prefixes'] as $prefix) {
+        if (str_starts_with($event, $prefix)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+Harness::test('every event in the catalogue is fired, or says what it is waiting for', function (): void {
+    /*
+     * THE SILENT FAILURE THIS EXISTS TO PREVENT.
+     *
+     * The automation builder offers the catalogue. An entry nothing fires is a
+     * trigger an operator can choose, switch on, and wait for for ever — and
+     * the automation is working exactly as written, so nothing in the UI and
+     * nothing in the log could say so. MEASURED when the engine was built:
+     * nineteen of the catalogue's entries were in that state, six of them
+     * used by a seeded automation.
+     *
+     * The answer is not to remove them — a venue asking "can I automate a
+     * review coming in?" deserves a better answer than silence — but to NAME
+     * them, in `Event::PENDING`, with the feature that will fire them. So this
+     * gate says: fired, or scanned by cron, or honestly labelled.
+     */
+    $fired = fired_event_names();
+
+    Assert::greaterThan(20, count($fired['names']), 'the parser found almost no fires, so it is broken');
+
+    $silent = [];
+
+    foreach (array_keys(Event::CATALOG) as $event) {
+        if (isset(Event::PENDING[$event])) {
+            continue;
+        }
+
+        if (isset(AutomationTriggers::SCANNED[$event])) {
+            continue;
+        }
+
+        if (!event_is_fired($event, $fired)) {
+            $silent[] = $event;
+        }
+    }
+
+    Assert::same(
+        [],
+        $silent,
+        "these events are offered as triggers and nothing fires them.\n"
+        . "   Fire them, or name them in Event::PENDING with what will:\n   "
+        . implode("\n   ", $silent)
+    );
+});
+
+Harness::test('nothing named as pending is already being fired', function (): void {
+    // The other direction, and the one that rots: when the reputation module
+    // lands and starts firing `review.received`, leaving it in PENDING would
+    // have the automation page tell a venue their working automation is
+    // waiting on a feature that is not built.
+    $fired = fired_event_names();
+
+    $stale = [];
+
+    foreach (array_keys(Event::PENDING) as $event) {
+        // Prefixes are not consulted here. A dynamic fire in the same
+        // namespace is not evidence that THIS event is fired, and treating it
+        // as such would quietly empty this list.
+        if (in_array($event, $fired['names'], true)) {
+            $stale[] = $event;
+        }
+    }
+
+    Assert::same(
+        [],
+        $stale,
+        "these are fired now, so take them out of Event::PENDING:\n   " . implode("\n   ", $stale)
+    );
+});
+
+Harness::test('every event fired is in the catalogue or deliberately internal', function (): void {
+    // An event a module fires that the catalogue does not name is a business
+    // moment the builder cannot offer — invisible capability, and the reason
+    // `booking.deposit_paid` went unoffered while the money ladder had been
+    // climbing all along.
+    $fired   = fired_event_names();
+    $unknown = [];
+
+    foreach ($fired['names'] as $event) {
+        if (isset(Event::CATALOG[$event]) || isset(Event::INTERNAL[$event])) {
+            continue;
+        }
+
+        if (isset(AutomationTriggers::SCANNED[$event])) {
+            continue;
+        }
+
+        $unknown[] = $event;
+    }
+
+    Assert::same(
+        [],
+        $unknown,
+        "fired but not in the catalogue. Add them as triggers, or to Event::INTERNAL:\n   "
+        . implode("\n   ", $unknown)
+    );
+});
+
+Harness::test('every seeded automation trigger is in the trigger catalogue', function (): void {
+    /*
+     * Read from the SEED FILE, not the database, so this runs with no MySQL —
+     * `integration/schema` makes the same assertion against what was actually
+     * installed, including whatever an operator has added since.
+     *
+     * The allowlist this gate used to carry is gone: it listed ten triggers
+     * "whose emitters land in later phases", which is the same claim
+     * `Event::PENDING` now makes in the application itself, where the UI can
+     * read it.
+     */
     $seedFile = (string) file_get_contents(CC_ROOT . '/install/seeds/playbooks.php');
 
     preg_match_all("/',\s*'([a-z_]+\.[a-z_]+|cron|manual)',\s*'/", $seedFile, $matches);
 
-    $known = array_merge(
-        array_keys(Event::CATALOG),
-        // Non-event triggers, plus the events whose emitters land in later
-        // phases. Listed explicitly so adding one is a deliberate act.
-        ['cron', 'manual',
-         'company.recurring_due', 'ticket.abandoned', 'ticket.purchased',
-         'text_club.confirmed', 'feedback.resolved', 'coupon.issued',
-         'donation.declined', 'visit.first'],
-    );
+    Assert::greaterThan(50, count($matches[1]), 'the seed parser found almost no triggers');
 
-    $unknown = [];
+    $catalogue = AutomationTriggers::catalogue();
+    $unknown   = [];
 
     foreach (array_unique($matches[1]) as $trigger) {
-        if (!in_array($trigger, $known, true)) {
+        if (!isset($catalogue[$trigger])) {
             $unknown[] = $trigger;
         }
     }
 
-    Assert::same([], $unknown, "automation triggers with no emitter:\n   " . implode("\n   ", $unknown));
+    Assert::same([], $unknown, "automation triggers nothing can deliver:\n   " . implode("\n   ", $unknown));
 });
 
 // ------------------------------------------------------------- hygiene
@@ -810,6 +1036,32 @@ function schema_columns(): array
         $tables[$match[1]] = $columns;
     }
 
+    /*
+     * THEN THE ALTERS.
+     *
+     * A later schema file may add a column rather than create a table — it has
+     * to, because the migration runner records which FILES it has applied, so
+     * a change edited into an earlier file reaches nobody who has already
+     * installed. Without this the gate reported every such column as one the
+     * schema does not declare, which is a false alarm that would train
+     * somebody to ignore it.
+     *
+     * ADD COLUMN only. A MODIFY or a DROP does not change which columns exist
+     * (and a DROP that did would be caught by the write being wrong).
+     */
+    if (preg_match_all(
+        '/ALTER TABLE\s+`\{prefix\}([a-z_]+)`\s+ADD COLUMN\s+`([a-z_]+)`/i',
+        $sql,
+        $added,
+        PREG_SET_ORDER
+    ) > 0) {
+        foreach ($added as $match) {
+            if (isset($tables[$match[1]]) && !in_array($match[2], $tables[$match[1]], true)) {
+                $tables[$match[1]][] = $match[2];
+            }
+        }
+    }
+
     return $tables;
 }
 
@@ -829,6 +1081,11 @@ Harness::test('the schema parser finds the tables and columns it is asked about'
     );
     Assert::false(in_array('PRIMARY', $tables['bookings'], true), 'keys are not columns');
     Assert::false(in_array('KEY', $tables['bookings'], true));
+
+    // A column added by a later file's ALTER, which is how a schema change
+    // reaches an install that has already run the earlier files.
+    Assert::inArray('issued_at', $tables['coupon_redemptions']);
+    Assert::inArray('redeemed_at', $tables['coupon_redemptions'], 'the original columns survive the merge');
 });
 
 /**

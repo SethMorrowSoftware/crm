@@ -220,6 +220,7 @@ final class Mailer
             ];
 
             self::markSent($messageId, 'captured', null);
+            self::announce($messageId, $message, true, 'captured');
 
             return ['sent' => true, 'reason' => 'captured', 'message_id' => $messageId, 'redirected' => $redirected];
         }
@@ -229,18 +230,21 @@ final class Mailer
         } catch (Throwable $e) {
             Log::error('Mail delivery threw', ['error' => $e->getMessage(), 'to' => $to]);
             self::markFailed($messageId, $e->getMessage());
+            self::announce($messageId, $message, false, 'driver_error');
 
             return ['sent' => false, 'reason' => 'driver_error', 'message_id' => $messageId, 'redirected' => $redirected];
         }
 
         if (!$result['ok']) {
             self::markFailed($messageId, $result['error']);
+            self::announce($messageId, $message, false, (string) $result['error']);
 
             return ['sent' => false, 'reason' => $result['error'], 'message_id' => $messageId, 'redirected' => $redirected];
         }
 
         self::markSent($messageId, self::driver(), $result['provider_id'] ?? null);
         self::meter($messageId);
+        self::announce($messageId, $message, true, 'sent');
 
         return ['sent' => true, 'reason' => 'sent', 'message_id' => $messageId, 'redirected' => $redirected];
     }
@@ -1062,6 +1066,59 @@ final class Mailer
         } catch (Throwable $e) {
             Log::error('Could not mark a message sent', ['error' => $e->getMessage()]);
         }
+    }
+
+    /**
+     * Tell the application an email went out, or did not.
+     *
+     * Fired from the four ends of `send()` rather than from `markSent()` and
+     * `markFailed()`, because the message array is here and the status
+     * writers only have an id — and a listener reading the row back before
+     * the status is written would see the wrong one.
+     *
+     * A REFUSAL IS NOT A FAILURE. Nothing is fired for a message the compliance
+     * checks stopped: no row was recorded, no provider was called, and an
+     * automation on `message.failed` means "the provider could not deliver
+     * this", not "we correctly declined to send it". Those refusals have
+     * their own counters and their own reasons.
+     *
+     * The payload carries `automation_run_id` when an automation sent it. That
+     * is deliberately not a reason to suppress the event — an automation
+     * whose text failed is exactly the case a venue wants a task for — and the
+     * guard against a loop is the same one the `add_tag` step relies on:
+     * enrolment is once per guest per automation unless the venue says
+     * otherwise.
+     *
+     * @param array<string,mixed> $message
+     */
+    private static function announce(?int $messageId, array $message, bool $sent, string $reason): void
+    {
+        if ($messageId === null) {
+            return;
+        }
+
+        $contactId = isset($message['contact_id']) && (int) $message['contact_id'] > 0
+            ? (int) $message['contact_id']
+            : null;
+
+        $runId = isset($message['automation_run_id']) && (int) $message['automation_run_id'] > 0
+            ? (int) $message['automation_run_id']
+            : null;
+
+        Event::fire($sent ? 'message.sent' : 'message.failed', [
+            'message_id'        => $messageId,
+            'contact_id'        => $contactId,
+            'channel'           => 'email',
+            // Normalised the same way the send path normalises it, so a
+            // condition on the kind reads what was actually sent rather than
+            // whatever the caller happened to pass.
+            'kind'              => ($message['kind'] ?? self::MARKETING) === self::TRANSACTIONAL
+                ? self::TRANSACTIONAL
+                : self::MARKETING,
+            'campaign_id'       => isset($message['campaign_id']) ? (int) $message['campaign_id'] : null,
+            'automation_run_id' => $runId,
+            'reason'            => $reason,
+        ]);
     }
 
     private static function markFailed(?int $messageId, string $error): void

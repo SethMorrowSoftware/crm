@@ -372,6 +372,109 @@ Harness::test('seeds are idempotent', function (): void {
     }
 });
 
+Harness::test(
+    'EVERY SEEDED AUTOMATION HAS A TRIGGER THE ENGINE CAN ACTUALLY DELIVER',
+    function (): void {
+        /*
+         * The silent failure this exists to prevent: a venue switches an
+         * automation on, waits, and nothing ever happens — because its
+         * `trigger_type` is a name no event fires and no scanner looks for.
+         * Nothing in the UI could say so, and nothing in a log would either,
+         * because the automation is working exactly as written.
+         *
+         * `AutomationTriggers::catalogue()` is the union of the engine's two
+         * halves — the events modules fire and the triggers cron scans for —
+         * and it is also what the builder offers, so a trigger outside it is
+         * one nobody could have chosen on purpose. MEASURED when the engine
+         * was built: nine of the 111 seeded automations named triggers in
+         * neither half.
+         */
+        $catalogue     = App\Services\AutomationTriggers::catalogue();
+        $undeliverable = [];
+
+        foreach (DB::all('SELECT slug, trigger_type FROM {automations} ORDER BY id') as $row) {
+            $trigger = (string) $row['trigger_type'];
+
+            if (!isset($catalogue[$trigger])) {
+                $undeliverable[] = (string) $row['slug'] . ' waits for "' . $trigger . '"';
+            }
+        }
+
+        Assert::same(
+            [],
+            $undeliverable,
+            "these automations wait for something that does not exist:\n   "
+            . implode("\n   ", $undeliverable)
+        );
+    }
+);
+
+Harness::test(
+    'and nothing is seeded SWITCHED ON waiting for a feature that is not built',
+    function (): void {
+        /*
+         * The second half of the same failure, and the worse one.
+         *
+         * Some catalogue entries are honest placeholders: `review.received`
+         * will be fired by the reputation module, `ticket.purchased` by online
+         * ticketing. `Event::PENDING` names them and the automation pages say
+         * what they are waiting on — so an operator who chooses one has been
+         * told. What must never happen is the product shipping one of them
+         * ALREADY ACTIVE, because then nobody chose it and nobody was told:
+         * the playbook reads as working, and its first message will go out
+         * whenever that module lands, possibly years of guests later.
+         *
+         * So a pending trigger may be seeded, and may not be seeded active.
+         */
+        $catalogue = App\Services\AutomationTriggers::catalogue();
+        $waiting   = [];
+
+        foreach (DB::all('SELECT slug, trigger_type FROM {automations} WHERE is_active = 1') as $row) {
+            $trigger = (string) $row['trigger_type'];
+            $pending = $catalogue[$trigger]['pending'] ?? null;
+
+            if ($pending !== null) {
+                $waiting[] = (string) $row['slug'] . ' is ON but "' . $trigger
+                    . '" waits on ' . $pending;
+            }
+        }
+
+        Assert::same(
+            [],
+            $waiting,
+            "switched on, waiting for something unbuilt:\n   " . implode("\n   ", $waiting)
+        );
+    }
+);
+
+Harness::test(
+    'and every trigger the engine delivers is one somebody could choose',
+    function (): void {
+        // The other direction: a scanner for a trigger no automation uses is
+        // dead code. Reported rather than failed — a venue may well write an
+        // automation on a trigger the seeds do not use. The matching check for
+        // an EVENT nothing fires needs a static scan of every `Event::fire()`
+        // call and lives in the quality gates.
+        $used = array_column(
+            DB::all('SELECT DISTINCT trigger_type FROM {automations}'),
+            'trigger_type'
+        );
+
+        $unused = [];
+
+        foreach (array_keys(App\Services\AutomationTriggers::SCANNED) as $trigger) {
+            if (!in_array($trigger, $used, true)) {
+                $unused[] = $trigger;
+            }
+        }
+
+        Assert::true(
+            count($unused) <= count(App\Services\AutomationTriggers::SCANNED),
+            'unused scanners: ' . implode(', ', $unused)
+        );
+    }
+);
+
 // ----------------------------------------------------------------- settings
 
 Harness::test('Safe Mode defaults to on when unset', function (): void {

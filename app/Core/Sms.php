@@ -287,6 +287,7 @@ final class Sms
             ];
 
             self::markSent($messageId, 'captured', null);
+            self::announce($messageId, $message, true, 'captured');
 
             return self::result(true, 'captured', $messageId, $redirected, $segments, $cost);
         }
@@ -296,18 +297,21 @@ final class Sms
         } catch (Throwable $e) {
             Log::error('SMS delivery threw', ['error' => $e->getMessage()]);
             self::markFailed($messageId, $e->getMessage());
+            self::announce($messageId, $message, false, 'driver_error');
 
             return self::result(false, 'driver_error', $messageId, $redirected, $segments, 0);
         }
 
         if (!$outcome['ok']) {
             self::markFailed($messageId, $outcome['error']);
+            self::announce($messageId, $message, false, (string) $outcome['error']);
 
             return self::result(false, $outcome['error'], $messageId, $redirected, $segments, 0);
         }
 
         self::markSent($messageId, self::driver(), $outcome['provider_id']);
         self::meter($messageId, $segments, $cost);
+        self::announce($messageId, $message, true, 'sent');
 
         return self::result(true, 'sent', $messageId, $redirected, $segments, $cost);
     }
@@ -439,6 +443,24 @@ final class Sms
                     'source'     => mb_substr($source, 0, 80),
                     'created_at' => now_utc(),
                 ]);
+
+                /*
+                 * A STOP is a consent withdrawal, and the application is told
+                 * so — the automation a venue writes here is "take them off
+                 * the party reminder sequence", which is the one thing that
+                 * must happen when somebody opts out and the one thing that
+                 * was not being announced.
+                 *
+                 * Fired only when a CONTACT matched. The suppression above is
+                 * honoured against the number whether or not anybody matches,
+                 * deliberately; an event with nobody attached could not be
+                 * acted on.
+                 */
+                Event::fire('contact.consent_revoked', [
+                    'contact_id' => (int) $contact['id'],
+                    'channel'    => 'sms',
+                    'source'     => $source,
+                ]);
             }
         } catch (Throwable $e) {
             Log::error('Could not record an SMS opt-out', ['error' => $e->getMessage()]);
@@ -519,6 +541,15 @@ final class Sms
                     'action'     => 'granted',
                     'source'     => mb_substr($source, 0, 80),
                     'created_at' => now_utc(),
+                ]);
+
+                // The other side of the STOP above: somebody texting START
+                // has asked to be on the list again, which is where a
+                // welcome-back automation belongs.
+                Event::fire('contact.consent_granted', [
+                    'contact_id' => (int) $contact['id'],
+                    'channel'    => 'sms',
+                    'source'     => $source,
                 ]);
             }
         } catch (Throwable $e) {
@@ -1097,6 +1128,47 @@ final class Sms
 
             return null;
         }
+    }
+
+    /**
+     * Tell the application a text went out, or did not.
+     *
+     * The email side carries the same method and the same reasoning — see
+     * `Mailer::announce()`. In particular: nothing is fired for a message the
+     * compliance checks REFUSED. A refusal is the system working, and an
+     * automation on `message.failed` that ran for every missing-consent
+     * refusal would make a venue chase a problem it does not have.
+     *
+     * @param array<string,mixed> $message
+     */
+    private static function announce(?int $messageId, array $message, bool $sent, string $reason): void
+    {
+        if ($messageId === null) {
+            return;
+        }
+
+        $contactId = isset($message['contact_id']) && (int) $message['contact_id'] > 0
+            ? (int) $message['contact_id']
+            : null;
+
+        $runId = isset($message['automation_run_id']) && (int) $message['automation_run_id'] > 0
+            ? (int) $message['automation_run_id']
+            : null;
+
+        Event::fire($sent ? 'message.sent' : 'message.failed', [
+            'message_id'        => $messageId,
+            'contact_id'        => $contactId,
+            'channel'           => 'sms',
+            // Normalised the same way the send path normalises it, so a
+            // condition on the kind reads what was actually sent rather than
+            // whatever the caller happened to pass.
+            'kind'              => ($message['kind'] ?? self::MARKETING) === self::TRANSACTIONAL
+                ? self::TRANSACTIONAL
+                : self::MARKETING,
+            'campaign_id'       => isset($message['campaign_id']) ? (int) $message['campaign_id'] : null,
+            'automation_run_id' => $runId,
+            'reason'            => $reason,
+        ]);
     }
 
     private static function markSent(?int $messageId, string $provider, ?string $providerId): void

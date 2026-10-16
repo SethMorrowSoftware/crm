@@ -110,6 +110,7 @@ $stats = [
     'campaign_sends' => 0,
     'club_sends'     => 0,
     'auto_steps'     => 0,
+    'auto_scanned'   => 0,
     'maintenance' => 0,
     'errors'      => 0,
 ];
@@ -272,7 +273,38 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Advance automation runs that are due
+// 6. Look for the triggers nothing fires
+//
+// Nobody fires "the party is in fourteen days" — it becomes true one morning,
+// and something has to notice. Of the 111 seeded automations, 45 wait on one
+// of these: the T-minus booking reminders, the birthday run-ups, the lapse
+// and idle thresholds, and the cron schedules.
+//
+// Each scanner is a bounded query for the rows that have JUST crossed their
+// threshold, and each enrols at most once per entity — so a family with two
+// parties gets two reminders and the same party is never reminded twice.
+// Runs BEFORE the advance below, so anything enrolled here takes its first
+// step on the same tick rather than waiting for the next one.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $scanned = App\Services\AutomationTriggers::scan();
+
+        $stats['auto_scanned'] = $scanned;
+
+        if ($scanned > 0) {
+            cron_out('  ' . $scanned . ' automation(s) started by a time-based trigger.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: automation scan failed', ['error' => $e->getMessage()]);
+        cron_out('  ! automation scan: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Advance automation runs that are due
 //
 // A nine-touch nurture is nine passes over nine days, not one pass that
 // sleeps. Each tick picks up the runs whose next step has come due and walks
@@ -315,7 +347,7 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Nightly maintenance — once a day, not every minute
+// 8. Nightly maintenance — once a day, not every minute
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft() && cron_shouldRunDaily()) {
@@ -331,7 +363,7 @@ if ($budgetLeft() && cron_shouldRunDaily()) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Heartbeat
+// 9. Heartbeat
 // ---------------------------------------------------------------------------
 
 Settings::set('system.cron_last_run', gmdate('Y-m-d H:i:s'));
@@ -347,14 +379,15 @@ $elapsed = round(microtime(true) - CC_START, 2);
 
 cron_out(sprintf(
     'Done in %ss. Jobs: %d, automations due: %d, conversations woken: %d, '
-        . 'campaign messages: %d, Text Club offers: %d, automation steps: %d, '
-        . 'maintenance tasks: %d, errors: %d.',
+        . 'campaign messages: %d, Text Club offers: %d, automations started: %d, '
+        . 'automation steps: %d, maintenance tasks: %d, errors: %d.',
     $elapsed,
     $stats['jobs'],
     $stats['automations'],
     $stats['woken'],
     $stats['campaign_sends'],
     $stats['club_sends'],
+    $stats['auto_scanned'],
     $stats['auto_steps'],
     $stats['maintenance'],
     $stats['errors']

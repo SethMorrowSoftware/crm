@@ -15,6 +15,7 @@ use App\Core\Settings;
 use App\Services\AvailabilityEngine;
 use App\Services\BookingRepository;
 use App\Services\QuoteCalculator;
+use App\Services\VisitRecorder;
 use PDOException;
 use Throwable;
 
@@ -580,6 +581,21 @@ final class BookingController extends Controller
         Event::fire('booking.' . $to, ['booking_id' => $id, 'from' => $from]);
         Audit::record('booking.status', 'bookings', $id, ['status' => $from], ['status' => $to]);
 
+        /*
+         * A party that happened is a visit, whether or not anybody used the
+         * check-in screen — and a venue that marks parties complete and never
+         * ticks guests in would otherwise have a contact who has been here
+         * fourteen times reading as never having visited, which is what every
+         * lapsed-guest and loyalty automation keys off.
+         *
+         * `booking` outranks `check_in` in the source order, so this
+         * deliberately replaces the desk's row for the same day and takes the
+         * money with it. It does NOT outrank the card ledger.
+         */
+        if ($to === 'completed') {
+            VisitRecorder::fromBooking($booking, 'booking');
+        }
+
         return $this->success($request, 'Booking moved to ' . str_replace('_', ' ', $to) . '.', '/bookings/' . $id);
     }
 
@@ -705,7 +721,9 @@ final class BookingController extends Controller
             ? (string) BookingRepository::localToUtc((string) $data['occurred_on'], 12 * 60)
             : now_utc();
 
-        DB::transaction(function () use ($id, $signed, $data, $occurred): void {
+        $moved = null;
+
+        DB::transaction(function () use ($id, $signed, $data, $occurred, &$moved): void {
             DB::insert('booking_payments', [
                 'booking_id'   => $id,
                 'amount_cents' => $signed,
@@ -718,10 +736,11 @@ final class BookingController extends Controller
                 'created_at'   => now_utc(),
             ]);
 
-            $this->settle($id);
+            $moved = $this->settle($id);
         });
 
         Event::fire('booking.payment_recorded', ['booking_id' => $id, 'amount_cents' => $signed]);
+        $this->announceMoney($id, $moved);
         Audit::record('booking.payment', 'bookings', $id, null, [
             'amount_cents' => $signed,
             'type'         => $data['type'],
@@ -755,11 +774,18 @@ final class BookingController extends Controller
             return $this->refuse($request, 'That payment is not on this booking.', '/bookings/' . $id);
         }
 
-        DB::transaction(function () use ($paymentId, $id): void {
+        $moved = null;
+
+        DB::transaction(function () use ($paymentId, $id, &$moved): void {
             DB::delete('booking_payments', 'id = :pid', ['pid' => $paymentId]);
 
-            $this->settle($id);
+            $moved = $this->settle($id);
         });
+
+        // Deleting a REFUND can move the booking up the ladder, so this
+        // announces too: the guest is paid in full again and the pre-party
+        // sequence should run as it would have the first time.
+        $this->announceMoney($id, $moved);
 
         Audit::record('booking.payment_deleted', 'bookings', $id, [
             'amount_cents' => (int) $payment['amount_cents'],
@@ -1459,8 +1485,16 @@ final class BookingController extends Controller
      * Derived rather than adjusted, so deleting a mistyped payment leaves the
      * booking correct — and so the three money columns on the row can never
      * drift from the payments behind them.
+     *
+     * RETURNS the status it moved the booking to, or null if the status did
+     * not change. The money ladder is climbed here and nowhere else, so this
+     * is the only place that knows a deposit has just landed — but the event
+     * for it is fired by the caller, AFTER the transaction commits. An
+     * automation enrolled inside the transaction would be rolled back by a
+     * later failure and the guest would get nothing; worse, a listener that
+     * reads the booking back would read the uncommitted row.
      */
-    private function settle(int $bookingId): void
+    private function settle(int $bookingId): ?string
     {
         $booking = DB::first(
             'SELECT total_cents, deposit_cents, status FROM {bookings} WHERE id = :id',
@@ -1468,7 +1502,7 @@ final class BookingController extends Controller
         );
 
         if ($booking === null) {
-            return;
+            return null;
         }
 
         $paid    = $this->paidCents($bookingId);
@@ -1510,6 +1544,42 @@ final class BookingController extends Controller
         }
 
         DB::update('bookings', $columns, 'id = :id', ['id' => $bookingId]);
+
+        $moved = (string) ($columns['status'] ?? $status);
+
+        return $moved === $status ? null : $moved;
+    }
+
+    /**
+     * The event for a move up the money ladder.
+     *
+     * `deposit_paid` and `paid` are reached by taking money, never by the
+     * hand-picked transitions, so `changeStatus()` never fires them — and the
+     * deposit landing is the single most useful moment a party venue has to
+     * automate. Fired from the payment endpoints after the ledger has
+     * settled, with the booking's own status as the authority rather than the
+     * payment's type: a "deposit" that does not cover the deposit has not
+     * paid it, and a balance payment that covers everything has.
+     */
+    private function announceMoney(int $bookingId, ?string $moved): void
+    {
+        if ($moved === null) {
+            return;
+        }
+
+        $event = match ($moved) {
+            'deposit_paid' => 'booking.deposit_paid',
+            'paid'         => 'booking.paid_in_full',
+            // The money came back out and the status fell to `confirmed`.
+            // Nothing is announced: there is no "unpaid" moment in the
+            // catalogue, and firing `booking.confirmed` here would send the
+            // confirmation sequence a second time.
+            default        => null,
+        };
+
+        if ($event !== null) {
+            Event::fire($event, ['booking_id' => $bookingId, 'status' => $moved]);
+        }
     }
 
     private function paidCents(int $bookingId): int

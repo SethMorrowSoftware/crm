@@ -990,13 +990,25 @@ Harness::test(
 Harness::test('a step this version cannot perform is skipped, not called done', function (): void {
     au_clear();
 
-    // A venue whose automation includes a step type this build does not
-    // implement needs to know that. Reporting "ok" would be a lie in the
-    // one place somebody goes to find out what happened.
+    /*
+     * Every step type in `AutomationEngine::STEP_TYPES` is now implemented, so
+     * this uses a type from NOWHERE — which is not a hypothetical. A venue
+     * restoring a backup taken on a later release, or importing a playbook
+     * from one, has steps this build has never heard of. Reporting "ok" for
+     * them would be a lie in the one place somebody goes to find out what
+     * happened, and it would also mark the run complete with its real work
+     * never done.
+     *
+     * It used to use `webhook`, which was unimplemented at the time. That is
+     * exactly how this kind of test rots: the day the step was built, the
+     * assertion started passing for the wrong reason — a webhook POST to a
+     * `.test` domain that fails — and would have gone on "passing" while the
+     * behaviour it names went untested.
+     */
     $automationId = au_automation('autest-unknown', 'visit.recorded');
-    au_step($automationId, 'webhook', ['url' => 'https://example.test/hook']);
+    au_step($automationId, 'send_carrier_pigeon', ['bird' => 'Audrey']);
 
-    $contactId = au_contact('Webhooked');
+    $contactId = au_contact('Unknowable');
 
     Event::fire('visit.recorded', ['contact_id' => $contactId]);
     AutomationRunner::tick();

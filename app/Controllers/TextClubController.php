@@ -661,6 +661,21 @@ final class TextClubController extends Controller
                 ]),
                 'created_at' => $now,
             ]);
+
+            /*
+             * The Text Club's own `text_club.confirmed` says somebody joined
+             * the LIST; this says they granted SMS consent, which is a
+             * different fact with different consequences — it is what the
+             * send path checks, and what a venue's "now you can text them"
+             * automations hang off. This method is the only writer of
+             * `sms_consent = 1` on this path, so it is where the event
+             * belongs.
+             */
+            Event::fire('contact.consent_granted', [
+                'contact_id' => $contactId,
+                'channel'    => 'sms',
+                'source'     => 'text club (' . $via . ')',
+            ]);
         } catch (Throwable $e) {
             \App\Core\Log::error('Could not record Text Club consent', ['error' => $e->getMessage()]);
         }

@@ -12,6 +12,7 @@ use App\Core\Request;
 use App\Core\Response;
 use App\Services\AvailabilityEngine;
 use App\Services\BookingRepository;
+use App\Services\VisitRecorder;
 
 /**
  * The desk on the day.
@@ -195,6 +196,12 @@ final class CheckinController extends Controller
                 'booking_id' => $id,
                 'guest_id'   => $guestId,
             ]);
+
+            // The family is here, so this is a visit. Recorded per BOOKING
+            // rather than per guest — see VisitRecorder: eleven children
+            // ticked in one at a time are one visit, and the second tick
+            // only revises the party size.
+            VisitRecorder::fromBooking($booking);
         }
 
         return $this->success(
@@ -237,6 +244,23 @@ final class CheckinController extends Controller
         }
 
         Audit::record('booking.all_arrived', 'bookings', $id, null, ['guests' => $changed]);
+
+        /*
+         * ONE event for the whole coach party, not one per child.
+         *
+         * This path had none at all, which meant a venue that ticks everybody
+         * in at once — the normal way a school group arrives — got no arrival
+         * automation and no visit, while a venue that tapped each name did.
+         * `guest_id` is null here deliberately: the moment is the group
+         * arriving, and an automation addresses the family that booked.
+         */
+        Event::fire('guest.checked_in', [
+            'booking_id' => $id,
+            'guest_id'   => null,
+            'guests'     => $changed,
+        ]);
+
+        VisitRecorder::fromBooking($booking);
 
         return $this->success(
             $request,
@@ -373,6 +397,8 @@ final class CheckinController extends Controller
         ]);
 
         Event::fire('guest.checked_in', ['booking_id' => $id, 'guest_id' => $guestId]);
+
+        VisitRecorder::fromBooking($booking);
 
         return $this->success($request, $data['name'] . ' added and checked in.', '/checkin/' . $id);
     }
