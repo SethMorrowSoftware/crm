@@ -1019,8 +1019,24 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
-Phase 8 is done and written up in `docs/AUDIT.md`. Every feature in the spec
-is built. See
-`docs/SPEC.md` §13 for the full plan, and §14 for the questions that still need
-the venue's answers — the CenterEdge reporting credentials and the real party
-prices being the two that block the most.
+Phase 8 is done and written up in `docs/AUDIT.md`. **Phases 1–6 and 8 are
+complete. Phase 7 is partly done**, and the part that is missing is the part
+that needs the venue's own systems rather than more code:
+
+- **Built:** the REST API, outbound webhooks, iCal feeds, and CSV import for
+  guests and visit history.
+- **Not built:** the live CenterEdge MSSQL feed and card API, posting a review
+  reply through Google Business Profile (the reputation module records the
+  reply instead — §8.9), and the weather hook. There is no dedicated Slack
+  integration either, though the automation engine's generic `webhook` step
+  takes a Slack incoming-webhook URL today.
+
+**None of that is blocked on code.** `docs/SPEC.md` §14 holds the questions
+it waits on, and two of them have real lead times: whether CenterEdge holds
+usable guest email and phone at all (§14 #3, which the spec calls its most
+important question — near-zero coverage means list-building beats importing),
+whether an MSSQL driver is even reachable from the host (§14 #6 — on cPanel
+shared hosting it probably is not, which makes a venue-side export into the
+CSV importer the permanent answer rather than a stopgap), and a 10DLC brand
+registration for SMS (§14 #8, 2–4 weeks of carrier lead time, and it gates
+the Text Club playbook).

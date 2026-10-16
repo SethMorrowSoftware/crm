@@ -1454,14 +1454,28 @@ delivery log and manual replay.
 | Phase | Scope | State |
 |---|---|---|
 | **0** | This specification | ✅ |
-| **1** | Foundation: installer, full schema, auth/RBAC, routing, UI shell, dashboard, settings, cron, job queue, audit | **in progress** |
-| **2** | Capture & Convert: contacts, households, companies, pipelines, deals, quotes, forms, tasks | |
-| **3** | Bookings: attractions, packages, availability engine, quote calculator, bookings, calendar, run sheets, waivers, check-in | |
-| **4** | Communicate: mail/SMS drivers, templates, inbox, segments, campaigns, Text Club, usage ledger | |
-| **5** | Automate: engine, builder UI, 112 seeded automations, playbook registry and activation | |
-| **6** | Improve: surveys, review routing, review inbox, review wall, memberships, full reporting suite | |
-| **7** | Integrate: CenterEdge MSSQL import, card API, GBP, Slack, webhooks, REST API, iCal, weather | |
-| **8** | Harden: security review, accessibility audit, load test at 50k contacts, docs, backup/restore, update channel | |
+| **1** | Foundation: installer, full schema, auth/RBAC, routing, UI shell, dashboard, settings, cron, job queue, audit | ✅ |
+| **2** | Capture & Convert: contacts, households, companies, pipelines, deals, quotes, forms, tasks | ✅ |
+| **3** | Bookings: attractions, packages, availability engine, quote calculator, bookings, calendar, run sheets, waivers, check-in | ✅ |
+| **4** | Communicate: mail/SMS drivers, templates, inbox, segments, campaigns, Text Club, usage ledger | ✅ |
+| **5** | Automate: engine, builder UI, 112 seeded automations, playbook registry and activation | ✅ |
+| **6** | Improve: surveys, review routing, review inbox, review wall, memberships, full reporting suite | ✅ |
+| **7** | Integrate: CenterEdge MSSQL import, card API, GBP, Slack, webhooks, REST API, iCal, weather | **partly** — see below |
+| **8** | Harden: security review, accessibility audit, load test at 50k contacts, docs, backup/restore, update channel | ✅ |
+
+**Phase 7 is the only incomplete one, and what is left needs the venue rather
+than more code.** Built: the REST API, outbound webhooks, iCal feeds, and CSV
+import for guests and visit history. Not built: the live CenterEdge MSSQL feed
+and card API, posting a review reply through Google Business Profile (§8.9
+records the reply instead), and the weather hook; there is no dedicated Slack
+integration either, though the automation engine's generic `webhook` step takes
+a Slack incoming-webhook URL today.
+
+Each of those waits on an answer in §14 rather than on development time —
+most of all #3 (does CenterEdge hold usable guest email and phone?) and #6 (is
+an MSSQL driver reachable from the host at all?). If #6 is no, which is likely
+on cPanel shared hosting, a venue-side export into the CSV importer is the
+permanent shape of the POS feed and not a stopgap.
 
 > **Phasing risk.** Phase 7 carries the CenterEdge integration, but open questions 3 and 6
 > (§14) could invert the plan. If guest email/phone coverage in the POS turns out to be
