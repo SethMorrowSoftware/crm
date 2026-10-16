@@ -783,6 +783,33 @@ Harness::test('and the same rules under "any" instead of "all" widen as expected
 
 // ------------------------------------------------------------------- storage
 
+/**
+ * The same tree, ignoring the order of an object's keys.
+ *
+ * Needed because `segments.rules` is a JSON column and the two engines this
+ * application supports treat that differently: MySQL 8's JSON is a real type
+ * that NORMALISES on storage — it sorts object keys by length and then by
+ * name, so `{"field":…,"op":…}` reads back as `{"op":…,"field":…}` — while
+ * MariaDB's JSON is an alias for LONGTEXT and stores the string verbatim.
+ *
+ * Key order carries no meaning in JSON and the engine reads these rules by
+ * key, so what matters is that the tree is the same, not that the bytes are.
+ * @param array<mixed> $tree
+ * @return array<mixed>
+ */
+function sg_sorted(array $tree): array
+{
+    $out = [];
+
+    foreach ($tree as $key => $value) {
+        $out[$key] = is_array($value) ? sg_sorted($value) : $value;
+    }
+
+    ksort($out);
+
+    return $out;
+}
+
 Harness::test('a stored segment round-trips through JSON and still selects the same people', function (): void {
     // Rules are stored as JSON in `segments.rules`. A segment that compiled
     // when it was built and not when it was read back would fail at send
@@ -812,7 +839,18 @@ Harness::test('a stored segment round-trips through JSON and still selects the s
         $read   = json_decode((string) $stored, true);
 
         Assert::true(is_array($read), 'the rules come back as an array');
-        Assert::same($rules, $read, 'byte-for-byte the same tree');
+        /*
+         * The same TREE, not the same bytes. Asserting byte-for-byte equality
+         * here was asserting the storage engine's normalisation rather than
+         * anything about this application: MySQL 8 reorders a JSON object's
+         * keys and MariaDB does not, so the test passed on one engine and
+         * failed on the other for a difference that cannot affect behaviour —
+         * every rule is read by key. MEASURED against mysql:8.0.46.
+         *
+         * Types are still compared strictly, so a value that came back as the
+         * string "3" instead of the number 3 would still fail.
+         */
+        Assert::same(sg_sorted($rules), sg_sorted($read), 'the same tree, whatever order the keys come back in');
 
         sg_assert(
             $read,

@@ -163,6 +163,68 @@ Harness::test('two versions cannot share a name', function () use ($owner): void
     }
 });
 
+Harness::test(
+    'PUBLISHING SUCCEEDS AND RECORDS WHAT IT RETIRED, rather than 500ing after the fact',
+    function () use ($owner): void {
+        /*
+         * Publishing a second version retires the first, and
+         * `WaiverController::publish()` records WHICH versions it retired —
+         * as a list. `Audit::diff()` cast that list straight to a string,
+         * which raises "Array to string conversion"; in debug mode the error
+         * handler turns that into an exception, so the route answered 500
+         * having already done the work, and the audit trail recorded the
+         * literal word "Array" instead of the versions.
+         *
+         * MEASURED: it fired on every publish — 657 times in one local
+         * application log — and no test noticed, because every other test
+         * here reads the DATABASE after posting and never looks at the
+         * response status. So this one looks at the status.
+         */
+        $first  = wv_make(['title' => 'WV audit first']);
+        $second = wv_make(['title' => 'WV audit second']);
+
+        try {
+            $owner->postWithToken('/waivers/' . $first, '/waivers/' . $first . '/publish', []);
+
+            $response = $owner->postWithToken(
+                '/waivers/' . $second,
+                '/waivers/' . $second . '/publish',
+                []
+            );
+
+            Assert::true(
+                $response['status'] >= 300 && $response['status'] < 400,
+                'a publish that retires a version should redirect, not fail; got ' . $response['status']
+            );
+
+            $audit = DB::first(
+                "SELECT changes FROM {audit_log}
+                  WHERE action = 'waiver.published' AND entity_id = :id
+                  ORDER BY id DESC LIMIT 1",
+                ['id' => $second]
+            );
+
+            Assert::notNull($audit, 'the publish should be audited');
+
+            $changes = json_decode((string) $audit['changes'], true);
+
+            Assert::true(is_array($changes), 'the audit row should hold readable changes');
+            Assert::hasKey('retired', $changes, 'including what it retired');
+
+            $retired = $changes['retired']['to'] ?? null;
+
+            Assert::true(is_array($retired), 'the retired versions are a LIST, not the word "Array"');
+            Assert::same(
+                [(string) wv_row($first)['version']],
+                $retired,
+                'and it names the version that was actually retired'
+            );
+        } finally {
+            wv_clear();
+        }
+    }
+);
+
 Harness::test('PUBLISHING RETIRES WHATEVER WAS LIVE, leaving exactly one', function () use ($owner): void {
     // Two active versions would make the public page's answer to "what am I
     // signing?" depend on row order.
