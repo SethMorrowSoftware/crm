@@ -98,7 +98,7 @@ $isCurrent = static function (string $href) use ($path): bool {
         <div class="sidebar-brand">
             <a href="<?= e(url('/')) ?>" class="brand-link">
                 <span class="brand-mark" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true" focusable="false">
                         <path d="M3 21V9l3-2v3l3-2V5l3-2 3 2v3l3-2v3l3 2v12H3zm6-2h2v-5H9v5zm4 0h2v-5h-2v5z"/>
                     </svg>
                 </span>

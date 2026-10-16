@@ -54,7 +54,7 @@ $bareClass = ($bareWide ?? false) === true ? 'bare-main is-wide' : 'bare-main';
     <div class="bare-card">
         <div class="bare-brand">
             <span class="brand-mark" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor">
+                <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true" focusable="false">
                     <path d="M3 21V9l3-2v3l3-2V5l3-2 3 2v3l3-2v3l3 2v12H3zm6-2h2v-5H9v5zm4 0h2v-5h-2v5z"/>
                 </svg>
             </span>

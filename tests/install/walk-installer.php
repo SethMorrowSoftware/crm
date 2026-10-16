@@ -19,6 +19,18 @@ declare(strict_types=1);
  *   CC_INSTALL_DB_HOST / _PORT / _NAME / _USER / _PASS
  */
 
+/*
+ * CLI ONLY. This script DELETES `config/config.php` and drives the installer
+ * from nothing — which is exactly what it is for, and exactly why it must not
+ * be reachable by a request. Apache's rewrite lets a real file through, and a
+ * host that ignores the shipped `.htaccess` has nothing else in the way.
+ */
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+
 define('CC_ROOT', dirname(__DIR__, 2));
 
 $config = [

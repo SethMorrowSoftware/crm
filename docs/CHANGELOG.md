@@ -899,13 +899,44 @@ webhooks to be told when something happens inside.
 - **Pressing Test on a webhook no longer queues five more attempts** at an
   endpoint it has just reported broken.
 
+### Hardening (phase 8)
+
+The full method and every figure are in `docs/AUDIT.md`. What changed:
+
+- **`tests/` and `tools/` were executable over HTTP.** The rewrite rules let a
+  real file through, as they must for the stylesheet and the installer, and
+  those two directories were not in the deny list — so `GET /tests/run.php`
+  returned 500, meaning it ran. That file boots against the configured
+  database and can drop every table in it. Denied by path, guarded in PHP for
+  hosts that never read `.htaccess`, and gated so a new script cannot appear
+  without one.
+- **`/.git/config` was readable**, because the dotfile rule tests a file's own
+  name and `.git/config` is a file called `config`. An install deployed by
+  cloning was publishing its repository history. Now denied by path, with
+  `.well-known` exempt so AutoSSL can still renew a certificate.
+- **26 tables had no caption**, so a screen reader announced each as a grid of
+  cells and started reading. All captioned, and gated.
+- Checked and held: the CSP forbids inline script, a guest whose name is an
+  XSS payload is escaped on every page that draws a name, the CSV export
+  escapes a cell that could be read as a formula, `/api/v1` refuses a session
+  cookie, uploaded import files are unreachable, and no error page leaks a
+  path or a driver message.
+- **Measured at 50,000 contacts and 106,123 visits**: every page under 200ms,
+  every report under 170ms, and the 50,000-row CSV export peaks at 6MB of a
+  128M limit — flat across 100,000 rows, which is what proves it streams.
+- **A real restore drill**: backup, `DROP DATABASE`, restore, and the row
+  counts and money sums match to the penny — then the application was signed
+  into and used, because a restore the application cannot use is not one.
+- **Accessibility measured in a browser**: 124 page loads, two themes, two
+  widths, contrast taken from real pixels wherever a gradient made it
+  uncomputable. Zero findings after the captions.
+
 ---
 
 ## Unreleased — next
 
-Phase 8: the security review of everything above against `docs/AUDIT.md`, a
-measured accessibility audit, a 50,000-contact load test and a real
-backup-and-restore drill. Every feature in the spec is now built. See
+Phase 8 is done and written up in `docs/AUDIT.md`. Every feature in the spec
+is built. See
 `docs/SPEC.md` §13 for the full plan, and §14 for the questions that still need
 the venue's answers — the CenterEdge reporting credentials and the real party
 prices being the two that block the most.

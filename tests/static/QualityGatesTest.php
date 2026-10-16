@@ -1925,3 +1925,284 @@ Harness::test('no class is defined by two separate rule blocks', function (): vo
             . implode("\n   ", $offenders)
     );
 });
+
+// ------------------------------- what a request can reach that it should not
+
+/**
+ * Does anything in this file EXECUTE when it is required?
+ *
+ * A class, an interface, a function declaration and a `use` statement all do
+ * nothing on their own; a `$thing = …`, a call, an `if` or an `echo` at the
+ * top level does. Token-based with brace matching, because a `return` inside
+ * a method body is not a top-level statement and a regex cannot tell.
+ */
+function php_has_top_level_code(string $source): bool
+{
+    $tokens = token_get_all($source);
+    $depth  = 0;
+    $skipTo = null;
+
+    foreach ($tokens as $token) {
+        $text = is_array($token) ? $token[1] : $token;
+        $id   = is_array($token) ? $token[0] : null;
+
+        if ($text === '{') {
+            $depth++;
+
+            continue;
+        }
+
+        if ($text === '}') {
+            $depth = max(0, $depth - 1);
+
+            continue;
+        }
+
+        if ($depth > 0) {
+            continue;
+        }
+
+        if ($id !== null && in_array($id, [
+            T_OPEN_TAG, T_CLOSE_TAG, T_INLINE_HTML, T_WHITESPACE, T_COMMENT,
+            T_DOC_COMMENT, T_DECLARE, T_NAMESPACE, T_USE, T_CLASS, T_INTERFACE,
+            T_TRAIT, T_ENUM, T_FUNCTION, T_FINAL, T_ABSTRACT, T_CONST,
+            T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED,
+            T_LNUMBER, T_DNUMBER, T_CONSTANT_ENCAPSED_STRING, T_STATIC,
+        ], true)) {
+            continue;
+        }
+
+        if (in_array($text, ['(', ')', ';', ',', '=', '&', '|', '?', ':', '\\'], true)) {
+            continue;
+        }
+
+        // A variable, a call to a language construct, a control structure.
+        if ($id === T_VARIABLE || $id === T_IF || $id === T_FOREACH || $id === T_ECHO
+            || $id === T_REQUIRE || $id === T_REQUIRE_ONCE || $id === T_INCLUDE
+            || $id === T_INCLUDE_ONCE || $id === T_EXIT || $id === T_PRINT
+            || $id === T_RETURN || $id === T_WHILE || $id === T_FOR || $id === T_SWITCH
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+Harness::test('every directly reachable PHP file is guarded or meant to be public', function (): void {
+    /*
+     * MEASURED, over HTTP: `GET /tests/run.php` returned 500 — which means it
+     * RAN. That file boots against the configured database and, with
+     * `--fresh`, calls `test_drop_all()`.
+     *
+     * The cause is a rule the rest of the application depends on: Apache's
+     * rewrite lets a REAL FILE through untouched, so the stylesheet and the
+     * installer work — and so does every other `.php` on disk outside the
+     * directories `.htaccess` names. `tests` and `tools` were not named.
+     *
+     * The `.htaccess` is fixed, and this gate exists because that file is not
+     * always read: a host serving through nginx, or an Apache vhost with
+     * `AllowOverride None`, never sees it. So the PHP has to refuse too.
+     *
+     * Four files are deliberately public and say why:
+     *   - `index.php`, the front controller;
+     *   - `cron.php`, which a cPanel cron job may call over HTTP with a token
+     *     (its own check is a timing-safe token comparison, not a SAPI test);
+     *   - `install/` — the web installer is the whole point of it;
+     *   - `app/` is denied by path and never entered directly anyway.
+     */
+    $offenders = [];
+
+    $public = [
+        'index.php' => true,
+        'cron.php'  => true,
+    ];
+
+    foreach (['tests', 'tools'] as $directory) {
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator(CC_ROOT . '/' . $directory, FilesystemIterator::SKIP_DOTS)
+        );
+
+        foreach ($iterator as $file) {
+            if (!$file->isFile() || $file->getExtension() !== 'php') {
+                continue;
+            }
+
+            $relative = relative_path($file->getPathname());
+
+            if (isset($public[$relative])) {
+                continue;
+            }
+
+            $source = (string) file_get_contents($file->getPathname());
+
+            /*
+             * A TEST CASE is not an entry point. A file calling
+             * `Harness::suite()` registers cases against a harness that only
+             * the runner creates; fetched on its own it fatals on an undefined
+             * class before reaching anything of its own, and the runner that
+             * would give it a database is itself guarded.
+             *
+             * Everything ELSE in these two directories is a script or a
+             * library that something requires, and both of those run when
+             * they are fetched. That is the set this gate is about — and the
+             * set a new file lands in by default, which is the point.
+             */
+            if (str_contains($source, 'Harness::suite(')) {
+                continue;
+            }
+
+            /*
+             * A library of nothing but declarations — a class, an interface,
+             * functions — does nothing when fetched. Detected by asking
+             * whether anything executes at the top level, rather than by
+             * guessing from the filename.
+             */
+            if (!php_has_top_level_code($source)) {
+                continue;
+            }
+
+            /*
+             * Any shape of SAPI check counts, and `cli-server` has to be one
+             * of them: `tools/dev-server.php` is the ROUTER SCRIPT for
+             * `php -S`, re-executed on every request the development server
+             * handles, and under the built-in server `PHP_SAPI` is
+             * `cli-server`. A plain `!== 'cli'` guard there 404s the whole
+             * application the moment it is added — which is what it did, for
+             * about a minute.
+             */
+            if (str_contains($source, 'PHP_SAPI') || str_contains($source, 'php_sapi_name')) {
+                continue;
+            }
+
+            $offenders[] = $relative;
+        }
+    }
+
+    sort($offenders);
+
+    Assert::same(
+        [],
+        $offenders,
+        "a script outside the front controller runs with no CLI guard:\n   "
+            . implode("\n   ", $offenders)
+    );
+});
+
+Harness::test('the shipped .htaccess denies what a request has no business reaching', function (): void {
+    // The other half of the pair above, and the one that catches a NEW
+    // directory of scripts rather than a new file in an old one.
+    $htaccess = (string) file_get_contents(CC_ROOT . '/.htaccess');
+
+    foreach (['app', 'config', 'storage', 'tests', 'tools'] as $directory) {
+        Assert::true(
+            (bool) preg_match('/RedirectMatch 404[^\n]*\b' . $directory . '\b/', $htaccess),
+            $directory . '/ is denied by path'
+        );
+    }
+
+    /*
+     * A DOTTED DIRECTORY, not just a dotted file. `<FilesMatch "^\.">` tests
+     * the file's own name, so it denies `/.env` and lets `/.git/config`
+     * through — a file called `config` inside a directory called `.git`.
+     * MEASURED: that URL returned 200, publishing the whole repository
+     * history on an install deployed by cloning.
+     */
+    Assert::true(
+        str_contains($htaccess, '(^|/)\\.'),
+        'a path containing a dotted directory is denied, not just a dotted file'
+    );
+
+    /*
+     * AND `.well-known` IS EXEMPT. cPanel's AutoSSL answers its ACME
+     * challenge there; denying it stops certificate renewal — an outage that
+     * arrives ninety days after somebody tightens this file, by which time
+     * nobody connects the two.
+     */
+    Assert::true(
+        str_contains($htaccess, 'well-known'),
+        'ACME challenges still reach the filesystem, or TLS renewal stops'
+    );
+
+    // Directory listings off, and the front controller still reachable.
+    Assert::true(str_contains($htaccess, 'Options -Indexes'));
+    Assert::true(str_contains($htaccess, 'RewriteRule ^ index.php [L]'));
+});
+
+Harness::test('every table a view draws says what it is', function (): void {
+    /*
+     * MEASURED in a browser, across 31 pages in two themes at two widths:
+     * eleven tables had no `<caption>` and no `aria-label`. A screen reader
+     * announces such a table as "table, 7 columns, 42 rows" and then starts
+     * reading cells — so somebody arrives in the middle of a grid of names
+     * and dates with nothing having said what the grid is.
+     *
+     * A caption is one line, it is invisible to everybody else (`sr-only`),
+     * and this is the cheapest accessibility rule in the application to keep.
+     * Pinned here rather than only in the browser audit, because the browser
+     * audit is not what runs in CI.
+     */
+    $offenders = [];
+
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator(CC_ROOT . '/app/Views', FilesystemIterator::SKIP_DOTS)
+    );
+
+    foreach ($iterator as $file) {
+        if (!$file->isFile() || $file->getExtension() !== 'php') {
+            continue;
+        }
+
+        $relative = relative_path($file->getPathname());
+
+        /*
+         * AN EMAIL IS EXEMPT, and not as a convenience. A table in an HTML
+         * email is almost always LAYOUT — it is how every mail client has
+         * been laid out for twenty years — and a `<caption>` there would be
+         * VISIBLE text in the message, because the `sr-only` class that hides
+         * one on a page does not exist in an email. An accessible email is a
+         * well-ordered document with a plain-text alternative, which is what
+         * `Mailer` sends.
+         */
+        if (str_contains($relative, '/emails/') || str_ends_with($relative, '/email.php')) {
+            continue;
+        }
+
+        $source = (string) file_get_contents($file->getPathname());
+
+        if (!preg_match_all('/<table\b[^>]*>/', $source, $tables, PREG_OFFSET_CAPTURE)) {
+            continue;
+        }
+
+        foreach ($tables[0] as $table) {
+            [$tag, $offset] = $table;
+
+            // A label on the tag itself counts.
+            if (str_contains($tag, 'aria-label') || str_contains($tag, 'aria-labelledby')) {
+                continue;
+            }
+
+            /*
+             * A caption must be the FIRST child of the table, per HTML — so
+             * looking a little way past the opening tag is both correct and
+             * enough. Searching the whole file would let one table's caption
+             * vouch for another's.
+             */
+            $window = substr($source, $offset + strlen($tag), 400);
+
+            if (!str_contains($window, '<caption')) {
+                $offenders[] = $relative;
+            }
+        }
+    }
+
+    $offenders = array_values(array_unique($offenders));
+    sort($offenders);
+
+    Assert::same(
+        [],
+        $offenders,
+        "a table with no caption announces itself to a screen reader as a grid "
+            . "of cells and nothing else:\n   " . implode("\n   ", $offenders)
+    );
+});

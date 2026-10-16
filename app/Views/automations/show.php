@@ -305,6 +305,7 @@ $statusBadge = static function (string $status): string {
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Guests in this automation</caption>
                 <thead>
                     <tr>
                         <th scope="col">Guest</th>
@@ -365,6 +366,7 @@ $statusBadge = static function (string $status): string {
 
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Recent activity</caption>
                 <thead>
                     <tr>
                         <th scope="col">When</th>

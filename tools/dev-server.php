@@ -19,6 +19,27 @@ declare(strict_types=1);
  * single-threaded and not hardened.
  */
 
+/*
+ * NOT UNDER A REAL WEB SERVER.
+ *
+ * `cli-server` AS WELL AS `cli`, and getting that wrong broke everything for
+ * a minute: this file is the ROUTER SCRIPT for `php -S`, so it is re-executed
+ * on every request the development server handles — and under the built-in
+ * server `PHP_SAPI` is `cli-server`, not `cli`. A plain `!== 'cli'` guard
+ * therefore 404s the entire application the moment it is added, which is
+ * exactly what it did.
+ *
+ * What the guard is for is Apache or FPM: the shipped `.htaccess` denies
+ * `tools/`, and a host that ignores it (nginx in front, `AllowOverride None`)
+ * would otherwise execute this file on request and bind a port on the
+ * venue's server.
+ */
+if (!in_array(PHP_SAPI, ['cli', 'cli-server'], true)) {
+    http_response_code(404);
+    exit;
+}
+
+
 $root = dirname(__DIR__);
 
 // Cut the path out of REQUEST_URI by hand, for the same reason index.php does:

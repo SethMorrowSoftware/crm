@@ -20,6 +20,18 @@ declare(strict_types=1);
  * and static suites can run anywhere with nothing but PHP.
  */
 
+/*
+ * CLI ONLY. The runner is guarded, and so is this: it is the file that knows
+ * how to connect to the test database and drop every table in it, and a
+ * `require` of it over HTTP would put those functions one call away from
+ * whatever else got included. See the note in `tests/run.php`.
+ */
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+
 define('CC_ROOT', dirname(__DIR__));
 define('CC_TESTING', true);
 

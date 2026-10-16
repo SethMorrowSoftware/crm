@@ -77,6 +77,7 @@ foreach ($checks as $check) {
     <div class="card-head"><div><h2>Environment</h2></div></div>
     <div class="table-wrap">
         <table class="table">
+            <caption class="sr-only">System checks</caption>
             <tbody>
             <tr><th scope="col">PHP version</th><td><?= e($phpInfo['version']) ?></td></tr>
             <tr><th scope="col">Server API</th><td><?= e($phpInfo['sapi']) ?></td></tr>

@@ -302,6 +302,7 @@ $guestName = static function (array $deal): string {
             <?php else: ?>
                 <div class="table-wrap">
                     <table class="table">
+                        <caption class="sr-only">Deals in this pipeline</caption>
                         <thead>
                             <tr>
                                 <th scope="col">Deal</th>

@@ -27,6 +27,7 @@ $canManage = can('deals_manage');
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Pipelines</caption>
                 <thead>
                     <tr>
                         <th scope="col">Pipeline</th>

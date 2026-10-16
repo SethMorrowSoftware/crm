@@ -129,6 +129,7 @@ $stale = $lastRun === null || strtotime((string) $lastRun) < time() - 172800;
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Stored backups</caption>
                 <thead>
                     <tr>
                         <th scope="col">File</th>

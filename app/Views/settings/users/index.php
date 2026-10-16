@@ -15,6 +15,7 @@ declare(strict_types=1);
 <section class="card">
     <div class="table-wrap">
         <table class="table">
+            <caption class="sr-only">User accounts</caption>
             <thead><tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Last seen</th><th scope="col">State</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <tbody>
             <?php foreach ($users as $user): ?>

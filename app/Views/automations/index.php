@@ -95,6 +95,7 @@ declare(strict_types=1);
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Automations</caption>
                 <thead>
                     <tr>
                         <th scope="col">Automation</th>

@@ -366,6 +366,7 @@ $memberName = static function (array $row): string {
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">This guest’s history</caption>
                 <thead>
                 <tr>
                     <th scope="col">When</th>

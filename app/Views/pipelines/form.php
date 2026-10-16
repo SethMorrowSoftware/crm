@@ -131,6 +131,7 @@ $spares = 3;
 
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Stages in this pipeline</caption>
                 <thead>
                     <tr>
                         <th scope="col">Name</th>

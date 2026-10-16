@@ -72,6 +72,7 @@ declare(strict_types=1);
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Audit log</caption>
                 <thead>
                 <tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">Action</th><th scope="col">Record</th><th scope="col">Changes</th><th scope="col">IP</th></tr>
                 </thead>

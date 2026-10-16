@@ -292,6 +292,7 @@ $currentDriver = old('driver') ?: $driver;
 
     <div class="table-wrap">
         <table class="table">
+            <caption class="sr-only">DNS records to add for your domain</caption>
             <thead>
                 <tr><th scope="col">Type</th><th scope="col">Name</th>
                     <th scope="col">Value</th><th scope="col">Why</th></tr>

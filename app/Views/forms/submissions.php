@@ -36,6 +36,7 @@ declare(strict_types=1);
     <section class="card">
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Form submissions</caption>
                 <thead>
                     <tr>
                         <th scope="col">Received</th>
