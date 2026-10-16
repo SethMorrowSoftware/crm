@@ -299,3 +299,32 @@ Two conventions worth keeping:
 
 A test that exists because of a real bug should say so in a comment. Several
 here do, and that note is what stops someone "simplifying" the fix away.
+
+### Three habits that came out of real misses
+
+1. **A list test that never sets a filter does not test the filter.** Two
+   search bugs shipped behind tests that loaded the page with no query, so the
+   clause was never built and never bound.
+2. **Assert on a row LINK, not on the text you searched for.** A filter bar
+   echoes the term back into its own input, so a title assertion passes
+   against an empty list.
+3. **Every refusal test needs its positive control beside it.** A controller
+   that wrote nothing at all, or a page that answered 404 to everything, would
+   satisfy half the refusal tests here perfectly.
+
+### Say what you are not testing
+
+`tests/http/PublicBookingTest.php` ends its header by naming the one guard it
+cannot reach: the `FOR UPDATE` lock the booking write takes over its candidate
+rooms. A sequential suite cannot interleave two writes inside one transaction,
+so removing the lock leaves the suite green. Writing that down is worth more
+than a comment claiming concurrency is covered.
+
+### Mutation-check anything that matters
+
+Every guard added in a phase is checked by breaking it and confirming the
+suite goes red. The scripts are throwaway — a backup, a one-line
+substitution, a filtered run, a restore — but the result is not: three of the
+public booking page's guards had no test that could fail until the sweep said
+so, and one of them (the daily allowance refusing a direct POST) was the whole
+bound on what a stranger can do to the diary.

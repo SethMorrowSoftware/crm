@@ -570,10 +570,112 @@ address.
 
 ---
 
+## Phase 3 — bookings, availability, waivers and the public page
+
+The diary. A booking record with a derived money ladder and a printable run
+sheet; a pure availability engine with its own I/O half; a calendar in month,
+week and day views with resource lanes and a read-only iCal feed; versioned
+waivers a parent signs on their own phone; a check-in desk the front desk can
+work without being able to re-price a party; and a public enquiry page the
+venue switches on when it is ready.
+
+### What the modules are
+
+- **`AvailabilityEngine`** is pure — no database, no clock, no timezone. It
+  answers one day or one time and returns either slots with the resources that
+  could take them, or a refusal naming one of nine reasons. `BookingRepository`
+  is the half that reads rows and converts timestamps, and **the conversion is
+  where this gets quietly wrong**: `cc_bookings.event_date` and its times are
+  the venue's wall clock, every `cc_booking_resources` DATETIME is UTC like
+  everything else in the schema, and both DST offsets appear in the tests on
+  purpose — a suite written only in July passes against code that hard-codes
+  the summer offset.
+- **`QuoteCalculator`** prices a package. Integer cents throughout, no float
+  anywhere in a money path, and division is half-away-from-zero: `intdiv()`
+  truncates, which under-charges the venue by a cent per rounded line.
+- **The run sheet** is what staff carry: times, room, headcount, the allergy
+  note, the add-ons, the tasks. It reaches a role with no `view_revenue`,
+  because the person setting the room up needs the allergy and not the price.
+- **Waivers are versioned and a published version is immutable.** A signature
+  names its version, so publishing new wording tomorrow does not retroactively
+  change what anybody agreed to, and exactly one version is ever live.
+- **`/book`** turns the engine's refusals into alternative dates or a phone
+  number, which is the whole design. It is **off until the venue turns it on**,
+  an enquiry is taken at `inquiry` so the room is really held, and the exposure
+  that creates is bounded by a per-date allowance of unanswered public
+  enquiries plus a route throttle. Nothing is charged and no card details are
+  collected anywhere in this application.
+
+### Four defects found by driving it, not by testing it
+
+Each of these was found in a real browser or against the seeded venue, after
+the tests for that module were already green.
+
+- **A bowling party was unbookable, on every date, and nothing said why.** The
+  engine places a party in ONE resource with room for it, and `resourceTypeFor()`
+  resolved the pool from the package's main attraction — so the seeded Bowling
+  Birthday package, whose attraction owns twenty-four lanes of six, refused its
+  own default of eight guests with "No room of that type holds 8 guests. The
+  largest holds 6", with no alternative to offer. A ten-guest bowling party is
+  really held in a party room and plays on however many lanes it needs, so the
+  method now falls back to the party rooms when no single resource of the
+  attraction's type could physically take the party. **Capacity only, never
+  availability**: falling back because the arena is booked would quietly put a
+  second laser party in a party room at the same three o'clock. It was
+  duplicated in both booking controllers; it now lives once in
+  `BookingRepository`, which fixed the office form at the same time.
+- **Reading a public page spent its POST allowance.** The throttle keyed its
+  counter on the IP and the PATH, and four paths here answer both verbs — three
+  of them pairing a generous read limit with a tight write one. So browsing
+  `/book` eleven times made the enquiry itself answer 429 for the next ten
+  minutes. Every request was individually well inside its own limit, which is
+  why no suite that posts once per test could see it. The key now includes the
+  method.
+- **A blank catalogued add-on quantity meant "one".** Found while clicking
+  through the office form: it put all fourteen catalogued add-ons on a booking
+  — $5,569 of extras on a $511 party, with the arithmetic perfectly correct.
+- **A booking could be saved with no room, and a roomless booking blocked
+  nothing.** The form's room tick-boxes are an override, not a requirement, and
+  somebody taking a party over the phone will not always touch them. Six
+  roomless parties fitted at two o'clock while the calendar showed every room
+  free. The write now takes the first room the engine has already said is
+  available.
+
+Two smaller ones, both wording: the public page's please-call fallback
+resolved a missing phone number to the words "the venue", producing "please
+give us a ring on the venue" in every refusal on an install that had not filled
+the number in; and the page would offer times for a date beyond the year it
+takes bookings for, then refuse the enquiry once the form was filled in — the
+same "show them the form, then say no" the `?start=` validation exists to
+prevent. Alternatives are clamped to the same limit for the same reason.
+
+### Testing
+
+The suite grew from 610 to **831 tests**. Every guard added in this phase was
+mutation-checked: the public booking page's twenty-three mutations are all
+caught, as are five against the capacity fallback and one restoring the old
+throttle key. Three habits came out of it and are now in `docs/TESTING.md`:
+
+1. A list test that never sets a filter does not test the filter.
+2. Assert on a row LINK, not on the text you searched for — a filter bar echoes
+   the term back into its own input, so a title assertion passes against an
+   empty list.
+3. Every refusal test needs its positive control beside it. A page that
+   answered 404 to everything would satisfy half of them perfectly.
+
+One thing is deliberately **not** tested, and the test file says so rather than
+implying otherwise: the `FOR UPDATE` lock the booking write takes over its
+candidate rooms. A sequential suite cannot interleave two writes inside one
+transaction, so removing the lock leaves every test green — the re-check still
+refuses the second enquiry because the first has already committed. What the
+tests pin is that the re-check happens AT THE WRITE rather than only when the
+page was drawn; the lock is reviewed, not measured.
+
+---
+
 ## Unreleased — next
 
-Phase 3 is bookings: availability, run sheets, waivers and check-in. See
-`docs/SPEC.md` §13 for the full plan, and §14 for the fifteen questions that
-need the venue's answers before the work that depends on them can be finished —
-the CenterEdge reporting credentials and the real party prices being the two
-that block the most.
+Phase 4 is communications: the shared inbox, email and SMS sending, segments,
+campaigns and Text Club. See `docs/SPEC.md` §13 for the full plan, and §14 for
+the questions that still need the venue's answers — the CenterEdge reporting
+credentials and the real party prices being the two that block the most.

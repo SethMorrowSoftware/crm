@@ -120,6 +120,25 @@ function ba_sunday(): string
     return A::addDays(ba_saturday(), 1);
 }
 
+/** An attraction nothing else points at, so its resource pool is this test's. */
+function ba_attraction(): int
+{
+    static $counter = 0;
+    $counter++;
+
+    return DB::insert('attractions', [
+        'name'              => 'BA Test Attraction ' . $counter,
+        'slug'              => 'ba-test-' . bin2hex(random_bytes(4)),
+        'is_seasonal'       => 0,
+        'is_party_eligible' => 1,
+        'is_party_main'     => 1,
+        'requires_waiver'   => 0,
+        'is_active'         => 1,
+        'created_at'        => now_utc(),
+        'updated_at'        => now_utc(),
+    ]);
+}
+
 function ba_cleanup(array $bookingIds, array $resourceIds): void
 {
     foreach ($bookingIds as $id) {
@@ -570,5 +589,160 @@ Harness::test('an allocation spanning local midnight blocks its hours on BOTH da
         Assert::same(60, $sunday[0]['end']);
     } finally {
         ba_cleanup([$booking], [$room]);
+    }
+});
+
+// ---------------------------------------------- which resource holds a party
+
+Harness::test('a package uses its ATTRACTION\'S resource when one can hold the party', function (): void {
+    // This is what makes two laser parties at three o'clock impossible: there
+    // is one arena, and the engine places a party in one resource. The
+    // positive control for the fallback below — without it, "falls back to a
+    // party room" would be satisfied by a method that always returned one.
+    $attraction = ba_attraction();
+    $room       = ba_room(30);
+
+    DB::update('resources', ['attraction_id' => $attraction], 'id = :id', ['id' => $room]);
+
+    try {
+        $package = ['main_attraction_id' => $attraction];
+
+        Assert::same('table', R::resourceTypeFor($package, 12), 'twelve guests fit, so the attraction wins');
+        Assert::same('table', R::resourceTypeFor($package, 30), 'and so do exactly thirty');
+        Assert::same(
+            'table',
+            R::resourceTypeFor($package, 0),
+            'and with no headcount given, capacity is not weighed at all'
+        );
+    } finally {
+        ba_cleanup([], [$room]);
+        DB::delete('attractions', 'id = :id', ['id' => $attraction]);
+    }
+});
+
+Harness::test('BUT IT FALLS BACK TO A PARTY ROOM WHEN NONE OF THEM COULD HOLD IT', function (): void {
+    // MEASURED on the seeded venue: the Bowling Birthday package points at the
+    // bowling attraction, whose resources are twenty-four lanes of SIX. The
+    // engine needs one resource with room for the whole party, so every
+    // bowling enquiry — including one for the package's own default of eight
+    // guests — was refused with "No room of that type holds 8 guests. The
+    // largest holds 6", on every date, with no alternative to offer. The
+    // package was unbookable and nothing on the page said why.
+    $attraction = ba_attraction();
+    $lane       = ba_room(6);
+
+    DB::update('resources', ['attraction_id' => $attraction], 'id = :id', ['id' => $lane]);
+
+    try {
+        $package = ['main_attraction_id' => $attraction];
+
+        Assert::same('table', R::resourceTypeFor($package, 6), 'six fit in the lane');
+        Assert::same(
+            R::ROOM_TYPE,
+            R::resourceTypeFor($package, 7),
+            'seven do not, so the party is held in a party room'
+        );
+
+        // AND THE PARTY IS THEN ACTUALLY BOOKABLE, which is the point. A
+        // fallback that returned a type with no usable room in it would pass
+        // the assertion above and leave the package exactly as unbookable.
+        $result = A::day(R::inputFor(
+            ba_saturday(),
+            ['main_attraction_id' => $attraction, 'duration_minutes' => 120, 'min_notice_days' => 7],
+            10,
+            null,
+            R::resourceTypeFor($package, 10)
+        ));
+
+        Assert::true(($result['ok'] ?? false) === true, 'a ten-guest party can be booked: '
+            . (string) ($result['message'] ?? ''));
+    } finally {
+        ba_cleanup([], [$lane]);
+        DB::delete('attractions', 'id = :id', ['id' => $attraction]);
+    }
+});
+
+Harness::test('CAPACITY, NEVER AVAILABILITY, decides the fallback', function (): void {
+    // The dangerous version of the rule above. Falling back because the arena
+    // is BOOKED would quietly put a second laser party in a party room at the
+    // same three o'clock — the double-booking this whole model exists to
+    // prevent. A capacity is a static fact about the building; a collision is
+    // a real "fully booked" and has to read as one.
+    $attraction = ba_attraction();
+    $arena      = ba_room(30);
+    $date       = ba_saturday();
+
+    DB::update('resources', ['attraction_id' => $attraction], 'id = :id', ['id' => $arena]);
+
+    $booking = ba_booking($date, 15 * 60, 17 * 60, $arena);
+
+    try {
+        $package = ['main_attraction_id' => $attraction];
+
+        Assert::same(
+            'table',
+            R::resourceTypeFor($package, 12),
+            'the type does not change just because the only one of them is busy'
+        );
+
+        $check = R::check(
+            $date,
+            15 * 60,
+            ['main_attraction_id' => $attraction, 'duration_minutes' => 120, 'min_notice_days' => 7],
+            12,
+            null,
+            R::resourceTypeFor($package, 12)
+        );
+
+        Assert::false(($check['ok'] ?? false) === true, 'and three o\'clock is refused, not rehoused');
+        Assert::same('fully_booked', (string) $check['reason']);
+    } finally {
+        ba_cleanup([$booking], [$arena]);
+        DB::delete('attractions', 'id = :id', ['id' => $attraction]);
+    }
+});
+
+Harness::test('a resource with NO capacity recorded is treated as unlimited', function (): void {
+    // The engine reads an unrecorded capacity as "no limit" (usable()), so
+    // this has to agree with it — otherwise the fallback fires on a resource
+    // the engine would have accepted, and a venue that simply never filled
+    // the capacity column in finds its packages quietly rehoused.
+    $attraction = ba_attraction();
+    $unknown    = ba_room(null);
+
+    DB::update('resources', ['attraction_id' => $attraction], 'id = :id', ['id' => $unknown]);
+
+    try {
+        Assert::same(
+            'table',
+            R::resourceTypeFor(['main_attraction_id' => $attraction], 500),
+            'five hundred guests do not disqualify a room whose capacity is unknown'
+        );
+    } finally {
+        ba_cleanup([], [$unknown]);
+        DB::delete('attractions', 'id = :id', ['id' => $attraction]);
+    }
+});
+
+Harness::test('a package with no attraction, and one whose attraction has no resource, use a party room', function (): void {
+    // The two ordinary cases, which the fallback above must not have broken.
+    Assert::same(R::ROOM_TYPE, R::resourceTypeFor(null, 12), 'no package at all');
+    Assert::same(R::ROOM_TYPE, R::resourceTypeFor([], 12), 'a package with no attraction');
+    Assert::same(
+        R::ROOM_TYPE,
+        R::resourceTypeFor(['main_attraction_id' => null], 12),
+        'an explicit null attraction'
+    );
+
+    $bare = ba_attraction();
+
+    try {
+        Assert::same(
+            R::ROOM_TYPE,
+            R::resourceTypeFor(['main_attraction_id' => $bare], 12),
+            'and an attraction with no resource of its own'
+        );
+    } finally {
+        DB::delete('attractions', 'id = :id', ['id' => $bare]);
     }
 });

@@ -825,6 +825,75 @@ ul.checks li:last-child { border-bottom: 0; }
 .cal-lanes th[scope="row"] { width: 14rem; vertical-align: top; }
 .cal-lanes .cal-chip { display: inline-block; margin-right: .3rem; white-space: normal; }
 
+/* --------------------------------------------------------- Public booking */
+
+/* The only `bare` page that needs two columns' worth of room: a package
+   picker, a slot grid and a price breakdown do not fit the 24rem card that
+   sign-in was designed around. Opt-in, so sign-in and the error pages are
+   untouched. */
+.bare-main.is-wide { max-width: 46rem; }
+
+.book-step { margin-bottom: var(--gap-lg); }
+.book-step + .book-step { border-top: 1px solid var(--line); padding-top: var(--gap-lg); }
+
+.book-step-title { font-size: 1rem; margin-bottom: .75rem; }
+
+.book-packages { list-style: none; display: grid; gap: .5rem; }
+
+.book-package > a {
+    display: flex; gap: .75rem; align-items: baseline; justify-content: space-between;
+    padding: .7rem .85rem; border: 1px solid var(--line-strong);
+    border-radius: var(--radius); text-decoration: none; color: var(--ink);
+}
+.book-package > a:hover, .book-package > a:focus-visible { border-color: var(--brand); }
+
+/* The chosen package carries a thick left edge as well as the brand colour:
+   colour alone is not a signal, and this is the answer to "which party" that
+   every figure further down the page depends on. */
+.book-package.is-chosen > a {
+    border-color: var(--brand); border-left-width: 4px;
+    background: var(--brand-light); color: var(--brand-dark);
+}
+
+.book-package-price { font-size: .85rem; color: var(--muted); white-space: nowrap; }
+.book-package-price small { display: block; font-size: .78rem; }
+.book-package.is-chosen .book-package-price { color: var(--brand-dark); }
+
+.book-package-note { font-size: .88rem; color: var(--muted); margin-top: .6rem; }
+
+.book-includes { margin: .6rem 0 0 1.1rem; font-size: .85rem; color: var(--muted); }
+
+.book-day-form .form-actions { margin-top: .25rem; }
+
+.book-avail-note { font-size: .9rem; margin-bottom: .6rem; }
+.book-avail-note.is-refused { color: var(--warn); }
+
+.book-slots {
+    list-style: none; display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .6rem;
+}
+
+.book-slot {
+    display: inline-block; padding: .45rem .7rem; border-radius: var(--radius-sm);
+    border: 1px solid var(--field-border); text-decoration: none;
+    color: var(--ink); font-size: .9rem; min-height: 2.75rem; line-height: 1.8;
+}
+.book-slot:hover, .book-slot:focus-visible { border-color: var(--brand); }
+.book-slot small { display: block; font-size: .75rem; color: var(--muted); line-height: 1.2; }
+
+/* Ticked as well as filled, for the same reason as the package above. */
+.book-slot.is-chosen {
+    background: var(--brand); border-color: var(--brand); color: var(--on-accent);
+    font-weight: 700;
+}
+.book-slot.is-chosen small { color: var(--on-accent); }
+
+.book-quote { margin-bottom: .6rem; }
+
+@media (max-width: 38rem) {
+    .book-package > a { flex-direction: column; gap: .2rem; }
+    .book-package-price { white-space: normal; }
+}
+
 /* ------------------------------------------------------------- Responsive */
 
 @media (max-width: 60rem) {

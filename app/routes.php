@@ -15,7 +15,10 @@ declare(strict_types=1);
  *   csrf            — mutating verbs must carry a valid token
  *   can:<perm>      — the user must hold this permission (checked against the
  *                     Acl catalogue, so a typo throws rather than passing)
- *   throttle:n,m    — at most n requests per m minutes per IP per path
+ *   throttle:n,m    — at most n requests per m minutes per IP, per method and
+ *                     path. The method matters: reading a public page and
+ *                     submitting it carry different limits, and a shared
+ *                     counter would let reads spend the writes' allowance.
  *
  * @var \App\Core\Router $router
  */
@@ -468,6 +471,25 @@ $router->group('/waivers', ['auth', 'can:waivers_manage'], function ($router): v
     $router->post('/{id:\d+}/publish', ['WaiverController', 'publish'], ['csrf']);
     $router->post('/{id:\d+}/delete', ['WaiverController', 'destroy'], ['csrf']);
 });
+
+// ---------------------------------------------------------------------------
+// Asking for a party, from the venue's own website
+//
+// `/book` IS NOT BEHIND `auth` either, and is the fourth and last public page.
+// It answers 404 until the venue switches it on (`bookings.public_enabled`),
+// and the same 404 when it is on but no package is active — one answer for
+// every reason it will not serve, so poking at the URL says nothing about the
+// configuration behind it.
+//
+// The GET is throttled because it runs an availability pass per request; the
+// POST is throttled harder because it WRITES, and what it writes holds a room.
+// The daily allowance inside the controller is the second half of that bound:
+// the throttle limits how fast enquiries can arrive, the allowance limits how
+// many one date will take at all.
+// ---------------------------------------------------------------------------
+
+$router->get('/book', ['PublicBookingController', 'show'], ['throttle:120,5'], 'book');
+$router->post('/book', ['PublicBookingController', 'store'], ['csrf', 'throttle:10,10']);
 
 $router->group('/checkin', ['auth', 'can:checkin'], function ($router): void {
     $router->get('', ['CheckinController', 'index'], [], 'checkin');

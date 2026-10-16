@@ -130,6 +130,21 @@ final class Middleware
      * Rate limit by IP and route.
      *
      * Argument form: "attempts,minutes" — e.g. "throttle:10,1".
+     *
+     * THE METHOD IS PART OF THE KEY, and leaving it out was a real bug rather
+     * than a nicety. Four paths in this application answer both GET and POST,
+     * and three of them set a generous limit on reading and a tight one on
+     * writing — a public form, the waiver, the booking page. Keyed on the path
+     * alone, those two limits share one counter, so READING the page spends the
+     * allowance for SENDING it: a family comparing packages and dates makes a
+     * dozen GETs of /book before they type anything, and the eleventh of them
+     * made the enquiry itself answer 429 for the next ten minutes. MEASURED in
+     * a browser walk, which is the only place it shows — every one of those
+     * requests is individually well inside its own limit.
+     *
+     * A method is also the right grain on its own terms: a reader and a writer
+     * of the same URL are not the same action, and the tight limit exists to
+     * bound the writes.
      */
     private static function throttle(Request $request, callable $next, string $argument): Response
     {
@@ -138,7 +153,7 @@ final class Middleware
         $maxAttempts = max(1, (int) ($attempts ?? 60));
         $windowMins  = max(1, (int) ($minutes ?? 1));
 
-        $key = 'throttle:' . sha1($request->ip() . '|' . $request->path());
+        $key = 'throttle:' . sha1($request->method() . '|' . $request->ip() . '|' . $request->path());
 
         $hits = Cache::increment($key, $windowMins * 60);
 

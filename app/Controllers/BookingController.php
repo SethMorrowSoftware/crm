@@ -294,7 +294,7 @@ final class BookingController extends Controller
                 $package,
                 $guests,
                 null,
-                $this->resourceTypeFor($package)
+                BookingRepository::resourceTypeFor($package, $guests)
             ));
 
         // A time arrived at by clicking one of the offered slots. Validated
@@ -411,7 +411,7 @@ final class BookingController extends Controller
                 $package,
                 (int) $booking['guest_count'],
                 $id,
-                $this->resourceTypeFor($package)
+                BookingRepository::resourceTypeFor($package, (int) $booking['guest_count'])
             )),
         ] + $this->formData($package) + $this->formatters());
     }
@@ -538,7 +538,7 @@ final class BookingController extends Controller
                     $package,
                     (int) $booking['guest_count'],
                     $id,
-                    $this->resourceTypeFor($package)
+                    BookingRepository::resourceTypeFor($package, (int) $booking['guest_count'])
                 );
 
                 if (($check['ok'] ?? false) !== true) {
@@ -998,7 +998,7 @@ final class BookingController extends Controller
             $package,
             $guests,
             $exclude > 0 ? $exclude : null,
-            $this->resourceTypeFor($package)
+            BookingRepository::resourceTypeFor($package, $guests)
         ));
 
         if (($result['ok'] ?? false) !== true) {
@@ -1007,7 +1007,7 @@ final class BookingController extends Controller
                 $package,
                 $guests,
                 3,
-                $this->resourceTypeFor($package)
+                BookingRepository::resourceTypeFor($package, $guests)
             );
         }
 
@@ -1129,7 +1129,7 @@ final class BookingController extends Controller
             'addons'        => $priced['addon_lines'],
             'attractions'   => $this->readSchedule($request),
             'resource_ids'  => $resourceIds,
-            'resource_type' => $this->resourceTypeFor($package),
+            'resource_type' => BookingRepository::resourceTypeFor($package, (int) $data['guest_count']),
             'start_minutes' => $start,
             'end_minutes'   => $start + $duration,
             'priced'        => $priced,
@@ -1615,34 +1615,6 @@ final class BookingController extends Controller
         return DB::first('SELECT * FROM {party_packages} WHERE id = :id', ['id' => $id]);
     }
 
-    /**
-     * Which pool of rooms a package draws from.
-     *
-     * A package that names a main attraction with its own room — the laser
-     * arena, the skate rink — takes that; anything else takes a party room.
-     * Returning the party-room type for an attraction with no room of its own
-     * is deliberate: a bowling party is held in a party room, and the lanes
-     * are booked as an attraction within it.
-     *
-     * @param array<string,mixed>|null $package
-     */
-    private function resourceTypeFor(?array $package): string
-    {
-        $attractionId = $package === null ? 0 : (int) ($package['main_attraction_id'] ?? 0);
-
-        if ($attractionId <= 0) {
-            return BookingRepository::ROOM_TYPE;
-        }
-
-        $type = DB::value(
-            'SELECT type FROM {resources}
-              WHERE attraction_id = :id AND is_active = 1 AND type <> :room
-              ORDER BY id LIMIT 1',
-            ['id' => $attractionId, 'room' => BookingRepository::ROOM_TYPE]
-        );
-
-        return is_string($type) && $type !== '' ? $type : BookingRepository::ROOM_TYPE;
-    }
 
     /** @return list<array<string,mixed>> */
     private function addons(int $bookingId): array

@@ -244,6 +244,91 @@ final class BookingRepository
     }
 
     /** @return list<array<string,mixed>> */
+    /**
+     * Which kind of resource holds a party on this package.
+     *
+     * The attraction's own resource when it has one — the laser arena for a
+     * laser party, the rink for a skating party — and a party room otherwise.
+     * That is what makes two laser parties at three o'clock impossible: there
+     * is one arena, and the engine places a party in one resource.
+     *
+     * UNLESS NONE OF THEM COULD HOLD THE PARTY, which is not a hypothetical.
+     * MEASURED on the seeded venue: the Bowling Birthday package points at the
+     * bowling attraction, whose resources are TWENTY-FOUR LANES OF SIX. The
+     * engine needs one resource with room for the whole party, so every
+     * bowling enquiry — including one for the package's own default of eight
+     * guests — was refused with "No room of that type holds 8 guests. The
+     * largest holds 6", on every date, with no alternative to offer. The
+     * package was unbookable and nothing said why.
+     *
+     * A ten-guest bowling party is really held in a party room and plays on
+     * however many lanes it needs; the lanes are an operational detail the
+     * office assigns, not the thing the diary contends over. So when a single
+     * resource of the attraction's type cannot physically take the party, the
+     * party room is the honest answer.
+     *
+     * Capacity ONLY — never availability. Falling back because the arena is
+     * booked would quietly put a second laser party in a party room at the
+     * same three o'clock, which is the double-booking this whole model exists
+     * to prevent. A capacity is a static fact about the building; a collision
+     * is a real "fully booked" and must read as one.
+     *
+     * $guestCount 0 means "do not weigh capacity" — for a page asking which
+     * type a package uses in the abstract, before anyone has said how many
+     * are coming.
+     *
+     * @param array<string,mixed>|null $package
+     */
+    public static function resourceTypeFor(?array $package, int $guestCount = 0): string
+    {
+        $attractionId = $package === null ? 0 : (int) ($package['main_attraction_id'] ?? 0);
+
+        if ($attractionId <= 0) {
+            return self::ROOM_TYPE;
+        }
+
+        $type = DB::value(
+            'SELECT type FROM {resources}
+              WHERE attraction_id = :id AND is_active = 1 AND type <> :room
+              ORDER BY id LIMIT 1',
+            ['id' => $attractionId, 'room' => self::ROOM_TYPE]
+        );
+
+        if (!is_string($type) || $type === '') {
+            return self::ROOM_TYPE;
+        }
+
+        if ($guestCount > 0 && self::largestOfType($type) < $guestCount) {
+            return self::ROOM_TYPE;
+        }
+
+        return $type;
+    }
+
+    /**
+     * The biggest single resource of a type, or PHP_INT_MAX if any has no
+     * capacity recorded — an unrecorded capacity means "unknown", and the
+     * engine already treats it as "no limit", so this has to agree with it or
+     * the fallback above fires on a resource the engine would have accepted.
+     */
+    public static function largestOfType(string $type): int
+    {
+        // COUNT(capacity) skips nulls where COUNT(*) does not, so the two
+        // together say how many have none recorded — one pass, and standard
+        // SQL rather than MySQL's boolean-as-integer.
+        $row = DB::first(
+            'SELECT COUNT(*) - COUNT(capacity) AS unknown, COALESCE(MAX(capacity), 0) AS largest
+               FROM {resources} WHERE type = :type AND is_active = 1',
+            ['type' => $type]
+        );
+
+        if ($row === null) {
+            return 0;
+        }
+
+        return (int) $row['unknown'] > 0 ? PHP_INT_MAX : (int) $row['largest'];
+    }
+
     public static function resourcesOfType(string $type): array
     {
         return DB::all(

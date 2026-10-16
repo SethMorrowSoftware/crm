@@ -9,10 +9,15 @@ declare(strict_types=1);
  * @var string $content
  * @var string $pageTitle
  * @var list<array{type:string,message:string}> $flashMessages
+ * @var bool   $bareWide
  */
 
 $pageTitle ??= 'Castle CRM';
 $flashMessages = is_array($flashMessages ?? null) ? $flashMessages : [];
+
+// Opt-in, so sign-in and the error pages keep the narrow card they were
+// designed around. Only a page that genuinely needs two columns asks.
+$bareClass = ($bareWide ?? false) === true ? 'bare-main is-wide' : 'bare-main';
 
 ?><!doctype html>
 <html lang="en">
@@ -26,7 +31,7 @@ $flashMessages = is_array($flashMessages ?? null) ? $flashMessages : [];
     <link rel="icon" href="<?= e(asset('img/favicon.svg')) ?>" type="image/svg+xml">
 </head>
 <body class="bare">
-<main class="bare-main">
+<main class="<?= e($bareClass) ?>">
     <div class="bare-card">
         <div class="bare-brand">
             <span class="brand-mark" aria-hidden="true">
