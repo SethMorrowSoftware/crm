@@ -40,7 +40,7 @@ handoffs:
 | 8 | Hardening: security review, accessibility audit, load test, backup/restore | |
 
 Everything shipped so far is verified end to end against real MySQL 8.0, MariaDB 10.11
-and MySQL 5.7: **1,555 tests** plus a full installer walk-through. See
+and MySQL 5.7: **1,560 tests** plus a full installer walk-through. See
 [docs/TESTING.md](docs/TESTING.md).
 
 ## Install
@@ -84,6 +84,14 @@ reports — activated as one unit.
 | 06 | Text Club & Repeat Visits | A guest opts in to SMS |
 | 07 | Sales Accountability | A lead has gone quiet |
 | 08 | Fundraising, Donations & Referrals | A nonprofit, school or guest asks |
+
+**105 of the 112 automations arrive with their sequences written**, so a
+playbook can be read, previewed against a real guest, and switched on rather
+than opened to find nothing in it. The other seven are honest gaps: their
+triggers are catalogued but nothing fires them yet — online ticketing, the
+donation workflow and the referral programme are their own modules — and each
+automation's page says exactly what it is waiting on. A test fails the build
+if that ever stops being true in either direction.
 
 ## How it relates to CEplay
 

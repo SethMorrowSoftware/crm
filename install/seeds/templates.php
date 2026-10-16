@@ -730,6 +730,253 @@ return static function (): array {
     ];
 
     /*
+     * --- VISITS, THE SEASON AND THE THINGS A VENUE ANNOUNCES ---------------
+     *
+     * These belong to playbooks 3, 6 and 8, and every one of them is written
+     * to a guest who has already been here — which is a different reader from
+     * the parent enquiring about a party. They know what the building is.
+     * What they do not know is what they missed, what to try next, and
+     * whether it is worth the drive this weekend.
+     *
+     * ONLY TAGS THAT RESOLVE. An unresolved merge tag renders as an EMPTY
+     * STRING in a guest's inbox, not as itself — so "use code {{offer_code}}
+     * before {{offer_expires}}" becomes "use code  before ." if nothing fills
+     * them. Where the venue has to supply something of its own (what the
+     * offer is, which attraction opened), these say so in words the venue
+     * will obviously edit rather than leaving a hole that empties silently.
+     */
+
+    $templates[] = [
+        'slug'      => 'first-visit-welcome',
+        'name'      => 'First visit — thank you',
+        'category'  => 'retention',
+        'subject'   => 'Thanks for coming, {{first_name}}',
+        'preheader' => 'It was your first time with us.',
+        'tags'      => ['first_name', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'Thanks for coming',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('That was your first visit to {{venue_name}}, and we are glad you came.')
+            . "\n" . $p('If anything was not right — a queue, a ride closed, a machine that ate '
+                . 'a credit — tell us. We would far rather hear it than read it somewhere else, '
+                . 'and {{venue_phone}} reaches somebody who can fix it.')
+            . "\n" . $p('See you again soon.')
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'first-visit-what-next',
+        'name'      => 'First visit — what to try next',
+        'category'  => 'retention',
+        'subject'   => 'The bits most people miss first time',
+        'preheader' => 'A few things worth doing on your next visit.',
+        'tags'      => ['first_name', 'venue_name'],
+        'is_system' => false,
+        'body'      => $shell(
+            'What to try next time',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('Nobody gets round all of {{venue_name}} in one go. These are the things '
+                . 'first-timers tell us they wish they had done:')
+            // Edited by the venue. Written as real sentences rather than as
+            // merge tags, because a venue's attractions are not data this
+            // application holds and an empty tag would leave a bare list.
+            . "\n" . $p('<strong>Go-karts</strong> — the track is quietest in the first hour '
+                . 'after opening.<br><strong>Laser tag</strong> — book the session when you '
+                . 'arrive rather than when you want to play.<br><strong>The batting cages</strong> '
+                . '— slower speeds are more fun than they sound.')
+            . "\n" . $p('Edit this list to match your own floor before switching the sequence on.')
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'pre-visit-prep',
+        'name'      => 'Before your visit',
+        'category'  => 'parties',
+        'subject'   => 'Getting ready for {{party_date}}',
+        'preheader' => 'Socks, heights, parking and the card.',
+        'tags'      => ['first_name', 'party_date', 'guest_count', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'Before you come',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('You are booked with us on {{party_date}} for {{guest_count}}. A few '
+                . 'things worth knowing before you set off:')
+            . "\n" . $p('<strong>Socks.</strong> Grip socks are needed for the soft play and we '
+                . 'sell them at the desk.<br><strong>Heights.</strong> Some rides have a minimum '
+                . 'height — worth checking if anybody is borderline, so nobody is disappointed at '
+                . 'the front of a queue.<br><strong>Parking.</strong> The main lot fills first; '
+                . 'there is more round the side.<br><strong>The card.</strong> Attractions run on '
+                . 'a rechargeable card rather than coins. One per guest, topped up at the '
+                . 'machines or the desk.')
+            . "\n" . $p('Anything else, call {{venue_phone}}.'),
+            null,
+            'This is about your booking at {{venue_name}}.'
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'weather-advisory',
+        'name'      => 'Weather — outdoor booking',
+        'category'  => 'parties',
+        'subject'   => 'About the weather on {{party_date}}',
+        'preheader' => 'Your options if it turns.',
+        'tags'      => ['first_name', 'party_date', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'About the weather',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('Your booking on {{party_date}} leans on our outdoor attractions, and '
+                . 'the forecast is not looking certain.')
+            . "\n" . $p('Nothing has changed yet and we will run as planned if we can. But if you '
+                . 'would rather move to another date, call {{venue_phone}} and we will shift it '
+                . 'with no fee — that is easier for everyone than deciding in a car park on the '
+                . 'day.')
+            . "\n" . $p('If we have to close an outdoor attraction ourselves, we will ring you.'),
+            null,
+            'Sent because your booking at {{venue_name}} includes outdoor attractions.'
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'visit-milestone',
+        'name'      => 'Visit milestone — thank you',
+        'category'  => 'retention',
+        'subject'   => 'That is ten visits, {{first_name}}',
+        'preheader' => 'We noticed, and we are glad.',
+        'tags'      => ['first_name', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'Ten visits',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('That was your tenth visit to {{venue_name}}. People come here for a '
+                . 'birthday or a rainy afternoon; ten times means we are part of your year, and '
+                . 'we do not take that lightly.')
+            . "\n" . $p('Mention this email at the desk next time and we will put something on '
+                . 'your card. Edit this line to say what, before you switch the sequence on.')
+            . "\n" . $p('Thank you, genuinely.')
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'seasonal-reopening',
+        'name'      => 'Outdoor attractions reopening',
+        'category'  => 'marketing',
+        'subject'   => 'The outdoor side opens again soon',
+        'preheader' => 'The karts, the range and the rest are back.',
+        'tags'      => ['first_name', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'We are opening up again',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('The outdoor attractions at {{venue_name}} are coming back into season. '
+                . 'You used them last year, so you are hearing first.')
+            . "\n" . $p('Say here which attractions open and on what date, and whether anything '
+                . 'needs booking ahead. Then switch this on a fortnight before you open.')
+            . "\n" . $p('Questions: {{venue_phone}}.')
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'school-holiday-open',
+        'name'      => 'School holiday — we are open',
+        'category'  => 'marketing',
+        'subject'   => 'Open all through the break',
+        'preheader' => 'Somewhere to put a long week.',
+        'tags'      => ['first_name', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'Open through the break',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('School is out shortly and {{venue_name}} is open right through it.')
+            . "\n" . $p('Put your holiday hours here, and anything running that week — a camp, a '
+                . 'daytime rate, an early opening. A reader deciding on Monday morning wants the '
+                . 'times more than the adjectives.')
+            . "\n" . $p('{{venue_phone}} if you want to check anything first.')
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'card-balance-nudge',
+        'name'      => 'Card balance waiting',
+        'category'  => 'retention',
+        'subject'   => 'There is still credit on your card',
+        'preheader' => 'It does not expire. It is just sitting there.',
+        'tags'      => ['first_name', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'Your card still has credit on it',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('There is credit left on your {{venue_name}} card from a previous visit. '
+                . 'It is yours and it is not going anywhere — but it is also no use in a drawer.')
+            . "\n" . $p('Bring the card next time and it will work as it did. Lost it? The desk '
+                . 'can look it up; {{venue_phone}}.')
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'new-attraction',
+        'name'      => 'Something new has opened',
+        'category'  => 'marketing',
+        'subject'   => 'Something new at {{venue_name}}',
+        'preheader' => 'Worth a look on your next visit.',
+        'tags'      => ['first_name', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'Something new',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('We have opened something new at {{venue_name}}.')
+            . "\n" . $p('Say what it is, who it suits, and whether it costs anything on top. One '
+                . 'photograph does more here than three paragraphs.')
+            . "\n" . $p('{{venue_phone}} if you want to ask before you come.')
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'certificate-expiring',
+        'name'      => 'Donation certificate expiring',
+        'category'  => 'marketing',
+        'subject'   => 'Your {{venue_name}} certificate expires soon',
+        'preheader' => 'Three weeks left to use it.',
+        'tags'      => ['first_name', 'organisation', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'Your certificate expires soon',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('The certificate we donated to {{organisation}} expires in about three '
+                . 'weeks.')
+            . "\n" . $p('If it has already been won or auctioned, pass this on to whoever holds '
+                . 'it — they only need to bring it to the desk. If it has not been used at all, '
+                . 'call {{venue_phone}} and we will talk about extending it rather than letting '
+                . 'it lapse.')
+            . "\n" . $p('We would far rather it was used than expired.'),
+            null,
+            'About a donation from {{venue_name}}.'
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'referral-invite',
+        'name'      => 'Ask a regular for a referral',
+        'category'  => 'marketing',
+        'subject'   => 'Know a family who would like it here?',
+        'preheader' => 'A small ask, from one of our regulars.',
+        'tags'      => ['first_name', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'A small ask',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('You are one of the families we see most at {{venue_name}}, so this is a '
+                . 'short ask rather than a campaign.')
+            . "\n" . $p('If you know somebody who would like it here, tell them. Say here what '
+                . 'you will give them both when they come — and what the referrer gets, because '
+                . 'an ask with nothing behind it is just a favour.')
+            . "\n" . $p('And if you would rather not be asked, ignore this one; we will not send '
+                . 'it again this year.')
+        ),
+    ];
+
+    /*
      * THE TEXTS. Separate from the list above because a text is a different
      * medium, not a shorter email.
      *
@@ -819,6 +1066,19 @@ return static function (): array {
             'body'     => 'Thanks for coming to {{venue_name}}, {{first_name}}. Here is a little '
                 . 'something for next time - show this text at the desk. Reply STOP to opt out.',
             'tags'     => ['first_name', 'venue_name'],
+        ],
+        [
+            // The one a venue fires by hand on a wet Tuesday. Deliberately
+            // says nothing about WHAT the offer is: a flash text is edited in
+            // the moment it is sent, and a seeded promise ("free game!") that
+            // the desk has not been told about is worse than no text.
+            'slug'     => 'flash-offer-sms',
+            'name'     => 'Flash offer - text',
+            'category' => 'retention',
+            'kind'     => 'marketing',
+            'body'     => '{{venue_name}} today only: edit this text with the offer before you '
+                . 'send it. Show this message at the desk. Reply STOP to opt out.',
+            'tags'     => ['venue_name'],
         ],
         [
             'slug'     => 'winback-sms',

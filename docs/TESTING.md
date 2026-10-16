@@ -205,6 +205,20 @@ Four more integration suites cover the operator-facing machinery:
   time back on the end date, renewing early keeps the time already paid for,
   and the nightly sweep is idempotent — a second pass writes nothing and fires
   nothing, or every welcome series would go out once a minute
+- **seeds** — the installed state as a contract. Beyond "it seeded": every
+  seeded step is one the ENGINE will actually perform, every template a step
+  names exists on the right channel, and — the two rules that make a playbook
+  worth switching on — **every automation whose trigger can fire has steps**,
+  while every automation whose trigger CANNOT fire has none. Both directions
+  matter: an empty sequence behind a live trigger runs and performs nothing
+  for ever, and an authored sequence behind a dead trigger reads as finished
+  for ever. Plus the quietest failure in the application, measured and pinned:
+  a `cron` automation with no segment enrols a run with NO CONTACT, and
+  `send_email` on one of those records the step as DONE — so the announcement
+  goes to nobody and every page says it worked. And the milestone guard: a
+  "tenth visit" sequence emails a regular on EVERY visit from their tenth
+  unless it guards on its own tag, because `run_once_per_contact` is bypassed
+  whenever the trigger names an entity. Twelve visits, one send.
 - **reports** — all twenty-three reports run against real rows and return the
   agreed shape, every column type is one the table knows how to draw, and the
   catalogue's `money` flag matches the columns each query really returns (a

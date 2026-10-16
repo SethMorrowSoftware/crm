@@ -339,6 +339,51 @@ Harness::test('a count is a plain number, not dollars', function (): void {
     );
 });
 
+Harness::test('"HAS NOT BEEN IN N DAYS" INCLUDES THE PEOPLE WHO HAVE NEVER BEEN', function (): void {
+    /*
+     * The single most common retention question a venue asks, and the engine
+     * could not express it until this operator existed — `describe()` already
+     * had wording for it, so a rule saved through any other route compiled
+     * fine on the page and threw on the way to the database.
+     *
+     * NULL IS IN. Somebody with no recorded visit has not been in sixty days
+     * either, and excluding them makes "never been" invisible to every
+     * win-back campaign — which is the opposite of what the person building
+     * one wants. The pair still partitions the list, because `in_last_days`
+     * excludes them.
+     */
+    $sql = seg_sql(['field' => 'last_visit_at', 'op' => 'not_in_last_days', 'value' => 60]);
+
+    Assert::contains('IS NULL', $sql, 'a guest who has never visited has not visited lately');
+    Assert::contains('DATE_SUB', $sql);
+
+    // The value is a NUMBER of days, like its complement — read by the
+    // field's type alone it would be refused as "not a date".
+    Assert::same(
+        60,
+        array_values(seg_params(['field' => 'last_visit_at', 'op' => 'not_in_last_days', 'value' => 60]))[0]
+    );
+
+    // And it is still guarded like every other relative window.
+    Assert::throws(
+        RuntimeException::class,
+        static fn (): array => S::compile(
+            seg_one(['field' => 'last_visit_at', 'op' => 'not_in_last_days', 'value' => 0])
+        ),
+        'nought days is not a window'
+    );
+
+    // The two together are complements rather than overlapping. Asserted on
+    // the FIELD's own clause: every compiled segment also carries
+    // `c.deleted_at IS NULL`, so looking for "IS NULL" anywhere in the SQL
+    // can never fail and would be a test that passes for the wrong reason.
+    Assert::contains('c.last_visit_at IS NULL', $sql);
+    Assert::notContains(
+        'c.last_visit_at IS NULL',
+        seg_sql(['field' => 'last_visit_at', 'op' => 'in_last_days', 'value' => 60])
+    );
+});
+
 Harness::test('A RELATIVE WINDOW TAKES A NUMBER OF DAYS, not a date', function (): void {
     // MEASURED against the real database: reading the value by the FIELD's
     // type alone refused "last visit in the last 90 days" — a perfectly

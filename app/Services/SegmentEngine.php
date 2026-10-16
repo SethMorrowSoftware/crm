@@ -167,6 +167,23 @@ final class SegmentEngine
             'after'        => '%s > %p',
             'between'      => 'DATE(%s) BETWEEN %p AND %p',
             'in_last_days' => '%s >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %p DAY)',
+            /*
+             * "Has NOT been in sixty days" — the single most common retention
+             * question a venue asks, and the engine could not express it
+             * until now. `before` with a typed date is the shape people
+             * reached for instead, and it is wrong in a way that does not
+             * show: the date is fixed when the segment is saved, so a
+             * win-back list quietly becomes a list of everybody as the months
+             * pass.
+             *
+             * NULL IS INCLUDED DELIBERATELY. A contact with no last visit has
+             * not been in sixty days either, and leaving them out makes
+             * "never been" invisible to every win-back campaign — which is
+             * the opposite of what somebody building one wants. The
+             * complementary operator is `in_last_days`, which excludes them,
+             * so the pair still partitions the list.
+             */
+            'not_in_last_days' => '(%s IS NULL OR %s < DATE_SUB(UTC_TIMESTAMP(), INTERVAL %p DAY))',
             'in_next_days' => '%s BETWEEN UTC_TIMESTAMP() AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL %p DAY)',
             'is_set'       => '%s IS NOT NULL',
             'is_not_set'   => '%s IS NULL',
@@ -386,7 +403,7 @@ final class SegmentEngine
         // every date field, which is most of what a segment is for. MEASURED
         // against the real database, where it threw "that condition needs a
         // date like 2026-07-04" for a perfectly ordinary rule.
-        $value = in_array($operator, ['in_last_days', 'in_next_days'], true)
+        $value = in_array($operator, ['in_last_days', 'not_in_last_days', 'in_next_days'], true)
             ? self::positiveInt($rule['value'] ?? null, 'a number of days')
             : self::cast($type, $rule['value'] ?? null, $definition);
 

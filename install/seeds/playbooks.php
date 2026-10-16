@@ -9,7 +9,7 @@ declare(strict_types=1);
  * Activation is always a deliberate human act, and Safe Mode still applies on
  * top of that — a fresh install cannot message a guest even by accident.
  *
- * @return array{playbooks:int,automations:int,steps:int,offers:int}
+ * @return array{playbooks:int,automations:int,steps:int,offers:int,segments:int}
  */
 
 use App\Core\DB;
@@ -584,20 +584,256 @@ return static function (): array {
                 . 'trigger that feeds the win-back ladders.',
             'tailor'  => 'What a first-time family should try first, your weather policy, and how '
                 . 'long a guest is "away" before they count as lapsed.',
+            /*
+             * TWO OF THESE THIRTEEN SHIP WITH NO STEPS, ON PURPOSE.
+             *
+             * `ticket.purchased` and `ticket.abandoned` are in the event
+             * catalogue but nothing fires them yet — online ticketing is
+             * Phase 7. Authoring sequences behind a trigger that cannot fire
+             * would put two automations in the library that read as finished
+             * and do nothing, for ever, with no way to tell them from the
+             * eleven that work. The automation page already says what each is
+             * waiting on, and that is the honest answer until the module
+             * exists.
+             *
+             * THE VISIT TRIGGERS ARE NOISY, and the sequences are written
+             * around that. `visit.recorded` fires on EVERY visit, so anything
+             * hanging off it either runs once per contact (the milestone) or
+             * is cheap and idempotent (tagging). Only the first fires per
+             * visit, which is what `once => 0` means on the one that must.
+             */
             'automations' => [
-                ['First visit — welcome', 'visit.first', 'Day 1 thank you, day 3 "what to try next", day 10 a reason to return.'],
-                ['Returning guest — recognise them', 'visit.recorded', 'Tag frequency bands so later messages can speak to a regular differently.'],
-                ['Pre-visit preparation', 'booking.upcoming', 'Height rules, socks for Ballocity, parking and what the Castle Card is.'],
-                ['Weather advisory for outdoor bookings', 'booking.upcoming', 'Two days out, if the forecast threatens an outdoor-led party, offer a rebooking.'],
+                [
+                    'First visit — welcome',
+                    'visit.first',
+                    'Day 1 thank you, day 3 "what to try next", day 10 a reason to return.',
+                    [
+                        ['type' => 'add_tag', 'tag' => 'first visit'],
+                        ['type' => 'send_email', 'template' => 'first-visit-welcome', 'wait' => 1440],
+                        ['type' => 'send_email', 'template' => 'first-visit-what-next', 'wait' => 2880],
+                        ['type' => 'send_sms', 'template' => 'return-offer-sms', 'wait' => 10080],
+                    ],
+                    [
+                        // It stops the moment they come back: the whole point
+                        // of the ladder is a second visit, and the day-ten
+                        // text is an apology for not having had one.
+                        'goal' => 'visit.recorded', 'goal_hours' => 336,
+                    ],
+                ],
+                [
+                    'Returning guest — recognise them',
+                    'visit.recorded',
+                    'Tag frequency bands so later messages can speak to a regular differently.',
+                    [
+                        /*
+                         * Tagging only, and deliberately nothing else: this
+                         * runs on EVERY visit by every guest, so a message
+                         * here would be a message every time somebody walked
+                         * in. What it buys is that every other sequence —
+                         * and every segment — can ask "is this a regular?"
+                         * without counting visits itself.
+                         */
+                        ['type' => 'condition', 'field' => 'visit_count', 'op' => 'gte', 'value' => '10'],
+                        ['type' => 'add_tag', 'tag' => 'regular', 'branch' => 'yes'],
+                        ['type' => 'condition', 'field' => 'visit_count', 'op' => 'gte', 'value' => '3'],
+                        ['type' => 'add_tag', 'tag' => 'returning', 'branch' => 'yes'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Pre-visit preparation',
+                    'booking.upcoming',
+                    'Height rules, socks for Ballocity, parking and what the Castle Card is.',
+                    [
+                        ['type' => 'send_email', 'template' => 'pre-visit-prep', 'kind' => 'transactional'],
+                        // The morning before, not the morning of: a family
+                        // reading "bring grip socks" as they park has been
+                        // told too late to act on it.
+                        ['type' => 'send_sms', 'template' => 'party-tomorrow-sms', 'kind' => 'transactional',
+                         'before' => ['field' => 'event_date', 'days' => 1, 'at' => '10:00']],
+                    ],
+                    ['when' => ['days' => 3], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Weather advisory for outdoor bookings',
+                    'booking.upcoming',
+                    'Two days out, if the forecast threatens an outdoor-led party, offer a rebooking.',
+                    [
+                        /*
+                         * NO FORECAST IS READ. This application has no weather
+                         * feed and pretending otherwise would be worse than
+                         * useless — a venue would trust a judgement nothing is
+                         * making. So the sequence puts the decision in front of
+                         * a person with the booking in hand, and the guest is
+                         * only emailed once somebody has looked.
+                         */
+                        ['type' => 'create_task',
+                         'title' => 'Check the forecast for {{full_name}} on {{party_date}}',
+                         'description' => 'An outdoor-led booking two days out. If the forecast '
+                            . 'is poor, send the weather email from this task and offer to move '
+                            . 'the date. Castle CRM reads no forecast — this is a human call.',
+                         'due_in_hours' => 6, 'priority' => 'high'],
+                        ['type' => 'notify_user',
+                         'title' => 'Outdoor booking, two days out',
+                         'message' => '{{full_name}} is booked on {{party_date}} for something '
+                            . 'outdoor-led. Worth a look at the forecast.'],
+                    ],
+                    ['when' => ['days' => 2], 'once' => 0, 'reentry' => 1],
+                ],
                 ['Abandoned ticket cart', 'ticket.abandoned', 'An hour later, one reminder with the cart restored.'],
                 ['Ticket purchased — prepare', 'ticket.purchased', 'Confirm, add to calendar, and set expectations for the day.'],
-                ['High spender recognition', 'visit.recorded', 'When a visit exceeds a spend threshold, tag the household for VIP treatment.'],
-                ['Tenth visit milestone', 'visit.recorded', 'Recognise a tenth visit with a thank-you and a small offer.'],
-                ['Lapsing soon — pre-emptive nudge', 'contact.lapsed', 'Before a guest is fully lapsed, one light "we miss you" touch.'],
-                ['Seasonal reopening announcement', 'cron', 'When outdoor attractions come back into season, tell the people who used them.'],
-                ['Rainy day indoor push', 'manual', 'A same-day text to local guests when the weather turns, respecting quiet hours.'],
-                ['School holiday reminder', 'cron', 'Ahead of each local school break, remind families the Castle is open.'],
-                ['Castle Card balance nudge', 'cron', 'Remind guests holding a balance that it is waiting for them.'],
+                [
+                    'High spender recognition',
+                    'visit.recorded',
+                    'When a visit exceeds a spend threshold, tag the household for VIP treatment.',
+                    [
+                        /*
+                         * CENTS, and not already tagged.
+                         *
+                         * The threshold is in cents: written as 150 it would
+                         * tag every guest who spent more than a dollar fifty,
+                         * which is all of them, and the tag would mean
+                         * nothing.
+                         *
+                         * The tag is also the GUARD, for the same reason as
+                         * the milestone below — `visit.recorded` names an
+                         * entity, so every visit enrols a fresh run whatever
+                         * `once` says. Without the second rule a family who
+                         * always spends well would notify a manager every
+                         * single visit, and a notification that arrives every
+                         * time stops being read.
+                         */
+                        ['type' => 'condition', 'rules' => [
+                            'match' => 'all',
+                            'rules' => [
+                                ['field' => 'visits_spend_cents', 'op' => 'gte', 'value' => '15000'],
+                                ['field' => 'tags', 'op' => 'not_contains', 'value' => 'high spender'],
+                            ],
+                        ]],
+                        ['type' => 'add_tag', 'tag' => 'high spender', 'branch' => 'yes'],
+                        ['type' => 'notify_user', 'branch' => 'yes',
+                         'title' => 'A big visit',
+                         'message' => '{{full_name}} has just spent well above average. Worth a '
+                            . 'hello from a manager next time they are in.'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Tenth visit milestone',
+                    'visit.recorded',
+                    'Recognise a tenth visit with a thank-you. The tag it leaves is what stops it congratulating a regular every week thereafter.',
+                    [
+                        /*
+                         * THE TAG IS THE GUARD, NOT `once`.
+                         *
+                         * `run_once_per_contact` is deliberately bypassed
+                         * when the trigger names an ENTITY, and
+                         * `visit.recorded` names a visit — so every visit
+                         * enrols a new run however that flag is set. The
+                         * condition stays true from the tenth visit onwards,
+                         * so without a second rule this emails a regular
+                         * EVERY TIME THEY COME, for ever. MEASURED on twelve
+                         * visits before this rule existed: twelve runs, three
+                         * of them past the threshold.
+                         *
+                         * The tag is written by this same sequence, so the
+                         * next run sees it and takes the no branch. Tags
+                         * arrive comma-wrapped (",first visit,regular,"), so
+                         * `not_contains` on the bare name is the right test.
+                         */
+                        ['type' => 'condition', 'rules' => [
+                            'match' => 'all',
+                            'rules' => [
+                                ['field' => 'visit_count', 'op' => 'gte', 'value' => '10'],
+                                ['field' => 'tags', 'op' => 'not_contains', 'value' => 'milestone 10'],
+                            ],
+                        ]],
+                        // Tagged FIRST, so a second visit recorded moments
+                        // later finds the guard already in place rather than
+                        // racing the email.
+                        ['type' => 'add_tag', 'tag' => 'milestone 10', 'branch' => 'yes'],
+                        ['type' => 'send_email', 'template' => 'visit-milestone', 'branch' => 'yes'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Lapsing soon — pre-emptive nudge',
+                    'contact.lapsed',
+                    'Before a guest is fully lapsed, one light "we miss you" touch.',
+                    [
+                        ['type' => 'send_email', 'template' => 'lapsed-guest-winback'],
+                        ['type' => 'send_sms', 'template' => 'winback-sms', 'wait' => 5760],
+                        ['type' => 'add_tag', 'tag' => 'lapsing'],
+                    ],
+                    [
+                        'goal' => 'visit.recorded', 'goal_hours' => 720,
+                        // And it stops if they come back between the email and
+                        // the text — four days is long enough for a weekend.
+                        'exit' => ['match' => 'any', 'rules' => [
+                            ['field' => 'days_since_last_visit', 'op' => 'lt', 'value' => '7'],
+                        ]],
+                    ],
+                ],
+                [
+                    'Seasonal reopening announcement',
+                    'cron',
+                    'When outdoor attractions come back into season, tell the people who used them.',
+                    [
+                        ['type' => 'send_email', 'template' => 'seasonal-reopening'],
+                    ],
+                    [
+                        // Once a year, in the spring. A venue moves this to
+                        // its own opening date; what matters is that it is a
+                        // date and not a wait, so it cannot drift.
+                        //
+                        // AND A SEGMENT, which is what makes it send to
+                        // anybody at all — see the note above the segments.
+                        'when' => ['expression' => '23 9 15 3 *', 'segment' => 'recent-guests'],
+                        'once' => 0, 'reentry' => 1,
+                    ],
+                ],
+                [
+                    'Rainy day indoor push',
+                    'manual',
+                    'A same-day text to local guests when the weather turns, respecting quiet hours.',
+                    [
+                        ['type' => 'send_sms', 'template' => 'flash-offer-sms'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'School holiday reminder',
+                    'cron',
+                    'Ahead of each local school break, remind families the Castle is open.',
+                    [
+                        ['type' => 'send_email', 'template' => 'school-holiday-open'],
+                    ],
+                    [
+                        // Mid-February, a fortnight before most of the breaks
+                        // in this district. The venue moves it to its own.
+                        'when' => ['expression' => '17 9 14 2 *', 'segment' => 'recent-guests'],
+                        'once' => 0, 'reentry' => 1,
+                    ],
+                ],
+                [
+                    'Castle Card balance nudge',
+                    'cron',
+                    'Remind guests holding a balance that it is waiting for them.',
+                    [
+                        /*
+                         * No condition on the step. "Been a while" is the
+                         * SEGMENT's job and stating it twice is how the two
+                         * definitions drift — a venue widening the segment to
+                         * 90 days would then still be filtered to 60 here,
+                         * with nothing on the page to explain the gap.
+                         */
+                        ['type' => 'send_email', 'template' => 'card-balance-nudge'],
+                    ],
+                    [
+                        'when' => ['expression' => '31 10 1 */3 *', 'segment' => 'been-a-while'],
+                        'once' => 0, 'reentry' => 1,
+                    ],
+                ],
             ],
         ],
         [
@@ -1046,8 +1282,23 @@ return static function (): array {
                 [
                     'Slow day flash',
                     'manual',
-                    'Started by hand on a quiet day. Write the text here first — the wording is different every time, so nothing is shipped for it.',
-                    [],
+                    'Started by hand on a quiet day. The wording changes every time, so the text it sends is a placeholder you edit before you start it.',
+                    [
+                        /*
+                         * This shipped EMPTY, on the reasoning that the
+                         * wording is different every time. True, and still
+                         * the wrong default: an automation with no steps
+                         * cannot be previewed, cannot be tested against a
+                         * real guest, and gives a venue no idea what shape a
+                         * flash text takes. What it sends is a template whose
+                         * body says to edit it — so the venue changes one
+                         * sentence rather than building the thing, and the
+                         * opt-out line and the marketing `kind` are right
+                         * before they start.
+                         */
+                        ['type' => 'send_sms', 'template' => 'flash-offer-sms'],
+                    ],
+                    ['once' => 0, 'reentry' => 1, 'goal' => 'visit.recorded', 'goal_hours' => 72],
                 ],
                 [
                     'Lapsed guest — touch 1',
@@ -1151,8 +1402,21 @@ return static function (): array {
                 [
                     'New attraction announcement',
                     'manual',
-                    'Started by hand when something new opens. The wording is yours — write it here, then start it for a segment.',
-                    [],
+                    'Started by hand when something new opens. An email first, then a text to anybody the email did not bring back.',
+                    [
+                        ['type' => 'send_email', 'template' => 'new-attraction'],
+                        /*
+                         * The text goes only to the people the email did not
+                         * reach back. A new attraction is worth one message,
+                         * not two in a week down two channels — and the
+                         * condition is on their own behaviour rather than on
+                         * an open, which this version does not track.
+                         */
+                        ['type' => 'condition', 'field' => 'days_since_last_visit', 'op' => 'gte',
+                         'value' => '14', 'wait' => 10080],
+                        ['type' => 'send_sms', 'template' => 'flash-offer-sms', 'branch' => 'yes'],
+                    ],
+                    ['once' => 0, 'reentry' => 1, 'goal' => 'visit.recorded', 'goal_hours' => 720],
                 ],
             ],
         ],
@@ -1342,18 +1606,205 @@ return static function (): array {
                 . 'guard, numbered certificates with expiry and redemption tracking, and a guest '
                 . 'referral programme.',
             'tailor'  => 'Your annual donation budget, who approves, and what a certificate is worth.',
+            /*
+             * FIVE OF THESE EIGHT SHIP WITH NO STEPS, ON PURPOSE.
+             *
+             * `donation.requested`, `donation.approved`, `donation.declined`,
+             * `coupon.redeemed` and `referral.converted` are catalogued
+             * events that nothing fires yet — the donation workflow and the
+             * referral programme are their own modules and are not built. A
+             * sequence behind a trigger that cannot fire reads as finished
+             * and does nothing for ever, which is worse than an honest gap:
+             * the automation page says what each is waiting on.
+             *
+             * The three that ARE authored need nothing that does not exist:
+             * two are cron and the third hangs off `certificate.expiring`,
+             * which the coupon expiry scan already fires.
+             */
             'automations' => [
                 ['Donation request received', 'donation.requested', 'Acknowledge the request, task the general manager, and check it against the annual budget.'],
-                ['Donation decision reminder', 'cron', 'Nudge the approver about requests still undecided after seven days.'],
+                [
+                    'Donation decision reminder',
+                    'cron',
+                    'Nudge the approver about requests still undecided after seven days.',
+                    [
+                        /*
+                         * A TASK FOR A PERSON, not a message to a donor. The
+                         * requests themselves live in the fundraising
+                         * pipeline, so the useful thing a weekly job can do
+                         * before that module exists is put the review in
+                         * somebody's list — a nonprofit waiting three weeks
+                         * for an answer remembers that longer than the
+                         * donation.
+                         */
+                        ['type' => 'create_task',
+                         'title' => 'Review the donation requests nobody has answered',
+                         'description' => 'Anything in the fundraising pipeline sitting undecided '
+                            . 'for more than a week. A decline given quickly costs the venue '
+                            . 'nothing and keeps the relationship; a decision never made costs '
+                            . 'both.',
+                         'due_in_hours' => 48, 'priority' => 'normal'],
+                        ['type' => 'notify_user',
+                         'title' => 'Donation requests waiting',
+                         'message' => 'There are donation requests that have been waiting a week '
+                            . 'or more. They are in the fundraising pipeline.'],
+                    ],
+                    ['when' => ['expression' => '19 8 * * 1'], 'once' => 0, 'reentry' => 1],
+                ],
                 ['Donation approved — issue certificate', 'donation.approved', 'Send the numbered certificate with its value, expiry and terms.'],
                 ['Donation declined — decline kindly', 'donation.declined', 'A respectful decline that leaves the relationship intact.'],
-                ['Certificate expiring', 'certificate.expiring', 'Three weeks before expiry, remind the organisation to use it.'],
+                [
+                    'Certificate expiring',
+                    'certificate.expiring',
+                    'Three weeks before expiry, remind the organisation to use it.',
+                    [
+                        ['type' => 'send_email', 'template' => 'certificate-expiring',
+                         'kind' => 'transactional'],
+                        ['type' => 'create_task',
+                         'title' => 'Certificate for {{organisation}} expires in three weeks',
+                         'description' => 'They have been emailed. If it was auctioned the winner '
+                            . 'may not know, so a call is usually worth more than the email.',
+                         'due_in_hours' => 72, 'priority' => 'low'],
+                    ],
+                    ['when' => ['days' => 21], 'once' => 0, 'reentry' => 1],
+                ],
                 ['Certificate redeemed — capture the contact', 'coupon.redeemed', 'When a certificate is redeemed, invite the redeeming guest to join the list.'],
                 ['Referral converted — reward', 'referral.converted', 'Reward the referrer as soon as the referred booking completes.'],
-                ['Advocate outreach', 'cron', 'Each quarter, ask your most frequent guests to refer a friend.'],
+                [
+                    'Advocate outreach',
+                    'cron',
+                    'Each quarter, ask your most frequent guests to refer a friend.',
+                    [
+                        /*
+                         * ONLY THE REGULARS, and that is the SEGMENT's
+                         * definition rather than a condition here. A tag
+                         * would have been the tempting gate — playbook 3
+                         * applies one — but it is only applied once that
+                         * automation is switched on, so this would send to
+                         * nobody on an install that left it off, and nothing
+                         * would say why.
+                         */
+                        ['type' => 'send_email', 'template' => 'referral-invite'],
+                        ['type' => 'add_tag', 'tag' => 'asked to refer'],
+                    ],
+                    [
+                        // Quarterly. The email itself promises not to ask
+                        // again this year, so a venue that wants that
+                        // literally narrows the audience rather than leaning
+                        // on the schedule.
+                        'when' => ['expression' => '29 9 5 */3 *', 'segment' => 'regulars'],
+                        'once' => 0, 'reentry' => 1,
+                    ],
+                ],
             ],
         ],
     ];
+
+    /*
+     * THREE STANDING SEGMENTS, because four of the automations above send to
+     * guests on a SCHEDULE and a cron automation with no segment enrols one
+     * run with NO CONTACT on it.
+     *
+     * That is the trap this seed nearly shipped: `send_email` on a
+     * contactless run returns "there is no guest on this run to email" and
+     * records the step as DONE. The run succeeds, the automation reports
+     * success, and the seasonal announcement goes to nobody — for ever, and
+     * with nothing on any page to say so. Every cron automation that was
+     * already here notifies a USER rather than a guest, which is why nothing
+     * caught it before.
+     *
+     * Each of these is defined on columns every install has, with no
+     * reference to this venue's attractions or geography, so they are
+     * populated on day one rather than being three empty lists:
+     *
+     *   - `visit_count` and `last_visit_at` are maintained by VisitRecorder
+     *     from the visits themselves.
+     *   - No tag is used as a gate. A segment that depended on a tag would
+     *     be empty until somebody switched on the automation that applies it,
+     *     which is a dependency between two features nothing states.
+     *
+     * They are ordinary segments: editable, deletable, and visible on the
+     * Segments page, which otherwise ships empty.
+     */
+    $segments = [
+        [
+            'slug'        => 'regulars',
+            'name'        => 'Regulars',
+            'description' => 'Ten visits or more. The families the venue runs on.',
+            'rules'       => ['match' => 'all', 'rules' => [
+                ['field' => 'visit_count', 'op' => 'gte', 'value' => 10],
+            ]],
+        ],
+        [
+            'slug'        => 'recent-guests',
+            'name'        => 'Been in the last year',
+            'description' => 'Anybody who has visited in the last twelve months. The list for a '
+                . 'seasonal announcement.',
+            'rules'       => ['match' => 'all', 'rules' => [
+                ['field' => 'visit_count', 'op' => 'gte', 'value' => 1],
+                ['field' => 'last_visit_at', 'op' => 'in_last_days', 'value' => 365],
+            ]],
+        ],
+        [
+            'slug'        => 'been-a-while',
+            'name'        => 'Been, but not lately',
+            'description' => 'Visited at least once, but not in the last two months. Not yet '
+                . 'lapsed — just drifting.',
+            'rules'       => ['match' => 'all', 'rules' => [
+                ['field' => 'visit_count', 'op' => 'gte', 'value' => 1],
+                ['field' => 'last_visit_at', 'op' => 'not_in_last_days', 'value' => 60],
+            ]],
+        ],
+    ];
+
+    $segmentIds  = [];
+    $segmentCount = 0;
+
+    foreach ($segments as $segment) {
+        $existing = DB::first(
+            'SELECT id FROM {segments} WHERE slug = :slug',
+            ['slug' => $segment['slug']]
+        );
+
+        if ($existing !== null) {
+            // Left exactly as it is, like everything else in this file: a
+            // venue may have narrowed it, and a re-seed must not widen an
+            // audience somebody tightened on purpose.
+            $segmentIds[$segment['slug']] = (int) $existing['id'];
+
+            continue;
+        }
+
+        $segmentIds[$segment['slug']] = DB::insert('segments', [
+            'name'        => $segment['name'],
+            'slug'        => $segment['slug'],
+            'description' => $segment['description'],
+            'rules'       => json_encode($segment['rules'], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
+            'is_dynamic'  => 1,
+            'created_at'  => $now,
+            'updated_at'  => $now,
+        ]);
+
+        $segmentCount++;
+    }
+
+    /**
+     * Turn a `when` block's `segment` slug into the `segment_id` the trigger
+     * reads, and drop the slug.
+     *
+     * @param array<string,mixed> $when
+     * @return array<string,mixed>
+     */
+    $whenConfig = static function (array $when) use ($segmentIds): array {
+        $slug = (string) ($when['segment'] ?? '');
+        unset($when['segment']);
+
+        if ($slug !== '' && isset($segmentIds[$slug])) {
+            $when['segment_id'] = $segmentIds[$slug];
+        }
+
+        return $when;
+    };
 
     /**
      * Write one automation's steps.
@@ -1579,8 +2030,17 @@ return static function (): array {
                 // The window a scanner is asked about ("fourteen days
                 // before"), and the conditions that stop a sequence the
                 // moment it stops being true for somebody.
+                //
+                // `segment` is written here as a SLUG and resolved to the id
+                // the trigger wants, because an id is not knowable when the
+                // sequence above is written and hard-coding one would break
+                // on any install whose segments came out in another order.
+                // A slug that resolves to nothing is left out entirely
+                // rather than written as 0 — `segment_id` 0 means "no
+                // segment", which is the contactless run this is here to
+                // prevent, so a typo must not quietly produce one.
                 'trigger_config'       => isset($options['when'])
-                    ? json_encode($options['when'], JSON_UNESCAPED_SLASHES)
+                    ? json_encode($whenConfig($options['when']), JSON_UNESCAPED_SLASHES)
                     : null,
                 'exit_conditions'      => isset($options['exit'])
                     ? json_encode($options['exit'], JSON_UNESCAPED_SLASHES)
@@ -1646,5 +2106,6 @@ return static function (): array {
         'automations' => $automationCount,
         'steps'       => $stepCount,
         'offers'      => $offerCount,
+        'segments'    => $segmentCount,
     ];
 };
