@@ -199,13 +199,27 @@ final class ContactController extends Controller
             ['id' => (int) $contact['household_id']]
         );
 
-        $householdMembers = $household === null ? [] : DB::all(
-            'SELECT id, first_name, last_name, email
-               FROM {contacts}
-              WHERE household_id = :hid AND id <> :id AND deleted_at IS NULL
-              ORDER BY last_name, first_name',
-            ['hid' => (int) $household['id'], 'id' => $id]
-        );
+        // Scoped exactly as HouseholdController::members() is, and for the same
+        // reason: the household row carries no owner of its own, so a sibling
+        // list read without the scope would hand a Party Host the names and
+        // addresses of contacts they cannot open — reachable from any one
+        // contact of theirs that happens to share a household.
+        $householdMembers = [];
+
+        if ($household !== null) {
+            [$memberScope, $memberParams] = Acl::scopeCondition('view_contacts', 'c.owner_id');
+            $memberParams['hid'] = (int) $household['id'];
+            $memberParams['self'] = $id;
+
+            $householdMembers = DB::all(
+                'SELECT c.id, c.first_name, c.last_name, c.email
+                   FROM {contacts} c
+                  WHERE c.household_id = :hid AND c.id <> :self AND c.deleted_at IS NULL
+                    AND ' . $memberScope . '
+                  ORDER BY c.last_name, c.first_name',
+                $memberParams
+            );
+        }
 
         return $this->view('contacts/show', [
             'pageTitle'  => $this->displayName($contact),
@@ -323,7 +337,7 @@ final class ContactController extends Controller
             return $denied;
         }
 
-        $contact = $this->visible($request->routeInt('id'));
+        $contact = $this->visible($request->routeInt('id'), 'contacts_manage');
 
         if ($contact === null) {
             return $this->notFound('That contact does not exist, or it was deleted.');
@@ -345,7 +359,7 @@ final class ContactController extends Controller
         }
 
         $id      = $request->routeInt('id');
-        $contact = $this->visible($id);
+        $contact = $this->visible($id, 'contacts_manage');
 
         if ($contact === null) {
             return $this->notFound('That contact does not exist, or it was deleted.');
@@ -396,7 +410,7 @@ final class ContactController extends Controller
         }
 
         $id      = $request->routeInt('id');
-        $contact = $this->visible($id);
+        $contact = $this->visible($id, 'contacts_delete');
 
         if ($contact === null) {
             return $this->notFound('That contact does not exist, or it was deleted.');
@@ -438,7 +452,7 @@ final class ContactController extends Controller
         }
 
         $id      = $request->routeInt('id');
-        $contact = $this->visible($id);
+        $contact = $this->visible($id, 'contacts_manage');
 
         if ($contact === null) {
             return $this->notFound('That contact does not exist, or it was deleted.');
@@ -492,7 +506,7 @@ final class ContactController extends Controller
         }
 
         $id      = $request->routeInt('id');
-        $contact = $this->visible($id);
+        $contact = $this->visible($id, 'contacts_manage');
 
         if ($contact === null) {
             return $this->notFound('That contact does not exist, or it was deleted.');
@@ -599,7 +613,7 @@ final class ContactController extends Controller
         }
 
         $id      = $request->routeInt('id');
-        $contact = $this->visible($id);
+        $contact = $this->visible($id, 'contacts_manage');
 
         if ($contact === null) {
             return $this->notFound('That contact does not exist, or it was deleted.');
@@ -778,13 +792,26 @@ final class ContactController extends Controller
      *
      * @return array<string,mixed>|null
      */
-    private function visible(int $id): ?array
+    private function visible(int $id, string $permission = 'view_contacts'): ?array
     {
         if ($id <= 0) {
             return null;
         }
 
-        [$scope, $params] = Acl::scopeCondition('view_contacts', 'c.owner_id');
+        // THE PERMISSION WHOSE SCOPE DECIDES, not always the read one.
+        //
+        // Scopes are per permission (role_permissions.scope), and the can:
+        // middleware only checks that a permission EXISTS — not its scope. So
+        // a role holding view_contacts at 'all' and contacts_manage at 'own' —
+        // "see everyone, edit your own", a perfectly ordinary setup an operator
+        // can build in Settings — passed the middleware and then loaded the
+        // contact under the READ scope, which let a crafted POST edit, delete,
+        // annotate or record consent for somebody else's contact.
+        //
+        // DealController::findDeal() took the permission as an argument from
+        // the start; this did not, and the two modules disagreeing is what hid
+        // it. Found by review.
+        [$scope, $params] = Acl::scopeCondition($permission, 'c.owner_id');
         $params['id'] = $id;
 
         return DB::first(

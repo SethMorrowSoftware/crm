@@ -39,8 +39,8 @@ handoffs:
 | 7 | CenterEdge import, Google Business Profile, webhooks, REST API | |
 | 8 | Hardening: security review, accessibility audit, load test, backup/restore | |
 
-Phase 1 is verified end to end against real MySQL 8.0, MariaDB 10.11 and MySQL
-5.7: **598 tests** plus a full installer walk-through. See [docs/TESTING.md](docs/TESTING.md).
+Phases 1 and 2 are verified end to end against real MySQL 8.0, MariaDB 10.11 and MySQL
+5.7: **610 tests** plus a full installer walk-through. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Install
 

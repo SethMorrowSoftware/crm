@@ -19,7 +19,7 @@ php tests/run.php --filter=validator,security
 php tests/run.php --stop
 
 # Refuse to report success if a suite silently skipped (what CI uses)
-php tests/run.php --require-db --require-http --min-tests=390
+php tests/run.php --require-db --require-http --min-tests=600
 
 # Prove the product's actual promise: that it installs on a bare host
 php tests/install/walk-installer.php
@@ -194,7 +194,8 @@ Four more integration suites cover the operator-facing machinery:
 ### `tests/http` — a real browser against a real server
 
 This layer earns its keep: **all three bugs found during Phase 1 lived here**,
-and no unit test would have caught any of them.
+and all six found during Phase 2 — including two that made every search in the
+application a 500 — and no unit test would have caught any of them.
 
 - Anonymous visitors are redirected; unknown paths 404
 - Security headers and a CSP that forbids inline script
@@ -206,6 +207,26 @@ and no unit test would have caught any of them.
 - The only owner cannot be demoted, deactivated or deleted; the owner role cannot be edited
 - Web cron refuses a bad token and does not render a page with a good one
 - **No page emits a notice, warning or deprecation** at `E_ALL`
+
+Phase 2 added five module suites — **contacts, deals, quotes, forms and
+tasks** — and three habits came out of them that are worth applying to
+anything written here next:
+
+- **A list test that never sets a filter does not test the filter.** Both
+  search bugs (one named parameter used two and three times, which the native
+  driver answers `HY093`) shipped behind a full set of green list tests,
+  because every one of them loaded the page with no `q` — so the clause was
+  never built and never bound. If a page has a filter, one test has to use it.
+- **Assert on a row LINK, not on the text you searched for.** A filter bar
+  echoes the term back into `<input name="q" value="…">`, so
+  `contains($surname)` passes against a page with no results at all. The
+  honest marker is the record's own `/deals/123"` href — with the closing quote,
+  or `/deals/5` matches `/deals/51`.
+- **Every refusal test needs its positive control in the same file.** Scoping
+  a lookup to `1 = 0` would satisfy "this role may not edit that record"
+  perfectly; the test that says the same role MAY still edit its own is what
+  separates a fix from a door welded shut. Two of these were caught writing
+  this phase, one of them by its own positive control failing.
 
 And two further HTTP suites:
 

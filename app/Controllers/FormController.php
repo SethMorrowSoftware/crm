@@ -845,6 +845,15 @@ final class FormController extends Controller
      *     consent_log row is still written, because the grant really happened
      *     and the evidence belongs in an append-only record either way.
      *
+     * And one it refuses: consent for a channel the guest cannot be reached
+     * on. A form may well carry an "email me offers" box and no email field,
+     * or take an email and offer an SMS box — so a guest can tick a box for a
+     * channel this submission gives no address for. Stored, that is a
+     * permission nobody can exercise which still reads as a marketable guest
+     * in every segment and count. ContactController::updateConsent() refuses
+     * the same thing for the same reason; this is the public door into the
+     * same columns and must not be the lenient one.
+     *
      * @param array<string,mixed>               $form
      * @param list<array<string,mixed>>         $fields
      * @param array<string,array<string,mixed>> $answers
@@ -866,6 +875,22 @@ final class FormController extends Controller
             return [];
         }
 
+        // Read INSIDE the transaction, after resolveContact() has filled in
+        // whatever this submission added: a guest giving us their number for
+        // the first time may consent to SMS in the same submission, and a
+        // returning guest's address is already on the row rather than in this
+        // form's answers. Either way the question is what the contact can be
+        // reached on now, which is what this row says.
+        $reach = DB::first(
+            'SELECT email, phone_normalized FROM {contacts} WHERE id = :id',
+            ['id' => $contactId]
+        ) ?? [];
+
+        $reachable = [
+            'email' => trim((string) ($reach['email'] ?? '')) !== '',
+            'sms'   => trim((string) ($reach['phone_normalized'] ?? '')) !== '',
+        ];
+
         $granted = [];
 
         foreach ($fields as $field) {
@@ -883,6 +908,14 @@ final class FormController extends Controller
             $key = (string) $field['key'];
 
             if (($answers[$key]['value'] ?? false) !== true) {
+                continue;
+            }
+
+            // Nothing to consent FOR. Silent on purpose: the guest ticked a
+            // box honestly and the enquiry itself is still stored with every
+            // answer — refusing the whole submission over a field the form
+            // itself failed to ask for would lose the lead.
+            if (!$reachable[$channel]) {
                 continue;
             }
 

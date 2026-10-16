@@ -271,7 +271,7 @@ final class QuoteController extends Controller
             return $refusal;
         }
 
-        $quote = $this->findQuote($request->routeInt('id'));
+        $quote = $this->findQuote($request->routeInt('id'), 'deals_manage');
 
         if ($quote === null) {
             return $this->notFound('That quote does not exist.');
@@ -297,7 +297,7 @@ final class QuoteController extends Controller
         }
 
         $id    = $request->routeInt('id');
-        $quote = $this->findQuote($id);
+        $quote = $this->findQuote($id, 'deals_manage');
 
         if ($quote === null) {
             return $this->notFound('That quote does not exist.');
@@ -389,7 +389,7 @@ final class QuoteController extends Controller
         }
 
         $id    = $request->routeInt('id');
-        $quote = $this->findQuote($id);
+        $quote = $this->findQuote($id, 'deals_manage');
 
         if ($quote === null) {
             return $this->notFound('That quote does not exist.');
@@ -449,7 +449,7 @@ final class QuoteController extends Controller
         }
 
         $id    = $request->routeInt('id');
-        $quote = $this->findQuote($id);
+        $quote = $this->findQuote($id, 'quotes_send');
 
         if ($quote === null) {
             return $this->notFound('That quote does not exist.');
@@ -924,8 +924,23 @@ final class QuoteController extends Controller
     // Reads shared by the views
     // -----------------------------------------------------------------
 
-    /** @return array<string,mixed>|null */
-    private function findQuote(int $id): ?array
+    /**
+     * A quote the current user may reach FOR THE ACTION ABOUT TO BE TAKEN.
+     *
+     * The permission is a parameter, not a constant, because the scopes come
+     * apart: a role may hold `view_deals` at `all` and `deals_manage` at `own`
+     * — a manager who sees the whole team's quotes but edits only their own.
+     * Scoping every lookup by `view_deals` would let that role edit, re-status
+     * or send somebody else's quote, since the route gate only proves they
+     * hold the permission SOMEWHERE and the scope decides on which rows.
+     *
+     * So each caller passes the permission whose scope should decide: the two
+     * read paths `view_deals`, the three edit paths `deals_manage`, and send()
+     * `quotes_send`.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function findQuote(int $id, string $permission = 'view_deals'): ?array
     {
         if ($id <= 0) {
             return null;
@@ -955,14 +970,14 @@ final class QuoteController extends Controller
         // Reported as "does not exist": whether a record exists is itself
         // information somebody outside its scope should not get.
         if ($quote['deal_id'] !== null) {
-            $scope = Acl::scope('view_deals');
+            $scope = Acl::scope($permission);
 
             if ($scope === null) {
                 return null;
             }
 
             if ($scope !== 'all') {
-                [$condition, $params] = Acl::scopeCondition('view_deals', 'owner_id');
+                [$condition, $params] = Acl::scopeCondition($permission, 'owner_id');
 
                 if (!DB::exists(
                     'SELECT 1 FROM {deals} WHERE id = :id AND (' . $condition . ')',

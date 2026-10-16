@@ -1245,9 +1245,192 @@ Harness::test('quote numbers are unique and sequential', function () use ($gm, $
     Assert::same($rows, $distinct, 'every quote in the table has its own number');
 });
 
+// ------------------------------------------- scope on the quote WRITE paths
+
+/**
+ * A quote attached to somebody else's deal is not editable, re-statable or
+ * sendable, however widely the role may LOOK.
+ *
+ * findQuote() scoped every lookup by `view_deals`, which is right for show()
+ * and the printable copy and wrong for the other four. The permissions are
+ * separate rows in role_permissions with their own scopes, so a venue can
+ * build a supervisor who sees the whole board and works only their own deals
+ * — and for that role, `view_deals` at 'all' let the edit form open, the
+ * update apply, the status move and the quote go out to the guest, on a deal
+ * they cannot touch through /deals at all. Each of the four now scopes by the
+ * permission that actually governs it.
+ *
+ * None of the seeded roles holds the two at different scopes, which is
+ * exactly why this went unnoticed.
+ */
+$supervisorRoleId = DB::insert('roles', [
+    'slug'        => 'quotes_test_supervisor',
+    'name'        => 'Quotes Test Supervisor',
+    'description' => 'Sees every deal, works only their own. Created by the quotes suite.',
+    'is_system'   => 0,
+    'sort_order'  => 210,
+    'created_at'  => now_utc(),
+    'updated_at'  => now_utc(),
+]);
+
+foreach ([
+    'view_dashboard' => 'all',
+    'view_deals'     => 'all',
+    'deals_manage'   => 'own',
+    'quotes_send'    => 'own',
+] as $permissionSlug => $permissionScope) {
+    $permissionId = (int) DB::value('SELECT id FROM {permissions} WHERE slug = :s', ['s' => $permissionSlug]);
+
+    Assert::greaterThan(0, $permissionId, 'permission should be seeded: ' . $permissionSlug);
+
+    DB::insert('role_permissions', [
+        'role_id'       => $supervisorRoleId,
+        'permission_id' => $permissionId,
+        'scope'         => $permissionScope,
+    ]);
+}
+
+$supervisorPassword = 'quotes-supervisor-passphrase-9';
+$supervisorId       = test_make_user('quotes_test_supervisor', [
+    'email'         => 'quotes-supervisor@example.test',
+    'name'          => 'Quotes Supervisor',
+    'password_hash' => Auth::hash($supervisorPassword),
+]);
+
+$supervisor = new TestBrowser($baseUrl, 'quotes-supervisor');
+$supervisor->login('quotes-supervisor@example.test', $supervisorPassword);
+
+Harness::test('seeing every quote is not permission to edit, re-status or send one', function () use (
+    $gm,
+    $supervisor,
+    $dealId
+): void {
+    // $dealId has no owner_id at all, so it is outside an 'own' scope for
+    // everybody — which is the shape of the real case (a colleague's deal).
+    //
+    // Broken to check: putting 'view_deals' back in place of the permission
+    // argument in findQuote() — the edit form opens and all four assertions
+    // on the stored row fail.
+    $quote = quotes_create($gm, [['Supervised package', '1', '199.00']], ['deal_id' => (string) $dealId]);
+    $id    = (int) $quote['id'];
+
+    // The precondition for everything below: this role really can SEE it.
+    // Without it, the refusals could be the role gate rather than the scope.
+    $read = $supervisor->get('/quotes/' . $id);
+
+    Assert::same(200, $read['status'], 'precondition: an all-scoped viewer sees this quote');
+    Assert::contains((string) $quote['number'], $read['body']);
+
+    Assert::same(
+        404,
+        $supervisor->get('/quotes/' . $id . '/edit')['status'],
+        'the edit form is out of their manage scope'
+    );
+
+    // Tokens are minted from a page this role CAN open — the quote itself —
+    // which is what the real attempt would look like.
+    Assert::same(
+        404,
+        $supervisor->postWithToken('/quotes/' . $id, '/quotes/' . $id, [
+            'valid_until' => gmdate('Y-m-d', strtotime('+14 days')),
+            'notes'       => 'Edited by somebody it does not belong to',
+            'lines[0][description]' => 'Rewritten line',
+            'lines[0][qty]'         => '1',
+            'lines[0][unit]'        => '1.00',
+        ])['status'],
+        'nor may they save it'
+    );
+
+    Assert::same(
+        404,
+        $supervisor->postWithToken('/quotes/' . $id, '/quotes/' . $id . '/status', [
+            'status' => 'accepted',
+        ])['status'],
+        'nor move it along its lifecycle'
+    );
+
+    Assert::same(
+        404,
+        $supervisor->postWithToken('/quotes/' . $id, '/quotes/' . $id . '/send', [])['status'],
+        'and above all not send it to the guest'
+    );
+
+    $after = DB::first('SELECT * FROM {quotes} WHERE id = :id', ['id' => $id]);
+
+    Assert::same('draft', (string) $after['status'], 'the quote is still a draft');
+    Assert::null($after['sent_at'], 'and was never sent');
+    Assert::same(19900, (int) $after['total_cents'], 'with its original total');
+
+    $lines = quotes_lines($id);
+
+    Assert::same(1, count($lines));
+    Assert::same('Supervised package', (string) $lines[0]['description'], 'and its original line');
+});
+
+Harness::test('a supervisor may still work a quote on their own deal', function () use (
+    $supervisor,
+    $supervisorId,
+    $contactId
+): void {
+    // The half that proves the fix did not just close the door on everybody:
+    // scoping all four paths to `1 = 0` would pass the test above.
+    $ownDealId = DB::insert('deals', [
+        'pipeline_id' => (int) DB::value("SELECT id FROM {pipelines} WHERE slug = 'birthday'"),
+        'stage_id'    => (int) DB::value('SELECT id FROM {pipeline_stages} ORDER BY id LIMIT 1'),
+        'title'       => 'Supervisor own deal',
+        'contact_id'  => $contactId,
+        'owner_id'    => $supervisorId,
+        'status'      => 'open',
+        'created_at'  => now_utc(),
+        'updated_at'  => now_utc(),
+    ]);
+
+    try {
+        $quote = quotes_create($supervisor, [['Their own package', '1', '50.00']], [
+            'deal_id' => (string) $ownDealId,
+        ]);
+        $id = (int) $quote['id'];
+
+        Assert::same(
+            200,
+            $supervisor->get('/quotes/' . $id . '/edit')['status'],
+            'their own deal\'s quote opens for editing'
+        );
+
+        // The update path, scoped by deals_manage.
+        $saved = $supervisor->postWithToken('/quotes/' . $id . '/edit', '/quotes/' . $id, [
+            'deal_id'               => (string) $ownDealId,
+            'lines[0][description]' => 'Re-priced by its owner',
+            'lines[0][qty]'         => '2',
+            'lines[0][unit]'        => '75.00',
+        ], true);
+
+        Assert::same(200, $saved['status']);
+        Assert::same(
+            15000,
+            (int) DB::value('SELECT total_cents FROM {quotes} WHERE id = :id', ['id' => $id]),
+            'their own deal\'s quote is theirs to re-price'
+        );
+
+        // And the send path, scoped by quotes_send. `draft` has no outbound
+        // transition at all — send() is the only way out of it — so this is
+        // also the only positive control the lifecycle offers here.
+        $supervisor->postWithToken('/quotes/' . $id, '/quotes/' . $id . '/send', [], true);
+
+        Assert::same(
+            'sent',
+            (string) DB::value('SELECT status FROM {quotes} WHERE id = :id', ['id' => $id]),
+            'and theirs to send'
+        );
+    } finally {
+        DB::delete('quotes', 'deal_id = :d', ['d' => $ownDealId]);
+        DB::delete('deals', 'id = :id', ['id' => $ownDealId]);
+    }
+});
+
 // ----------------------------------------------------------------- cleanup
 
-Harness::test('the suite tidies up after itself', function () use ($viewerId, $dealId, $contactId, $driverBefore, $venueBefore): void {
+Harness::test('the suite tidies up after itself', function () use ($viewerId, $supervisorId, $supervisorRoleId, $dealId, $contactId, $driverBefore, $venueBefore): void {
     // The HTTP suites share one database and nothing resets between them, so
     // leaving a few dozen quotes and a spare user behind would make a second
     // run read differently from the first. The message delete is narrowed to
@@ -1262,6 +1445,9 @@ Harness::test('the suite tidies up after itself', function () use ($viewerId, $d
     DB::delete('messages', 'subject LIKE :s', ['s' => '%Your quote from%']);
     DB::delete('contacts', 'id = :id', ['id' => $contactId]);
     DB::delete('users', 'id = :id', ['id' => $viewerId]);
+    DB::delete('users', 'id = :id', ['id' => $supervisorId]);
+    DB::delete('role_permissions', 'role_id = :r', ['r' => $supervisorRoleId]);
+    DB::delete('roles', 'id = :r', ['r' => $supervisorRoleId]);
 
     // Put the settings back exactly as they were found, so this suite cannot
     // change what a later one sees.

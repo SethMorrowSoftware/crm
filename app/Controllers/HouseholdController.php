@@ -108,13 +108,7 @@ final class HouseholdController extends Controller
             'pageTitle' => $household['name'],
             'household' => $household,
             'members'   => $this->members($id),
-            'children'  => DB::all(
-                'SELECT id, first_name, birth_date, allergies, contact_id
-                   FROM {children}
-                  WHERE household_id = :id AND deleted_at IS NULL
-                  ORDER BY birth_date',
-                ['id' => $id]
-            ),
+            'children'  => $this->children($id),
             // Only contacts the viewer may see are offered as candidates, so
             // the picker cannot be used to enumerate guests outside the
             // viewer's scope.
@@ -409,6 +403,42 @@ final class HouseholdController extends Controller
                FROM {contacts} c
               WHERE c.household_id = :hid AND c.deleted_at IS NULL AND ' . $scope . '
               ORDER BY c.last_name, c.first_name',
+            $params
+        );
+    }
+
+    /**
+     * The household's children, scoped through their GUARDIAN.
+     *
+     * A household row itself carries no owner, so find() cannot scope it — the
+     * scope lives on the contacts inside it, which is why members() joins
+     * through `view_contacts`. Children have to be read the same way or this
+     * page leaks past the scope the member list respects: a child row carries
+     * a first name, a birth date and an allergy list, which is the most
+     * sensitive data in the application, and the guardian it belongs to may be
+     * somebody else's contact.
+     *
+     * A child with NO guardian (`contact_id` is nullable — one entered against
+     * the household before anybody was attached) is shown, because then the
+     * household is the only thing it belongs to and the household is already
+     * visible. The LEFT JOIN is what makes that case reachable; an inner join
+     * would silently hide those children from everyone.
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function children(int $householdId): array
+    {
+        [$scope, $params] = Acl::scopeCondition('view_contacts', 'c.owner_id');
+        $params['hid'] = $householdId;
+
+        return DB::all(
+            'SELECT ch.id, ch.first_name, ch.birth_date, ch.allergies, ch.contact_id
+               FROM {children} ch
+               LEFT JOIN {contacts} c
+                      ON c.id = ch.contact_id AND c.deleted_at IS NULL
+              WHERE ch.household_id = :hid AND ch.deleted_at IS NULL
+                AND (ch.contact_id IS NULL OR ' . $scope . ')
+              ORDER BY ch.birth_date',
             $params
         );
     }

@@ -1273,3 +1273,351 @@ Harness::test('a role without contacts_manage cannot change household membership
         DB::delete('households', 'id = :id', ['id' => $householdId]);
     }
 });
+
+// ------------------------------------------------- scope on the WRITE paths
+
+/**
+ * The two scopes come apart, and the write paths have to read the right one.
+ *
+ * `view_contacts` and `contacts_manage` are separate rows in
+ * role_permissions, each with its own scope, so a venue can legitimately
+ * build a supervisor who SEES the whole guest list and EDITS only their own
+ * guests. Every seeded role happens to hold the two at the same scope, which
+ * is why nothing caught this: ContactController::visible() scoped every
+ * lookup by `view_contacts`, so for that role the edit form opened, the
+ * update went through, notes appended and consent was recordable on anybody's
+ * record. The route gate only proves the permission is held SOMEWHERE; the
+ * scope is what decides which rows, and it was the wrong scope.
+ *
+ * Reported as a 404 rather than a 403 on purpose: whether a guest record
+ * exists is itself information somebody outside its scope should not get.
+ */
+$supervisorRole = contacts_make_role('contacts_test_supervisor', 'Contacts Test Supervisor', [
+    'view_dashboard'  => 'all',
+    'view_contacts'   => 'all',
+    'contacts_manage' => 'own',
+    'contacts_delete' => 'own',
+]);
+
+$supervisorAccount = contacts_make_account($supervisorRole, 'supervisor');
+$supervisor        = new TestBrowser($baseUrl, 'contacts-supervisor');
+$supervisor->login($supervisorAccount['email'], $supervisorAccount['password']);
+
+Harness::test('seeing every contact is not permission to edit every contact', function () use (
+    $supervisor,
+    $ownerId
+): void {
+    // Broken to check: dropping the $permission argument back out of
+    // ContactController::visible() — every assertion below fails, starting
+    // with the edit form opening.
+    $surname = contacts_tag('Supervised');
+    $theirs  = test_make_contact([
+        'first_name' => 'Nadia',
+        'last_name'  => $surname,
+        'owner_id'   => $ownerId,
+        'email'      => 'nadia-' . bin2hex(random_bytes(4)) . '@example.test',
+    ]);
+
+    try {
+        // The precondition that makes the rest meaningful: this role really
+        // can SEE the record. Without it the test would pass because the
+        // whole page is closed, not because the write scope works.
+        $read = $supervisor->get('/contacts/' . $theirs);
+
+        Assert::same(200, $read['status'], 'precondition: an all-scoped viewer sees this guest');
+        Assert::contains($surname, $read['body']);
+
+        Assert::same(
+            404,
+            $supervisor->get('/contacts/' . $theirs . '/edit')['status'],
+            'but the edit form is out of their manage scope'
+        );
+
+        // The token is minted from a page this role CAN open — its own contact
+        // list — and then aimed at somebody else's record, which is what the
+        // real attempt would look like.
+        $update = $supervisor->postWithToken(
+            '/contacts',
+            '/contacts/' . $theirs,
+            [
+                'first_name'      => 'Renamed',
+                'last_name'       => 'ByTheSupervisor',
+                'lifecycle_stage' => 'lead',
+            ]
+        );
+
+        Assert::same(404, $update['status']);
+
+        $after = contacts_row($theirs);
+
+        Assert::same($surname, (string) $after['last_name'], 'the record is untouched');
+        Assert::same('Nadia', (string) $after['first_name']);
+
+        // The other three doors into the same record.
+        Assert::same(
+            404,
+            $supervisor->postWithToken(
+                '/contacts',
+                '/contacts/' . $theirs . '/notes',
+                ['body' => 'A note on a guest that is not mine']
+            )['status'],
+            'nor may they append a note'
+        );
+
+        Assert::same(
+            404,
+            $supervisor->postWithToken(
+                '/contacts',
+                '/contacts/' . $theirs . '/consent',
+                ['channel' => 'email', 'action' => 'granted', 'source' => 'test']
+            )['status'],
+            'nor record consent — the one write docs/PRIVACY.md calls evidence'
+        );
+
+        Assert::same(
+            0,
+            (int) contacts_row($theirs)['email_consent'],
+            'and nothing was consented to'
+        );
+
+        Assert::same(
+            404,
+            $supervisor->postWithToken(
+                '/contacts',
+                '/contacts/' . $theirs . '/do-not-contact',
+                ['do_not_contact' => '1']
+            )['status'],
+            'nor flip the do-not-contact block'
+        );
+    } finally {
+        DB::delete('contacts', 'id = :id', ['id' => $theirs]);
+    }
+});
+
+Harness::test('a supervisor may still edit their own contacts', function () use (
+    $supervisor,
+    $supervisorAccount
+): void {
+    // The other half, and the one that proves the fix did not simply close
+    // the door on everybody. Without this, scoping every write to `1 = 0`
+    // would pass the test above.
+    $surname = contacts_tag('Supervisorsown');
+    $mine    = test_make_contact([
+        'first_name' => 'Owen',
+        'last_name'  => $surname,
+        'owner_id'   => $supervisorAccount['id'],
+        'email'      => 'owen-' . bin2hex(random_bytes(4)) . '@example.test',
+    ]);
+
+    try {
+        Assert::same(200, $supervisor->get('/contacts/' . $mine . '/edit')['status']);
+
+        $response = $supervisor->postWithToken(
+            '/contacts/' . $mine . '/edit',
+            '/contacts/' . $mine,
+            [
+                'first_name'      => 'Owen',
+                'last_name'       => $surname,
+                'lifecycle_stage' => 'customer',
+            ]
+        );
+
+        Assert::same(302, $response['status']);
+        Assert::same(
+            'customer',
+            (string) contacts_row($mine)['lifecycle_stage'],
+            'their own guest is theirs to edit'
+        );
+    } finally {
+        DB::delete('contacts', 'id = :id', ['id' => $mine]);
+    }
+});
+
+// ------------------------------------------------- children and the scope
+
+Harness::test('a household page does not leak another rep\'s child', function () use (
+    $owner,
+    $rep,
+    $ownerId,
+    $repAccount
+): void {
+    // A child row carries a first name, a birth date and an ALLERGY LIST,
+    // which is the most sensitive data this application stores. The household
+    // row itself has no owner to scope by — the scope lives on the contacts
+    // inside it, which is why members() joins through view_contacts — and the
+    // children query was filtered by household_id alone. So any rep sharing a
+    // household with another rep's guest could read that guest's child's
+    // details, from a page they are allowed to open.
+    //
+    // Broken to check: dropping the scope back out of
+    // HouseholdController::children() — the two notContains assertions fail.
+    $householdId = DB::insert('households', [
+        'name'       => 'The ' . contacts_tag('Childscope') . ' family',
+        'created_at' => now_utc(),
+        'updated_at' => now_utc(),
+    ]);
+
+    $theirGuest = test_make_contact([
+        'last_name'    => contacts_tag('Theirparent'),
+        'owner_id'     => $ownerId,
+        'household_id' => $householdId,
+        'email'        => 'theirs-' . bin2hex(random_bytes(4)) . '@example.test',
+    ]);
+    $myGuest = test_make_contact([
+        'last_name'    => contacts_tag('Myparent'),
+        'owner_id'     => $repAccount['id'],
+        'household_id' => $householdId,
+        'email'        => 'mine-' . bin2hex(random_bytes(4)) . '@example.test',
+    ]);
+
+    $hiddenChild = contacts_tag('Hiddenchild');
+    $hiddenNuts  = contacts_tag('Peanutsecret');
+    $ownChild    = contacts_tag('Ownchild');
+
+    $theirChildId = DB::insert('children', [
+        'household_id' => $householdId,
+        'contact_id'   => $theirGuest,
+        'first_name'   => $hiddenChild,
+        'birth_date'   => '2017-04-02',
+        'allergies'    => $hiddenNuts,
+        'created_at'   => now_utc(),
+        'updated_at'   => now_utc(),
+    ]);
+    $myChildId = DB::insert('children', [
+        'household_id' => $householdId,
+        'contact_id'   => $myGuest,
+        'first_name'   => $ownChild,
+        'birth_date'   => '2019-08-19',
+        'created_at'   => now_utc(),
+        'updated_at'   => now_utc(),
+    ]);
+
+    try {
+        // The precondition: the owner, who may see every contact, sees both.
+        // Without it the fix could be "show nobody any children".
+        $ownerPage = $owner->get('/households/' . $householdId);
+
+        Assert::same(200, $ownerPage['status']);
+        Assert::contains($hiddenChild, $ownerPage['body'], 'the owner sees both children');
+        Assert::contains($ownChild, $ownerPage['body']);
+
+        $repPage = $rep->get('/households/' . $householdId);
+
+        Assert::same(200, $repPage['status'], 'the rep may still open the household');
+        Assert::contains($ownChild, $repPage['body'], 'and sees their own guest\'s child');
+        Assert::notContains(
+            $hiddenChild,
+            $repPage['body'],
+            'but not the other rep\'s guest\'s child'
+        );
+        Assert::notContains(
+            $hiddenNuts,
+            $repPage['body'],
+            'and above all not that child\'s allergies'
+        );
+    } finally {
+        DB::delete('children', 'id IN (:a, :b)', ['a' => $theirChildId, 'b' => $myChildId]);
+        DB::delete('contacts', 'id IN (:a, :b)', ['a' => $theirGuest, 'b' => $myGuest]);
+        DB::delete('households', 'id = :id', ['id' => $householdId]);
+    }
+});
+
+Harness::test('a child with no guardian still shows on the household', function () use (
+    $owner,
+    $rep,
+    $repAccount
+): void {
+    // The case the LEFT JOIN exists for. `children.contact_id` is nullable —
+    // a child entered against the household before anybody was attached — and
+    // an inner join would have hidden those children from EVERYONE, including
+    // the owner. Scoping is not an excuse to lose a row.
+    $householdId = DB::insert('households', [
+        'name'       => 'The ' . contacts_tag('Orphanchild') . ' family',
+        'created_at' => now_utc(),
+        'updated_at' => now_utc(),
+    ]);
+    $myGuest = test_make_contact([
+        'last_name'    => contacts_tag('Orphanparent'),
+        'owner_id'     => $repAccount['id'],
+        'household_id' => $householdId,
+        'email'        => 'orphan-' . bin2hex(random_bytes(4)) . '@example.test',
+    ]);
+
+    $loose   = contacts_tag('Loosechild');
+    $childId = DB::insert('children', [
+        'household_id' => $householdId,
+        'contact_id'   => null,
+        'first_name'   => $loose,
+        'birth_date'   => '2018-01-07',
+        'created_at'   => now_utc(),
+        'updated_at'   => now_utc(),
+    ]);
+
+    try {
+        Assert::contains(
+            $loose,
+            $owner->get('/households/' . $householdId)['body'],
+            'the owner sees a child with no guardian'
+        );
+        Assert::contains(
+            $loose,
+            $rep->get('/households/' . $householdId)['body'],
+            'and so does a rep who may see the household at all'
+        );
+    } finally {
+        DB::delete('children', 'id = :id', ['id' => $childId]);
+        DB::delete('contacts', 'id = :id', ['id' => $myGuest]);
+        DB::delete('households', 'id = :id', ['id' => $householdId]);
+    }
+});
+
+Harness::test('the sibling list on a contact page is scoped too', function () use (
+    $rep,
+    $ownerId,
+    $repAccount
+): void {
+    // The same leak by the other door, found while fixing the children one:
+    // ContactController::show() listed every other member of the household
+    // with no scope at all, while HouseholdController::members() scoped the
+    // identical list. So a rep opening THEIR OWN guest read the names and
+    // email addresses of contacts they cannot open.
+    //
+    // Broken to check: dropping $memberScope from that query — the
+    // notContains assertions fail.
+    $householdId = DB::insert('households', [
+        'name'       => 'The ' . contacts_tag('Siblingscope') . ' family',
+        'created_at' => now_utc(),
+        'updated_at' => now_utc(),
+    ]);
+
+    $theirSurname = contacts_tag('Theirsibling');
+    $theirEmail   = 'sibling-' . bin2hex(random_bytes(4)) . '@example.test';
+
+    $theirGuest = test_make_contact([
+        'last_name'    => $theirSurname,
+        'owner_id'     => $ownerId,
+        'household_id' => $householdId,
+        'email'        => $theirEmail,
+    ]);
+    $myGuest = test_make_contact([
+        'last_name'    => contacts_tag('Minesibling'),
+        'owner_id'     => $repAccount['id'],
+        'household_id' => $householdId,
+        'email'        => 'minesib-' . bin2hex(random_bytes(4)) . '@example.test',
+    ]);
+
+    try {
+        $page = $rep->get('/contacts/' . $myGuest);
+
+        Assert::same(200, $page['status'], 'their own guest opens');
+        Assert::notContains(
+            $theirSurname,
+            $page['body'],
+            'a household does not make another rep\'s guest visible'
+        );
+        Assert::notContains($theirEmail, $page['body'], 'nor their email address');
+    } finally {
+        DB::delete('contacts', 'id IN (:a, :b)', ['a' => $theirGuest, 'b' => $myGuest]);
+        DB::delete('households', 'id = :id', ['id' => $householdId]);
+    }
+});

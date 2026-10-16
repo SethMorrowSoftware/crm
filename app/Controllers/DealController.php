@@ -603,8 +603,17 @@ final class DealController extends Controller
         }
 
         if ($filters['q'] !== '') {
-            $clauses[] = '(d.title LIKE :q OR c.first_name LIKE :q OR c.last_name LIKE :q)';
-            $params['q'] = '%' . $filters['q'] . '%';
+            // A DISTINCT NAME PER OCCURRENCE. DB::connect() disables emulated
+            // prepares, and the native driver refuses a named parameter used
+            // more than once in a statement — it answers HY093 and the page
+            // 500s. Reusing :q here meant every search of the board or the
+            // table was a server error, which no test covered because none
+            // searched with a term. Found by review, reproduced, fixed.
+            $like = '%' . $filters['q'] . '%';
+            $clauses[] = '(d.title LIKE :q_title OR c.first_name LIKE :q_first OR c.last_name LIKE :q_last)';
+            $params['q_title'] = $like;
+            $params['q_first'] = $like;
+            $params['q_last']  = $like;
         }
 
         return [implode(' AND ', $clauses), $params];

@@ -1374,3 +1374,125 @@ Harness::test('a campaign link is carried through to the submission', function (
         'and onto the new contact, which is what makes source reporting possible'
     );
 });
+
+// ============================== consent for a channel we cannot reach
+
+Harness::test('an email opt-in on a phone-only submission records no consent', function () use (
+    $owner,
+    $baseUrl
+): void {
+    // A form can carry an "email me offers" box and no email field — or take
+    // an email and offer an SMS box — so a guest can honestly tick a box for
+    // a channel this submission gives no address for. Stored, that is a
+    // permission nobody can exercise which still reads as a marketable guest
+    // in every segment and count, and ContactController::updateConsent()
+    // refuses exactly this with "Add an email address before recording email
+    // consent." The public door into the same columns must not be the lenient
+    // one.
+    //
+    // Broken to check: removing the $reachable guard from recordConsent() —
+    // email_consent comes back 1 with no address on the row.
+    $slug = forms_slug('unreachable');
+    $id   = forms_build($owner, $slug, [
+        ['label' => 'Your name', 'type' => 'text', 'maps_to' => 'first_name', 'is_required' => '1'],
+        ['label' => 'Phone', 'type' => 'tel', 'maps_to' => 'phone', 'is_required' => '1'],
+        ['label' => 'Email me offers', 'type' => 'consent', 'maps_to' => 'email_consent'],
+    ]);
+    $keys = forms_keys($id);
+
+    $phone = '845555' . random_int(1000, 9999);
+    $guest = new TestBrowser($baseUrl, 'forms-unreachable-guest');
+
+    $response = $guest->postWithToken('/f/' . $slug, '/f/' . $slug, [
+        $keys['Your name']       => 'Unreachable Uma',
+        $keys['Phone']           => $phone,
+        $keys['Email me offers'] => '1',
+    ], true);
+
+    Assert::same(200, $response['status']);
+
+    $rows = forms_submissions($id);
+
+    Assert::count(1, $rows, 'the enquiry itself is still kept — the lead is not lost');
+
+    $contactId = (int) $rows[0]['contact_id'];
+
+    Assert::greaterThan(0, $contactId, 'and a contact was made from the phone number');
+
+    $contact = DB::first('SELECT * FROM {contacts} WHERE id = :id', ['id' => $contactId]);
+
+    Assert::notNull($contact);
+    Assert::same('', (string) ($contact['email'] ?? ''), 'precondition: there is no email address');
+    Assert::same(
+        0,
+        (int) $contact['email_consent'],
+        'so there is nothing to consent FOR, and no consent is recorded'
+    );
+    Assert::null($contact['email_consent_at'], 'nor a time it was given');
+
+    Assert::same(
+        0,
+        (int) DB::value(
+            "SELECT COUNT(*) FROM {consent_log} WHERE contact_id = :id AND channel = 'email'",
+            ['id' => $contactId]
+        ),
+        'and the append-only log stays clean too — a logged grant reads as evidence'
+    );
+
+    DB::delete('consent_log', 'contact_id = :id', ['id' => $contactId]);
+    DB::delete('contacts', 'id = :id', ['id' => $contactId]);
+});
+
+Harness::test('an SMS opt-in is recorded when the guest gave a number in the same submission', function () use (
+    $owner,
+    $baseUrl
+): void {
+    // The other half, and the reason the reachability is read from the
+    // CONTACT ROW inside the transaction rather than from the form's answers:
+    // the number arrives in this very submission, so a guard that looked at
+    // the stored contact BEFORE resolveContact() filled it in would refuse a
+    // perfectly good opt-in. Without this test, guarding everything would
+    // pass the test above.
+    $slug = forms_slug('smsoptin');
+    $id   = forms_build($owner, $slug, [
+        ['label' => 'Your name', 'type' => 'text', 'maps_to' => 'first_name', 'is_required' => '1'],
+        ['label' => 'Mobile', 'type' => 'tel', 'maps_to' => 'phone', 'is_required' => '1'],
+        ['label' => 'Text me about parties', 'type' => 'consent', 'maps_to' => 'sms_consent'],
+    ]);
+    $keys = forms_keys($id);
+
+    $phone = '845556' . random_int(1000, 9999);
+    $guest = new TestBrowser($baseUrl, 'forms-smsoptin-guest');
+
+    $guest->postWithToken('/f/' . $slug, '/f/' . $slug, [
+        $keys['Your name']              => 'Texty Tess',
+        $keys['Mobile']                 => $phone,
+        $keys['Text me about parties']  => '1',
+    ], true);
+
+    $rows      = forms_submissions($id);
+    $contactId = (int) ($rows[0]['contact_id'] ?? 0);
+
+    Assert::greaterThan(0, $contactId);
+
+    $contact = DB::first('SELECT * FROM {contacts} WHERE id = :id', ['id' => $contactId]);
+
+    Assert::same(1, (int) $contact['sms_consent'], 'a reachable channel is consented normally');
+    Assert::notNull($contact['sms_consent_at'], 'with the time it was given');
+    Assert::contains(
+        'web form',
+        (string) $contact['sms_consent_source'],
+        'and where it came from, which docs/PRIVACY.md §3 requires'
+    );
+
+    $logged = DB::first(
+        "SELECT * FROM {consent_log} WHERE contact_id = :id AND channel = 'sms' ORDER BY id DESC LIMIT 1",
+        ['id' => $contactId]
+    );
+
+    Assert::notNull($logged, 'and the grant is in the append-only log');
+    Assert::same('granted', (string) $logged['action']);
+
+    DB::delete('consent_log', 'contact_id = :id', ['id' => $contactId]);
+    DB::delete('contacts', 'id = :id', ['id' => $contactId]);
+});

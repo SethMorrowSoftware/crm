@@ -1278,3 +1278,91 @@ Harness::test('a role that sees every task still cannot close somebody else\'s',
         DB::delete('roles', 'id = :r', ['r' => $roleId]);
     }
 });
+
+// ---------------------------------------------------------------- searching
+
+/**
+ * The link a rendered row carries.
+ *
+ * Not the task's TITLE: the filter bar echoes the search term back into
+ * `<input name="q" value="...">`, so a page with no results still contains
+ * whatever was searched for, and a title assertion would pass against an
+ * empty list. The closing quote keeps /tasks/5 from matching /tasks/51.
+ */
+function tasks_row_link(int $id): string
+{
+    return '/tasks/' . $id . '"';
+}
+
+Harness::test('searching tasks by title and by details finds them, and a miss finds nothing', function () use (
+    $owner,
+    $gmId
+): void {
+    // The missing test, same shape as the deals one: every list test loaded
+    // /tasks with no `q`, so the search clause was never bound. With a term
+    // the old clause reused :q twice, the native driver answered HY093 (no
+    // emulated prepares), and /tasks?q=... was a 500 for every search.
+    //
+    // Broken to check: collapsing :q_title/:q_body back to one name — the
+    // first status assertion goes to 500.
+    $titleTerm = 'Findbytitle' . bin2hex(random_bytes(3));
+    $bodyTerm  = 'Findbydetail' . bin2hex(random_bytes(3));
+
+    $wanted = tasks_create($owner, [
+        'title'       => tasks_title($titleTerm . ' follow-up'),
+        'description' => 'Nothing distinctive in here.',
+        'assigned_to' => (string) $gmId,
+    ]);
+    $byBody = tasks_create($owner, [
+        'title'       => tasks_title('Ordinary title'),
+        'description' => 'Ring them about the ' . $bodyTerm . ' enquiry.',
+        'assigned_to' => (string) $gmId,
+    ]);
+
+    Assert::greaterThan(0, $wanted['id']);
+    Assert::greaterThan(0, $byBody['id']);
+
+    try {
+        $byTitle = $owner->get('/tasks?q=' . urlencode($titleTerm));
+
+        Assert::same(200, $byTitle['status'], 'a search must not be a server error');
+        Assert::contains(
+            tasks_row_link($wanted['id']),
+            $byTitle['body'],
+            'the title match is listed'
+        );
+        Assert::notContains(
+            tasks_row_link($byBody['id']),
+            $byTitle['body'],
+            'and the other task is not — a search that returns everybody is not a search'
+        );
+
+        // The description is the second placeholder, so this is what separates
+        // "both names exist" from "both names carry the right value".
+        $byDetail = $owner->get('/tasks?q=' . urlencode($bodyTerm));
+
+        Assert::same(200, $byDetail['status']);
+        Assert::contains(
+            tasks_row_link($byBody['id']),
+            $byDetail['body'],
+            'the details are searched too, not only the title'
+        );
+        Assert::notContains(tasks_row_link($wanted['id']), $byDetail['body']);
+
+        $miss = $owner->get('/tasks?q=' . urlencode('Notamatch' . bin2hex(random_bytes(3))));
+
+        Assert::same(200, $miss['status']);
+        Assert::notContains(tasks_row_link($wanted['id']), $miss['body']);
+        Assert::notContains(tasks_row_link($byBody['id']), $miss['body']);
+
+        // The count query shares the WHERE and binds it separately, so it is
+        // its own chance to get a name wrong.
+        Assert::same(
+            200,
+            $owner->get('/tasks?view=open&q=' . urlencode($titleTerm))['status'],
+            'and a search combined with a tab filter still binds'
+        );
+    } finally {
+        DB::delete('tasks', 'id IN (:a, :b)', ['a' => $wanted['id'], 'b' => $byBody['id']]);
+    }
+});

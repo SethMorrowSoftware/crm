@@ -661,8 +661,14 @@ final class TaskController extends Controller
         }
 
         if ($filters['q'] !== '') {
-            $clauses[] = '(t.title LIKE :q OR t.description LIKE :q)';
-            $params['q'] = '%' . $filters['q'] . '%';
+            // One name per occurrence — the native driver refuses a repeated
+            // named parameter (HY093), which is the same reason :clock_now and
+            // :clock_sort are separate below. Reusing :q made /tasks?q=... a
+            // 500 for every search.
+            $like = '%' . $filters['q'] . '%';
+            $clauses[] = '(t.title LIKE :q_title OR t.description LIKE :q_body)';
+            $params['q_title'] = $like;
+            $params['q_body']  = $like;
         }
 
         return [implode(' AND ', $clauses), $params];

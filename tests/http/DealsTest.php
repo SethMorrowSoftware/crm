@@ -1283,3 +1283,136 @@ Harness::test('a role that may see pipelines may not edit them', function () use
     Assert::same(403, $response['status'], 'deals_manage is what guards the write');
     Assert::same($before, (int) DB::value('SELECT COUNT(*) FROM {pipelines}'));
 });
+
+// ---------------------------------------------------------------- searching
+
+/**
+ * The link a rendered row carries, which is the only honest marker that a
+ * deal is actually ON the page.
+ *
+ * Asserting on the deal's TITLE would be vacuous: the filter bar echoes the
+ * search term back into `<input name="q" value="...">`, so a page with no
+ * results at all still contains the term somebody searched for. The closing
+ * quote is part of the needle so that /deals/5 cannot match /deals/51.
+ */
+function deals_row_link(int $id): string
+{
+    return '/deals/' . $id . '"';
+}
+
+Harness::test('searching the board and the table finds the deal and leaves the rest out', function () use (
+    $owner,
+    $birthday,
+    $newInquiry
+): void {
+    // THIS IS THE TEST THAT WAS MISSING, and its absence is the whole reason
+    // the bug shipped. Every list test here loaded /deals with no `q`, so the
+    // search clause was never built and never bound. With a term, the old
+    // clause reused one named parameter three times; DB::connect() disables
+    // emulated prepares, the native driver answers HY093 to a repeated name,
+    // and the page was a 500 for every search anybody ever typed.
+    //
+    // MEASURED before the fix: HTTP 500 on both views, with no message
+    // anywhere in the UI.
+    //
+    // Broken to check: collapsing :q_title/:q_first/:q_last back to one name
+    // — both status assertions go to 500.
+    $term     = 'Searchable' . bin2hex(random_bytes(3));
+    $wanted   = deals_title($term . ' party');
+    $unwanted = deals_title('Unsearchable party');
+
+    $a = deals_create($owner, [
+        'title'       => $wanted,
+        'pipeline_id' => (string) $birthday,
+        'stage_id'    => (string) $newInquiry,
+    ]);
+    $b = deals_create($owner, [
+        'title'       => $unwanted,
+        'pipeline_id' => (string) $birthday,
+        'stage_id'    => (string) $newInquiry,
+    ]);
+
+    try {
+        $board = $owner->get('/deals?pipeline=' . $birthday . '&q=' . urlencode($term));
+
+        Assert::same(200, $board['status'], 'a search must not be a server error');
+        Assert::contains(
+            deals_row_link($a['id']),
+            $board['body'],
+            'and must put the matching deal on the board'
+        );
+        Assert::notContains(
+            deals_row_link($b['id']),
+            $board['body'],
+            'a search that returns everybody is not a search'
+        );
+
+        $table = $owner->get('/deals/table?pipeline=' . $birthday . '&q=' . urlencode($term));
+
+        Assert::same(200, $table['status'], 'the table view shares the clause, so it shared the bug');
+        Assert::contains(deals_row_link($a['id']), $table['body']);
+        Assert::notContains(deals_row_link($b['id']), $table['body']);
+
+        // The aggregate row is built from the same WHERE by a DIFFERENT query
+        // with its own binding, so it is a second chance to get the parameter
+        // names wrong. It reports the filtered count, not the pipeline's.
+        Assert::contains('Deals in view', $table['body']);
+    } finally {
+        DB::delete('deals', 'id IN (:a, :b)', ['a' => $a['id'], 'b' => $b['id']]);
+    }
+});
+
+Harness::test('searching by the guest\'s name finds their deal', function () use (
+    $owner,
+    $birthday,
+    $newInquiry
+): void {
+    // The contact's two name halves are separate placeholders now, and each is
+    // reached by a different term — so binding first_name's value under
+    // last_name's name would show up here rather than in the title test.
+    $first   = 'Searchfirst' . bin2hex(random_bytes(3));
+    $surname = 'Searchsurname' . bin2hex(random_bytes(3));
+
+    $contactId = test_make_contact(['first_name' => $first, 'last_name' => $surname]);
+
+    $created = deals_create($owner, [
+        'title'       => deals_title('Named guest'),
+        'pipeline_id' => (string) $birthday,
+        'stage_id'    => (string) $newInquiry,
+        'contact_id'  => (string) $contactId,
+    ]);
+
+    try {
+        $bySurname = $owner->get('/deals/table?pipeline=' . $birthday . '&q=' . urlencode($surname));
+
+        Assert::same(200, $bySurname['status']);
+        Assert::contains(
+            deals_row_link($created['id']),
+            $bySurname['body'],
+            'a surname search reaches the deal'
+        );
+
+        $byFirst = $owner->get('/deals/table?pipeline=' . $birthday . '&q=' . urlencode($first));
+
+        Assert::same(200, $byFirst['status']);
+        Assert::contains(
+            deals_row_link($created['id']),
+            $byFirst['body'],
+            'and so does a first-name search'
+        );
+
+        $miss = $owner->get(
+            '/deals/table?pipeline=' . $birthday . '&q=' . urlencode('Notamatch' . bin2hex(random_bytes(3)))
+        );
+
+        Assert::same(200, $miss['status']);
+        Assert::notContains(
+            deals_row_link($created['id']),
+            $miss['body'],
+            'while a term matching nothing finds nothing'
+        );
+    } finally {
+        DB::delete('deals', 'id = :id', ['id' => $created['id']]);
+        DB::delete('contacts', 'id = :id', ['id' => $contactId]);
+    }
+});
