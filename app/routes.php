@@ -406,6 +406,38 @@ $router->group('/bookings', ['auth', 'can:view_bookings'], function ($router): v
 });
 
 // ---------------------------------------------------------------------------
+// The calendar
+//
+// Month, week and day across every booking, plus the iCal feed.
+//
+// `/calendar/feed.ics` IS NOT BEHIND `auth`, and that is the whole design
+// problem of an iCal feed: a calendar application cannot sign in, so a bearer
+// token in the query string is the only authentication available. The feed
+// therefore carries the time, the room, the headcount and the name on each
+// party and NOT the allergy note, the money or the family's details — see
+// CalendarController's class docblock. It is also rate limited, because an
+// unauthenticated endpoint that reads the diary is worth guessing at, and the
+// token is re-checked against the live user and role on every fetch.
+//
+// Minting and revoking a token are ordinary CSRF-protected posts behind
+// `view_bookings`: a feed shows what its holder may see, so the permission to
+// create one is the permission to read the diary.
+// ---------------------------------------------------------------------------
+
+$router->get(
+    '/calendar/feed.ics',
+    ['CalendarController', 'feed'],
+    ['throttle:60,5'],
+    'calendar.feed'
+);
+
+$router->group('/calendar', ['auth', 'can:view_bookings'], function ($router): void {
+    $router->get('', ['CalendarController', 'index'], [], 'calendar');
+    $router->post('/feed', ['CalendarController', 'createToken'], ['csrf']);
+    $router->post('/feed/revoke', ['CalendarController', 'revokeToken'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2+ module routes are added as each module lands. The placeholders
 // below give the navigation somewhere real to point in Phase 1, and each
 // renders an honest "coming in Phase N" state rather than a broken link.

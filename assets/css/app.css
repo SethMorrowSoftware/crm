@@ -774,6 +774,57 @@ ul.checks li:last-child { border-bottom: 0; }
     padding: .05rem .3rem; border-radius: 3px; font-size: .8em; color: var(--muted);
 }
 
+/* -------------------------------------------------------------- Calendar */
+
+/* Month and week are real tables — a calendar IS tabular data, and a screen
+   reader announces "Saturday 11 July, 3 bookings" from one while it announces
+   nothing useful from a grid of divs. These rules only lay the table out. */
+
+.cal-month, .cal-week { table-layout: fixed; }
+.cal-month th, .cal-week th { text-align: left; font-size: .78rem; }
+
+.cal-cell {
+    vertical-align: top; height: 6.5rem; padding: .35rem;
+    border: 1px solid var(--line);
+}
+.cal-week .cal-cell { height: 18rem; }
+
+.cal-outside { background: var(--panel-soft); }
+.cal-outside .cal-date { color: var(--faint); }
+
+.cal-today { outline: 2px solid var(--brand); outline-offset: -2px; }
+
+.cal-date {
+    display: inline-block; font-size: .8rem; font-weight: 700;
+    color: var(--muted); text-decoration: none; margin-bottom: .2rem;
+}
+.cal-date:hover, .cal-date:focus-visible { color: var(--brand-dark); }
+
+.cal-chip {
+    display: block; font-size: .74rem; line-height: 1.25;
+    padding: .18rem .35rem; margin-bottom: .18rem; border-radius: var(--radius-sm);
+    background: var(--brand-light); color: var(--brand-dark);
+    text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cal-chip:hover, .cal-chip:focus-visible { background: var(--brand); color: var(--on-accent); }
+
+/* The status colours double up with the badge palette on purpose: a venue
+   learns one vocabulary, not two. */
+.cal-inquiry, .cal-held           { background: var(--warn-bg); color: var(--warn); }
+.cal-confirmed, .cal-deposit_paid { background: var(--ok-bg);   color: var(--ok); }
+.cal-paid, .cal-completed         { background: var(--ok-bg);   color: var(--ok); }
+.cal-cancelled, .cal-no_show      { background: var(--bad-bg);  color: var(--bad); }
+
+/* Struck through AND in the failure colour: colour alone is not a signal, and
+   a cancelled party must not read as a live one to somebody who cannot tell
+   red from green. */
+.cal-off del { text-decoration-thickness: 1px; }
+
+.cal-more { display: block; font-size: .72rem; color: var(--muted); padding: 0 .35rem; }
+
+.cal-lanes th[scope="row"] { width: 14rem; vertical-align: top; }
+.cal-lanes .cal-chip { display: inline-block; margin-right: .3rem; white-space: normal; }
+
 /* ------------------------------------------------------------- Responsive */
 
 @media (max-width: 60rem) {

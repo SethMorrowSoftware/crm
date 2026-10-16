@@ -41,6 +41,7 @@ $nav = [
             ['Contacts', '/contacts', 'view_contacts', 'users'],
             ['Pipelines', '/deals', 'view_deals', 'trending'],
             ['Bookings', '/bookings', 'view_bookings', 'calendar'],
+            ['Calendar', '/calendar', 'view_bookings', 'calendar'],
             ['Memberships', '/memberships', 'view_memberships', 'card'],
         ],
     ],
