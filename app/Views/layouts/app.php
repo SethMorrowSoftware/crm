@@ -54,6 +54,7 @@ $nav = [
             ['Segments', '/segments', 'view_marketing', 'target'],
             ['Text Club', '/text-club', 'view_marketing', 'message'],
             ['Playbooks', '/playbooks', 'view_automations', 'book'],
+            ['Automations', '/automations', 'view_automations', 'power'],
             ['Reputation', '/reputation', 'view_reputation', 'star'],
         ],
     ],
@@ -212,6 +213,13 @@ $isCurrent = static function (string $href) use ($path): bool {
                     <span class="pill pill-bad" title="All outbound sending is paused.">
                         <?= icon('pause') ?> Sending paused
                     </span>
+                <?php endif; ?>
+
+                <?php if (($automationsPaused ?? false) && can('view_automations')): ?>
+                    <a href="<?= e(url('/automations')) ?>" class="pill pill-bad"
+                       title="No automation is enrolling anybody or advancing.">
+                        <?= icon('pause') ?> Automations stopped
+                    </a>
                 <?php endif; ?>
             </div>
         </header>

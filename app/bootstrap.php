@@ -323,6 +323,7 @@ View::share('currentUser', Auth::user());
 View::share('venueName', Settings::venueName());
 View::share('safeMode', Settings::safeMode());
 View::share('sendingPaused', Settings::sendingPaused());
+View::share('automationsPaused', (bool) Settings::get('system.automations_paused', false));
 View::share('flashMessages', Session::pull('_flash', []));
 
 // Validation state survives exactly one redirect.

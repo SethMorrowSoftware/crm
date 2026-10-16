@@ -209,6 +209,36 @@ $router->group('/playbooks', ['auth', 'can:view_automations'], function ($router
 });
 
 // ---------------------------------------------------------------------------
+// Automations — the builder, and the kill switch
+//
+// Three gates, deliberately separate. Reading is `view_automations`; EDITING a
+// sequence is `automations_manage`; SWITCHING ONE ON is
+// `automations_activate`, because that is the action that starts messaging
+// real families days later. The stop-everything button is on the activate
+// permission too: whoever can start it can stop it.
+//
+// The static routes come before `/{id}` so `pause` is never read as an id.
+// ---------------------------------------------------------------------------
+
+$router->group('/automations', ['auth', 'can:view_automations'], function ($router): void {
+    $router->get('', ['AutomationController', 'index'], [], 'automations');
+
+    $router->post('/pause', ['AutomationController', 'pause'], ['csrf', 'can:automations_activate']);
+    $router->post('/resume', ['AutomationController', 'resume'], ['csrf', 'can:automations_activate']);
+
+    $router->post('/steps/{id:\d+}', ['AutomationController', 'updateStep'], ['csrf', 'can:automations_manage']);
+    $router->post('/steps/{id:\d+}/toggle', ['AutomationController', 'toggleStep'], ['csrf', 'can:automations_manage']);
+    $router->post('/steps/{id:\d+}/delete', ['AutomationController', 'destroyStep'], ['csrf', 'can:automations_manage']);
+    $router->post('/steps/{id:\d+}/move', ['AutomationController', 'moveStep'], ['csrf', 'can:automations_manage']);
+
+    $router->get('/{id:\d+}', ['AutomationController', 'show'], [], 'automations.show');
+    $router->post('/{id:\d+}/activate', ['AutomationController', 'activate'], ['csrf', 'can:automations_activate']);
+    $router->post('/{id:\d+}/deactivate', ['AutomationController', 'deactivate'], ['csrf', 'can:automations_activate']);
+    $router->post('/{id:\d+}/steps', ['AutomationController', 'storeStep'], ['csrf', 'can:automations_manage']);
+    $router->post('/{id:\d+}/test', ['AutomationController', 'test'], ['csrf', 'can:automations_manage']);
+});
+
+// ---------------------------------------------------------------------------
 // Contacts & households
 //
 // Reading gates on view_contacts and is scoped per role by

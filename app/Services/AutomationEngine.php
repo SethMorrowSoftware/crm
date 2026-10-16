@@ -611,6 +611,176 @@ final class AutomationEngine
         return self::nextStep($steps, null, $parentId, $branch);
     }
 
+    /**
+     * The step that follows this one anywhere in the sequence.
+     *
+     * `nextStep()` answers within one branch; this one knows what to do at the
+     * END of a branch, which is to rejoin the line the branch hangs off so the
+     * steps after a condition run for both sides. The runner walks with this
+     * and so does the preview, which is why it lives here: two copies of
+     * "what comes next" would disagree about branches, and the preview would
+     * then show a venue a sequence that is not the one that will run.
+     *
+     * @param list<array<string,mixed>> $steps
+     * @return array<string,mixed>|null
+     */
+    public static function stepAfter(array $steps, ?int $currentId): ?array
+    {
+        if ($currentId === null) {
+            return self::nextStep($steps, null);
+        }
+
+        $current = null;
+
+        foreach ($steps as $step) {
+            if ((int) $step['id'] === $currentId) {
+                $current = $step;
+
+                break;
+            }
+        }
+
+        if ($current === null) {
+            return self::nextStep($steps, null);
+        }
+
+        $parent = ($current['parent_step_id'] ?? null) === null ? null : (int) $current['parent_step_id'];
+        $branch = (string) ($current['branch'] ?? 'main');
+
+        $next = self::nextStep($steps, $currentId, $parent, $branch);
+
+        if ($next !== null) {
+            return $next;
+        }
+
+        if ($parent !== null) {
+            return self::stepAfter($steps, $parent);
+        }
+
+        return null;
+    }
+
+    /**
+     * WHAT THIS SEQUENCE WOULD DO TO THIS GUEST, AND WHEN.
+     *
+     * The preview behind the Test button. A venue has to be able to see a
+     * sequence before a real family does, and the only preview worth having
+     * is one that uses the engine's own decisions: the delays as they are
+     * computed in the venue's zone, the branch this guest would actually
+     * take, the step whose moment has already passed and would be skipped.
+     *
+     * PURE, AND IT WRITES NOTHING. An earlier version enrolled the guest for
+     * real with sending captured and then deleted the run — which meant
+     * zeroing the delays on the step rows while cron was running, where a
+     * tick landing mid-preview would have advanced every OTHER guest in that
+     * automation with no delay at all. A plan cannot do that to anybody.
+     *
+     * The clock advances with the plan, so step three's "two days later" is
+     * two days after step two rather than two days from now.
+     *
+     * @param list<array<string,mixed>> $steps
+     * @param array<string,mixed>       $subject
+     * @return list<array{step:array<string,mixed>,at:?string,skip:bool,reason:string,branch:?string,stop:?string}>
+     */
+    public static function plan(array $steps, array $subject, string $nowUtc, string $zone, int $runId = 0): array
+    {
+        $planned = [];
+        $reached = $nowUtc;
+        $next    = self::stepAfter($steps, null);
+
+        for ($guard = 0; $guard < self::MAX_STEPS_PER_PASS; $guard++) {
+            if ($next === null) {
+                break;
+            }
+
+            $step   = $next;
+            $stepId = (int) $step['id'];
+            $type   = (string) $step['type'];
+
+            $when   = self::scheduleStep($step, $subject, $reached, $zone);
+            $branch = null;
+            $stop   = null;
+
+            if (!$when['skip']) {
+                // The next step's delay is measured from this one's moment,
+                // not from now.
+                $reached = $when['at'] ?? $reached;
+
+                $branch = match ($type) {
+                    'condition'  => self::branchFor($step, $subject),
+                    'split_test' => self::splitFor($step, $runId),
+                    default      => null,
+                };
+
+                $stop = match ($type) {
+                    'exit' => 'exited',
+                    'goal' => 'completed',
+                    default => null,
+                };
+            }
+
+            $planned[] = [
+                'step'   => $step,
+                'at'     => $when['skip'] ? null : $when['at'],
+                'skip'   => (bool) $when['skip'],
+                'reason' => (string) $when['reason'],
+                'branch' => $branch,
+                'stop'   => $stop,
+            ];
+
+            if ($stop !== null) {
+                break;
+            }
+
+            if ($branch !== null) {
+                // An empty branch rejoins the main line, exactly as the
+                // runner does it.
+                $next = self::firstInBranch($steps, $stepId, $branch) ?? self::stepAfter($steps, $stepId);
+
+                continue;
+            }
+
+            $next = self::stepAfter($steps, $stepId);
+        }
+
+        return $planned;
+    }
+
+    /**
+     * Does this condition group name a field anywhere in it?
+     *
+     * Recursive, because a group may hold groups. Anything that is not a
+     * group with rules in it names nothing — including a bare LIST of rules,
+     * which is the shape somebody writes by hand and which `evaluate()` reads
+     * as empty.
+     */
+    private static function namesAField(mixed $group): bool
+    {
+        if (!is_array($group) || !is_array($group['rules'] ?? null)) {
+            return false;
+        }
+
+        foreach ($group['rules'] as $rule) {
+            if (!is_array($rule)) {
+                continue;
+            }
+
+            if (is_array($rule['rules'] ?? null)) {
+                if (self::namesAField($rule)) {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (trim((string) ($rule['field'] ?? '')) !== '') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     // =================================================================
     // Re-entry and goals
     // =================================================================
@@ -930,6 +1100,26 @@ final class AutomationEngine
         if (in_array($delayType, ['days_before_field', 'days_after_field'], true)
             && trim((string) ($delayConfig['field'] ?? '')) === '') {
             return 'A step counted from a date needs to know which date.';
+        }
+
+        if ($type === 'condition') {
+            /*
+             * A CONDITION WITH NO FIELD TO CHECK IS WORSE THAN NO CONDITION.
+             *
+             * The `needs` loop above accepts it: `rules` is an array, so it is
+             * not empty by that test. But a rule naming no field evaluates
+             * false for everybody, so every guest goes down the NO side — and
+             * the step list reads "check whether nothing in particular", which
+             * is honest and still does not say that half the sequence is
+             * unreachable. MEASURED by driving the builder: the form saved one
+             * happily.
+             */
+            // A GROUP, not a list: `config.rules` is what `branchFor()`
+            // hands to `evaluate()`, which reads `match` and `rules` off it.
+            // A list here would evaluate false for everybody.
+            if (!self::namesAField($config['rules'] ?? null)) {
+                return 'A condition needs a field to check — without one, every guest takes the NO side.';
+            }
         }
 
         if ($type === 'split_test') {

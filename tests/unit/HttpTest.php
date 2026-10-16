@@ -31,9 +31,13 @@ Harness::test('an ordinary https URL is allowed', function (): void {
     Assert::null(Http::refuse('https://example.com'));
     Assert::null(Http::refuse('https://example.com:8443/path?a=1#frag'));
 
-    // Plain http is allowed too. A kitchen printer or a till on the venue's
-    // own network is reached over http, and refusing it would make the step
-    // useless for the integrations a venue actually wants.
+    /*
+     * Plain http is allowed AT THIS LAYER, and that is not the whole rule: a
+     * kitchen printer or a till is reached over http, so the transport allows
+     * it — while `AutomationEngine::validateStep()` refuses anything but
+     * https for a webhook STEP, because that one sends guest data outside the
+     * venue. Two different questions, deliberately answered in two places.
+     */
     Assert::null(Http::refuse('http://hooks.example.com/castle'));
 
     // Surrounding whitespace is how a URL arrives from a textarea.

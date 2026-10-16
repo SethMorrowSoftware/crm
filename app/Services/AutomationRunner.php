@@ -1317,44 +1317,35 @@ final class AutomationRunner
      * @param list<array<string,mixed>> $steps
      * @return array<string,mixed>|null
      */
+    /**
+     * The step after this one, branches and rejoins included.
+     *
+     * The walk itself lives in `AutomationEngine::stepAfter()` because the
+     * preview needs the same answer, and two copies of "what comes next"
+     * would eventually disagree about branches — leaving a venue looking at a
+     * preview of a sequence that is not the one that will run.
+     *
+     * @param list<array<string,mixed>> $steps
+     * @return array<string,mixed>|null
+     */
     private static function nextFrom(array $steps, ?int $currentId): ?array
     {
-        if ($currentId === null) {
-            return AutomationEngine::nextStep($steps, null);
-        }
-
-        $current = null;
-
-        foreach ($steps as $step) {
-            if ((int) $step['id'] === $currentId) {
-                $current = $step;
-                break;
-            }
-        }
-
-        if ($current === null) {
-            return AutomationEngine::nextStep($steps, null);
-        }
-
-        $parent = $current['parent_step_id'] === null ? null : (int) $current['parent_step_id'];
-        $branch = (string) ($current['branch'] ?? 'main');
-
-        $next = AutomationEngine::nextStep($steps, $currentId, $parent, $branch);
-
-        if ($next !== null) {
-            return $next;
-        }
-
-        // The end of a branch rejoins the line the branch hangs off, so the
-        // steps after a condition run for both sides.
-        if ($parent !== null) {
-            return self::nextFrom($steps, $parent);
-        }
-
-        return null;
+        return AutomationEngine::stepAfter($steps, $currentId);
     }
 
-
+    /**
+     * The subject for one guest, for the preview.
+     *
+     * Public because the builder's Test button needs exactly what a run would
+     * see, and building a second version of it in the controller is how a
+     * preview starts disagreeing with the thing it previews.
+     *
+     * @return array<string,mixed>
+     */
+    public static function subjectFor(int $contactId): array
+    {
+        return self::subject($contactId, null, null, []);
+    }
 
     /** @param array<string,mixed> $output */
     private static function log(int $runId, ?int $stepId, string $status, array $output = []): void
