@@ -45,6 +45,18 @@ $router->post('/reset-password', ['AuthController', 'resetPassword'], ['guest', 
 $router->get('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], ['throttle:60,5'], 'unsubscribe');
 $router->post('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], ['throttle:60,5']);
 
+// A hosted web form. No login: this is the party enquiry a parent fills in
+// from the venue's website.
+//
+// Unlike one-click unsubscribe above, the POST is NOT CSRF-exempt. Rendering
+// the page mints a token into the visitor's own session, so the submission can
+// carry one — and without it every form on the venue's site would be a write
+// endpoint any other site could aim at a visitor's browser. The throttle is
+// the second spam check after the per-form honeypot; the GET is limited more
+// loosely because a page view is cheap and a real guest may reload.
+$router->get('/f/{slug:[a-z0-9-]+}', ['FormController', 'show'], ['throttle:120,5'], 'forms.public');
+$router->post('/f/{slug:[a-z0-9-]+}', ['FormController', 'submit'], ['csrf', 'throttle:15,10']);
+
 // ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
@@ -276,6 +288,33 @@ $router->group('/quotes', ['auth', 'can:view_deals'], function ($router): void {
     $router->post('/{id:\d+}', ['QuoteController', 'update'], ['csrf', 'can:deals_manage']);
     $router->post('/{id:\d+}/status', ['QuoteController', 'status'], ['csrf', 'can:deals_manage']);
     $router->post('/{id:\d+}/send', ['QuoteController', 'send'], ['csrf', 'can:quotes_send']);
+});
+
+// ---------------------------------------------------------------------------
+// Web forms
+//
+// `view_marketing` to read a form or its submissions, `forms_manage` to build
+// one: a form carries guest enquiries, so looking and editing are separate.
+// The public pages this module serves are registered with the other
+// unauthenticated endpoints above, not here.
+// ---------------------------------------------------------------------------
+
+$router->group('/forms', ['auth', 'can:view_marketing'], function ($router): void {
+    $router->get('', ['FormController', 'index'], [], 'forms');
+    $router->get('/new', ['FormController', 'create'], ['can:forms_manage'], 'forms.create');
+    $router->post('', ['FormController', 'store'], ['csrf', 'can:forms_manage']);
+
+    $router->get('/{id:\d+}/submissions', ['FormController', 'submissions'], [], 'forms.submissions');
+    $router->get(
+        '/{id:\d+}/submissions/{submission:\d+}',
+        ['FormController', 'submission'],
+        [],
+        'forms.submission'
+    );
+
+    $router->get('/{id:\d+}', ['FormController', 'edit'], ['can:forms_manage'], 'forms.edit');
+    $router->post('/{id:\d+}', ['FormController', 'update'], ['csrf', 'can:forms_manage']);
+    $router->post('/{id:\d+}/delete', ['FormController', 'destroy'], ['csrf', 'can:forms_manage']);
 });
 
 // ---------------------------------------------------------------------------
