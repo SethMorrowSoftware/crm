@@ -128,6 +128,24 @@ final class Acl
             return false;
         }
 
+        /*
+         * AN API TOKEN NARROWS, AND IT NARROWS THE OWNER TOO.
+         *
+         * Checked BEFORE the owner bypass on purpose. An owner minting a
+         * read-only token for a reporting integration must get a read-only
+         * token — if the bypass ran first, every token an owner created would
+         * be a full-access token whatever its abilities said, which is the
+         * opposite of what they chose and invisible until something writes.
+         *
+         * This only ever removes: a token cannot grant a permission the user
+         * does not hold, because the role check below still has to pass.
+         */
+        $token = Auth::apiToken();
+
+        if ($token !== null && !ApiToken::allows($token, $permission)) {
+            return false;
+        }
+
         if (Auth::isOwner()) {
             return true;
         }
@@ -166,6 +184,17 @@ final class Acl
     public static function scope(string $permission): ?string
     {
         if (!Auth::check()) {
+            return null;
+        }
+
+        // Narrowed by an API token exactly as `can()` is, and before the
+        // owner shortcut for the same reason. Without this, a read-only token
+        // would be refused by `can('contacts_manage')` and then handed a
+        // scope of 'all' by any query that asked `scope()` instead — the two
+        // must never disagree about whether a permission is held.
+        $token = Auth::apiToken();
+
+        if ($token !== null && !ApiToken::allows($token, $permission)) {
             return null;
         }
 

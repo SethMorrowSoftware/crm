@@ -6,10 +6,10 @@ This document distinguishes the two honestly, because a reference that
 describes endpoints which do not exist is worse than no reference: somebody
 builds against it, and finds out at integration time.
 
-- **§1–§4 exist now** and are covered by the test suite.
-- **§5 is the planned REST API.** The schema for it (`api_tokens`,
-  `webhooks`) ships, and nothing is routed yet. Treat the shapes as a
-  proposal, not a contract.
+- **§1–§5 exist now** and are covered by the test suite.
+- **§5's "Webhooks" is the one part still planned.** The schema for it
+  (`webhooks`, `webhook_deliveries`) ships and nothing is routed yet; treat
+  that shape as a proposal, not a contract.
 
 ---
 
@@ -150,50 +150,157 @@ application has.
 
 ---
 
-## 5. Planned: the REST API
+## 5. The REST API
 
-**Not implemented.** The tables exist; no routes do. Written down here so the
-shape is agreed before anything depends on it.
+`/api/v1/*`. Implemented, routed and covered by the test suite.
 
 ### Authentication
 
-A bearer token, created per user, hashed at rest (`api_tokens.token_hash`),
-with optional abilities and an expiry:
+A bearer token, created per user in **Settings → API tokens**, hashed at rest
+(`api_tokens.token_hash` holds a SHA-256; the plaintext is shown once and
+never stored):
 
 ```
 Authorization: Bearer cc_live_8f3a...
 ```
 
-A token never grants more than the user who owns it. The permission system is
-the same one the web interface uses, so an API token held by a front-desk
-account can look up one guest and cannot export the list — the API surface
-cannot become a way around the roles.
+`X-Api-Key: cc_live_...` is accepted as well, for hosts that strip
+`Authorization`. The token never appears in a query string: a credential in a
+URL ends up in access logs, in the `Referer` of every outbound link, and in
+browser history.
+
+**A token never grants more than the user who owns it, and its abilities only
+narrow.** The permission system is the one the web interface uses, so a token
+held by a front-desk account looks up one guest and cannot export the list.
+Ticking abilities when you create a token narrows it further — the
+intersection, never the union. An owner minting a read-only token really does
+get a read-only token, which is asserted by a test precisely because the owner
+bypasses every other permission check in the codebase.
+
+A token stops working the moment it is revoked, the moment it expires, and the
+moment its owner is deactivated or deleted. Nobody has to remember to revoke
+the tokens of somebody who leaves.
+
+**No session cookie authenticates this API.** A route that accepted both would
+be forgeable from any logged-in tab, because the API has no form to carry a
+CSRF token in. A static gate asserts the `api` and `auth` middleware never
+appear on the same route.
+
+**On cPanel**, Apache does not pass the `Authorization` header to PHP unless
+told to. The shipped `.htaccess` tells it to, two ways. If every token comes
+back "not valid" while you can see you sent one, a host overriding that file
+is the usual cause.
+
+### Discovery
+
+```bash
+curl https://crm.example.com/api/v1 \
+  -H "Authorization: Bearer cc_live_..."
+```
+
+```json
+{
+  "version": "v1",
+  "resources": {
+    "contacts": { "path": "/api/v1/contacts", "readable": true, "writable": true,
+                  "fields": ["id", "first_name", "..."] }
+  },
+  "you": { "user_id": 1, "name": "Owner", "role": "owner", "revenue": true }
+}
+```
+
+It lists only what THIS token can reach, resolved against the owner's current
+role — so an integration can check itself rather than guessing, and a token
+that lost access because its user was demoted says so.
 
 ### Resources
 
-Read and write, mirroring the modules:
-
 | Resource | Methods | Notes |
 |---|---|---|
-| `/api/v1/contacts` | GET, POST, PATCH | consent fields are writable only with evidence |
-| `/api/v1/contacts/{id}` | GET, PATCH, DELETE | DELETE is a soft delete |
-| `/api/v1/deals` | GET, POST, PATCH | |
-| `/api/v1/bookings` | GET, POST, PATCH | |
-| `/api/v1/bookings/{id}/payments` | GET, POST | an opaque reference only; never card data |
-| `/api/v1/availability` | GET | the query a website booking widget needs |
-| `/api/v1/messages` | GET, POST | POST goes through the same consent and Safe Mode checks |
+| `/api/v1/contacts` | GET, POST, PATCH, DELETE | DELETE is a soft delete |
+| `/api/v1/contacts/{id}/consent` | POST | consent with its evidence — see below |
+| `/api/v1/households` | GET, POST, PATCH | |
+| `/api/v1/companies` | GET, POST, PATCH, DELETE | |
+| `/api/v1/deals` | GET, POST, PATCH, DELETE | won/lost are transitions, not a column |
+| `/api/v1/bookings` | GET, POST, PATCH, DELETE | money is derived from the payment ledger |
+| `/api/v1/visits` | GET, POST | POST goes through the visit recorder |
+| `/api/v1/memberships` | GET | read-only: every change is a lifecycle transition |
 | `/api/v1/tasks` | GET, POST, PATCH | |
-| `/api/v1/reports/{slug}` | GET | |
+| `/api/v1/conversations` | GET | |
+| `/api/v1/messages` | GET | read-only; bodies on the single-record read only |
+| `/api/v1/form-submissions` | GET | |
+| `/api/v1/reviews` | GET | |
 
-Two rules that will not be relaxed:
+A resource that refuses a write answers **405** with the reason, not 500.
 
-1. **Writing a consent flag requires the evidence with it** — the source and
-   the disclosure wording. An API that lets a caller set `email_consent = 1`
-   with no record of what the guest agreed to is a liability, not a feature.
-2. **`POST /messages` is not a bypass.** It goes through `Mailer::send()`, so
-   suppression, consent, the frequency cap, quiet hours and Safe Mode all
-   still apply. An integration cannot send what the application would refuse
-   to send.
+### Examples
+
+List, newest first:
+
+```bash
+curl "https://crm.example.com/api/v1/contacts?per_page=25" \
+  -H "Authorization: Bearer cc_live_..."
+```
+
+Search, and sync incrementally:
+
+```bash
+curl "https://crm.example.com/api/v1/contacts?q=byrne" -H "Authorization: Bearer ..."
+curl "https://crm.example.com/api/v1/contacts?updated_since=2026-10-16T00:00:00Z" \
+  -H "Authorization: Bearer ..."
+```
+
+`updated_since` is what an incremental sync needs; without it every poll is a
+full table read. An unparseable value is **422**, never silently ignored — an
+ignored filter returns the whole table and the integration re-imports
+everything on every poll without knowing why.
+
+Create and update:
+
+```bash
+curl -X POST https://crm.example.com/api/v1/contacts \
+  -H "Authorization: Bearer ..." -H "Content-Type: application/json" \
+  -d '{"first_name":"Dana","last_name":"Byrne","email":"dana@example.test","source":"Website"}'
+
+curl -X PATCH https://crm.example.com/api/v1/contacts/4182 \
+  -H "Authorization: Bearer ..." -H "Content-Type: application/json" \
+  -d '{"city":"Chester","state":"NY"}'
+```
+
+A field that cannot be written is **refused with a 422 naming it**, and
+nothing is written — not quietly dropped. Dropping silently is how an
+integration spends a morning wondering why its PATCH had no effect.
+
+Record a visit:
+
+```bash
+curl -X POST https://crm.example.com/api/v1/visits \
+  -H "Authorization: Bearer ..." -H "Content-Type: application/json" \
+  -d '{"contact_id":4182,"visit_date":"2026-10-15","source":"check_in","spend_cents":4200}'
+```
+
+**Idempotent by the day.** A guest already recorded on that date comes back
+`201`→`200` with `"recorded": false`, the same visit id, and a note. A family
+checked in one child at a time is one visit, and a retried batch does not give
+anybody eleven.
+
+### Consent
+
+The one write that is not a PATCH, because a consent flag with no record of
+what the guest agreed to is a liability rather than a feature:
+
+```bash
+curl -X POST https://crm.example.com/api/v1/contacts/4182/consent \
+  -H "Authorization: Bearer ..." -H "Content-Type: application/json" \
+  -d '{"channel":"email","granted":true,"source":"Party enquiry form",
+       "disclosure":"I agree to receive email from The Castle Fun Center."}'
+```
+
+**Granting needs the disclosure, word for word. Withdrawing needs nothing** —
+a guest saying stop is honoured unconditionally, and refusing to record that
+because a field was missing would be the worst possible reading of a
+compliance rule. Both write `consent_log` with the evidence, the IP and the
+token that did it.
 
 ### Shapes
 
@@ -203,56 +310,77 @@ Money is always **integer cents**, never a float and never a formatted string:
 {
   "id": 4182,
   "total_cents": 54900,
-  "currency": "USD",
   "event_date": "2026-11-14",
-  "created_at": "2026-10-15T14:03:11+00:00"
+  "created_at": "2026-10-15T14:03:11Z"
 }
 ```
 
-Timestamps are UTC ISO 8601. Dates with no time are `YYYY-MM-DD`. Lists are
-cursor-paginated:
+Timestamps are UTC ISO 8601 **with the Z**: without a zone, most client
+libraries read them as local time, which puts every timestamp four or five
+hours out at this venue — consistently enough that nobody notices for a while.
+Dates with no time are `YYYY-MM-DD`. Ids are integers, not strings.
+
+**Money follows `view_revenue`**, as on every page. A token whose user cannot
+see revenue gets the money fields PRESENT and `null`, with
+`meta.money_hidden: true` — the key stays, because a key that vanishes reads
+as "this record has no total" and a null reads as "you were not shown one".
+
+Lists are cursor-paginated:
 
 ```json
 {
   "data": [ ... ],
-  "meta": { "next_cursor": "eyJpZCI6NDE4Mn0", "has_more": true }
+  "meta": { "has_more": true, "next_cursor": "NDE4Mg", "per_page": 25,
+            "money_hidden": false }
 }
 ```
 
-Cursors, not page numbers: a venue's contact list changes while you are
-paging through it, and an offset silently skips rows when one is inserted
-above the window.
+Cursors, not page numbers: a venue's contact list changes while you page
+through it, and an offset silently skips rows when one is inserted above the
+window. Treat the cursor as opaque. `per_page` is capped at 100 — asking for
+100000 gets you 100, not an outage.
 
-### Webhooks
+### What is deliberately NOT exposed
+
+| Absent | Why |
+|---|---|
+| Message bodies in the **listing** | A paginated listing is a bulk export of a venue's correspondence wearing a different hat. The single-message read returns the body. |
+| Form answers, IPs, user agents | The guest's own words and their network identity. |
+| `payment_reference` | An opaque processor reference with no use outside the application. |
+| Password hashes, PINs, tokens | A unit test fails the build if a field whose name looks like a credential ever appears in a resource definition. |
+| Derived figures as WRITABLE | `visit_count`, lifetime value, a booking's totals. Writing one puts a number on the page that no record supports, and the next recalculation contradicts the caller. |
+
+Every resource declares an **allowlist** of fields. A column added by a future
+migration is not published until somebody adds it to that list — which is the
+whole reason the list exists.
+
+### Errors and limits
+
+`401` no or bad token (always JSON, never a redirect to a login page), `403`
+the token lacks a permission (and says which), `404` unknown resource or a
+record outside the caller's scope, `405` write to a read-only resource, `422`
+validation or a refused field, `429` rate limited.
+
+**A record outside your scope is a 404, not a 403.** A 403 confirms the record
+exists, which is how an id space gets walked.
+
+Reads are throttled at 600/minute per IP, writes at 300, deletes at 120.
+
+### Webhooks — planned
 
 Outbound, one row per event subscription (`webhooks`), with deliveries and
-their responses recorded (`webhook_deliveries`). Signed with an HMAC of the
-body in a header, so a receiver can verify the call came from the venue's
-install:
+their responses recorded (`webhook_deliveries`). Signed with an HMAC-SHA256 of
+the raw body in `X-Castle-Signature`, timestamped against replay, retried with
+exponential backoff, with a delivery log and manual replay.
 
-```
-X-Castle-Signature: sha256=...
-X-Castle-Event: booking.deposit_paid
-X-Castle-Delivery: 01JAV...
-```
-
-Retried with backoff; the delivery log is what makes "did that fire?"
-answerable.
-
-### What will not be in the API
-
-- No endpoint that returns a password hash, an API token, or a provider
-  credential. Not even to an owner.
-- No endpoint that returns card data, because none is stored.
-- No endpoint that disables Safe Mode. That is a decision a person makes in
-  the interface, with the confirmation and the audit entry.
+**Not built yet.** The tables ship; no routes do.
 
 ---
 
 ## 6. Alongside the API: the existing exports
 
-While §5 is unbuilt, two routes already move data out, and for an integration
-that only needs a periodic copy they may be enough.
+Two routes already move data out in bulk, and for an integration that only
+needs a periodic copy they are simpler than paging the API.
 
 ```
 GET /settings/backups/export?table=contacts

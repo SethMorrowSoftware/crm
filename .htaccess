@@ -44,6 +44,21 @@ RedirectMatch 404 (?i)\.(sql|md|json|lock|log|sample\.php)$
     # The installer prints the correct value if it detects a subdirectory install.
     # RewriteBase /
 
+    # The Authorization header, which Apache does NOT pass to CGI/FastCGI by
+    # default — so without this line every REST API token is rejected with
+    # "this endpoint needs an API token", while the client can plainly see it
+    # sent one. Nothing in the error says the server ate the header, which is
+    # what makes it an afternoon rather than a minute.
+    #
+    # Two spellings because hosts differ about which one works: the CGI
+    # passthrough, and the rewrite-environment variable that PHP then reads as
+    # REDIRECT_HTTP_AUTHORIZATION (Request::collectHeaders handles both).
+    <IfModule mod_setenvif.c>
+        SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+    </IfModule>
+    RewriteCond %{HTTP:Authorization} ^(.+)$
+    RewriteRule ^ - [E=HTTP_AUTHORIZATION:%1]
+
     # Used by the installer to prove mod_rewrite is active.
     RewriteRule ^__rewrite_probe$ install/probe.php [L]
 

@@ -34,7 +34,34 @@ final class SettingsController extends Controller
             ],
             'mailDriverLabel' => $this->mailDriverLabel(),
             'backupLabel'     => $this->backupLabel(),
+            'apiTokenLabel'   => $this->apiTokenLabel(),
         ]);
+    }
+
+    /**
+     * The tile answers "is anything outside this application reaching it?"
+     *
+     * A count of LIVE tokens, with expired ones named separately — a venue
+     * reading "3 tokens" wants to know that one of them stopped working in
+     * March rather than discovering it when an integration goes quiet.
+     */
+    private function apiTokenLabel(): string
+    {
+        $total = (int) DB::value('SELECT COUNT(*) FROM {api_tokens}');
+
+        if ($total === 0) {
+            return 'Nothing outside this application can reach it.';
+        }
+
+        $expired = (int) DB::value(
+            'SELECT COUNT(*) FROM {api_tokens} WHERE expires_at IS NOT NULL AND expires_at <= :now',
+            ['now' => gmdate('Y-m-d H:i:s')]
+        );
+
+        $live = $total - $expired;
+
+        return $live . ' live ' . ($live === 1 ? 'token' : 'tokens')
+            . ($expired > 0 ? ', ' . $expired . ' expired' : '') . '.';
     }
 
     /** The tile subtitle should answer "is this configured?", not just name the page. */

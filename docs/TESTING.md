@@ -81,6 +81,16 @@ and had to be moved back out.
   HMAC actually depends on the install's key), and that a configured `app_url`
   beats the request's Host header. The rest of the link-host precedence falls
   back through stored settings, so it lives in `integration/mailer`.
+- **api-resource** — what the REST API exposes, as an allowlist. The failure
+  this prevents is nobody's deliberate bug: somebody adds a column — a hash, a
+  token, an internal note — and an API built on `SELECT *` starts publishing
+  it that afternoon, with no error and no line in any diff that looks like a
+  decision. So a field whose NAME looks like a credential fails the build, the
+  writable set is always a subset of the readable one, consent flags and
+  derived figures are readable and never writable, a paginated listing carries
+  no guest prose or network identity, money is emptied rather than dropped,
+  timestamps carry their zone, and a cursor refuses anything that is not a
+  plain integer.
 - **reports** — the report catalogue and the window arithmetic, with today
   passed in rather than read from a clock. The prior window is the same number
   of days immediately before (any overlap and both sides of "+12% on last
@@ -303,6 +313,22 @@ And two further HTTP suites:
   family cannot invent a twelve-pound season pass. Plus every button a manager
   presses — freeze, unfreeze, renew, cancel — driven through the real forms,
   and the rule that a plan nobody has priced is not offered for sale
+- **api** — the REST API over the wire, with real tokens and no cookie jar at
+  all. Mostly about what it REFUSES, because the API is the easiest place in
+  this application to leak what the UI hides: it has no pages anybody reviews,
+  and an integration receiving too much will never complain. **A read-only
+  token minted BY THE OWNER cannot write** — the one that matters, because the
+  owner bypasses every other permission check in the codebase, so an
+  implementation that applied abilities after that bypass would make every
+  owner-minted token a full-access token whatever its abilities said. Plus: a
+  browser SESSION does not authenticate the API (which is what makes the CSRF
+  exemption safe); a token dies when it expires, when it is revoked, and when
+  its owner is deactivated, without anybody remembering to revoke it; money
+  follows `view_revenue` with the keys left in place; a record outside the
+  caller's scope is a 404 rather than a 403, because a 403 confirms it exists;
+  a refused field is named and NOTHING is written; a repeated visit is the
+  same visit; and granting consent needs the disclosure word for word while
+  withdrawing it needs nothing at all.
 - **reports** — every report renders with no warning and no notice, on every
   preset including the empty ones; and the money gate in both places it has to
   hold. A role with `view_reports` and no `view_revenue` reads every count and

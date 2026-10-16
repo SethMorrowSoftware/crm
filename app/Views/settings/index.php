@@ -12,6 +12,7 @@ $sections = [
     ['Venue details', '/settings/venue', 'Name, address, phone, timezone and tax rate.', 'cog', 'settings'],
     ['System', '/settings/system', 'Safe Mode, quiet hours, message caps and retention windows.', 'power', 'settings'],
     ['Email', '/settings/mail', $mailDriverLabel, 'message', 'integrations_manage'],
+    ['API tokens', '/settings/api-tokens', $apiTokenLabel, 'external', 'integrations_manage'],
     ['Users', '/settings/users', $counts['users'] . ' accounts.', 'users', 'users_manage'],
     ['Roles & permissions', '/settings/roles', $counts['roles'] . ' roles.', 'lock', 'roles_manage'],
     ['Playbooks', '/playbooks', $counts['playbooks'] . ' of 8 active.', 'book', 'view_automations'],

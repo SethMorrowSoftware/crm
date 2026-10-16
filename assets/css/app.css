@@ -1252,6 +1252,32 @@ ul.checks li:last-child { border-bottom: 0; }
 body.embed { background: transparent; padding: 0; }
 body.embed .review-wall { padding: .25rem; }
 
+/* ------------------------------------------------------------- API tokens */
+
+/* The one-shot reveal. Monospaced and selectable in one gesture: a token is
+   64 hex characters and the only thing anybody does with it is copy it. */
+.token-reveal {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .85rem; letter-spacing: .01em;
+}
+
+.ability-groups {
+    display: grid; gap: .9rem; margin: .5rem 0 0;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+}
+.ability-group h3 {
+    margin: 0 0 .3rem; font-size: .78rem; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--muted);
+}
+.ability-group .check { display: flex; gap: .4rem; align-items: flex-start; font-size: .88rem; }
+
+.code-block {
+    padding: .8rem; border-radius: var(--radius-sm);
+    background: var(--bg); border: 1px solid var(--line);
+    overflow-x: auto; font-size: .82rem;
+}
+.code-block code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
 /* ---------------------------------------------------------------- Reports */
 
 /* The picker. A report is listed by the QUESTION it answers, with the name

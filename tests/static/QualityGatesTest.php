@@ -206,6 +206,22 @@ Harness::test('every mutating route is CSRF-protected', function (): void {
             continue;
         }
 
+        /*
+         * THE REST API, which authenticates with a BEARER TOKEN and never a
+         * cookie. CSRF is an attack on ambient credentials: a form on
+         * somebody else's site can make a browser send its cookies, and
+         * cannot make it send an Authorization header. So a route guarded by
+         * `api` has nothing to forge.
+         *
+         * That reasoning only holds while the route accepts NO session, which
+         * is why the next test asserts that `api` and `auth` never appear
+         * together. Without it this exemption would quietly cover a route
+         * that a logged-in tab could drive.
+         */
+        if (str_contains($route['middleware'], 'api')) {
+            continue;
+        }
+
         if (!str_contains($route['middleware'], 'csrf')) {
             $offenders[] = $route['method'] . ' ' . $route['path'] . ' (routes.php:' . $route['line'] . ')';
         }
@@ -286,12 +302,63 @@ Harness::test('every authenticated non-API route requires auth', function (): vo
             continue;
         }
 
-        if (!str_contains($route['middleware'], 'auth') && !str_contains($route['middleware'], 'guest')) {
+        // `api` is authentication too — a bearer token resolved to a real
+        // user, who is then subject to the same Acl as a browser session.
+        if (!str_contains($route['middleware'], 'auth')
+            && !str_contains($route['middleware'], 'guest')
+            && !str_contains($route['middleware'], 'api')
+        ) {
             $offenders[] = $route['method'] . ' ' . $route['path'] . ' (routes.php:' . $route['line'] . ')';
         }
     }
 
     Assert::same([], $offenders, "unguarded routes:\n   " . implode("\n   ", $offenders));
+});
+
+Harness::test('AN API ROUTE ACCEPTS A TOKEN OR A SESSION, NEVER BOTH', function (): void {
+    /*
+     * This is what makes the CSRF exemption above safe, and it is worth a
+     * test of its own because the mistake is so easy to make: adding `auth`
+     * to an API route "so it also works from the app" looks helpful and is
+     * the whole vulnerability.
+     *
+     * A route carrying both would accept a session COOKIE, which a browser
+     * attaches to any cross-site request a page can provoke — and the API
+     * has no form, so no CSRF token exists to stop it. Every write in the
+     * REST API would become forgeable by any page the venue's staff happen
+     * to visit while logged in.
+     *
+     * The rule is therefore absolute rather than a judgement: `api` and
+     * `auth` must never appear on the same route.
+     */
+    $offenders = [];
+
+    foreach (parsed_routes() as $route) {
+        $middleware = $route['middleware'];
+
+        if (!str_contains($middleware, 'api')) {
+            continue;
+        }
+
+        if (str_contains($middleware, 'auth')) {
+            $offenders[] = $route['method'] . ' ' . $route['path']
+                . ' (routes.php:' . $route['line'] . ') — carries both api and auth';
+        }
+
+        // And the API is throttled, because a token with no rate limit is a
+        // way to read a venue's whole contact list as fast as the host
+        // allows.
+        if (!str_contains($middleware, 'throttle')) {
+            $offenders[] = $route['method'] . ' ' . $route['path']
+                . ' (routes.php:' . $route['line'] . ') — no throttle';
+        }
+    }
+
+    Assert::same(
+        [],
+        $offenders,
+        "API routes that accept a session or run unthrottled:\n   " . implode("\n   ", $offenders)
+    );
 });
 
 Harness::test('login and password reset are rate limited', function (): void {

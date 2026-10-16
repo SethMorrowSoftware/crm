@@ -16,6 +16,17 @@ final class Auth
 
     private static bool $resolved = false;
 
+    /**
+     * The API token this request arrived with, if any.
+     *
+     * Held so `Acl::can()` can NARROW the user's permissions to the token's
+     * abilities. The session path leaves it null and behaves exactly as it
+     * always has.
+     *
+     * @var array<string,mixed>|null
+     */
+    private static ?array $apiToken = null;
+
     /** Lock an account after this many consecutive failures. */
     private const MAX_ATTEMPTS = 8;
 
@@ -71,6 +82,57 @@ final class Auth
         return self::user() !== null;
     }
 
+    /**
+     * Authenticate this request as the owner of an API token.
+     *
+     * NO SESSION IS STARTED. A bearer token is not a login: it sets no
+     * cookie, rotates no CSRF token, and leaves nothing behind for the next
+     * request — so a token cannot be used to obtain a browser session, and a
+     * stolen token is only ever as useful as the one request it is used in.
+     *
+     * It also updates no `last_login_at`: an integration polling every minute
+     * would otherwise make the users page read as though somebody were
+     * signing in all night.
+     *
+     * @param array<string,mixed> $token A row from `ApiToken::resolve()`.
+     */
+    public static function useApiToken(array $token): bool
+    {
+        $user = DB::first(
+            'SELECT u.*, r.slug AS role_slug, r.name AS role_name
+               FROM {users} u
+               LEFT JOIN {roles} r ON r.id = u.role_id
+              WHERE u.id = :id AND u.deleted_at IS NULL AND u.is_active = 1',
+            ['id' => (int) $token['user_id']]
+        );
+
+        if ($user === null) {
+            return false;
+        }
+
+        self::$user     = $user;
+        self::$resolved = true;
+        self::$apiToken = $token;
+
+        return true;
+    }
+
+    /**
+     * The API token this request carries, or null for a browser session.
+     *
+     * @return array<string,mixed>|null
+     */
+    public static function apiToken(): ?array
+    {
+        return self::$apiToken;
+    }
+
+    /** True when this request came in on a token rather than a session. */
+    public static function isApi(): bool
+    {
+        return self::$apiToken !== null;
+    }
+
     public static function id(): ?int
     {
         $user = self::user();
@@ -100,6 +162,12 @@ final class Auth
     {
         self::$resolved = false;
         self::$user = null;
+
+        // The token goes too. Keeping it would leave the NEXT resolution
+        // narrowed by a token that is no longer the reason anybody is here —
+        // which in the test suite, where one process serves many requests,
+        // means a session-authenticated call silently losing permissions.
+        self::$apiToken = null;
     }
 
     // -----------------------------------------------------------------

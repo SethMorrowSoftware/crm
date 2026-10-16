@@ -139,6 +139,17 @@ $router->group('/settings', ['auth', 'can:settings'], function ($router): void {
     $router->post('/mail', ['MailSettingsController', 'save'], ['csrf', 'can:integrations_manage']);
     $router->post('/mail/test', ['MailSettingsController', 'test'], ['csrf', 'can:integrations_manage']);
 
+    // API tokens hand out a credential that reaches guest data from outside
+    // the building, so they sit behind the integrations permission like the
+    // mail settings rather than riding along with general settings.
+    $router->get('/api-tokens', ['ApiTokenController', 'index'], ['can:integrations_manage'], 'settings.api-tokens');
+    $router->post('/api-tokens', ['ApiTokenController', 'store'], ['csrf', 'can:integrations_manage']);
+    $router->post(
+        '/api-tokens/{id:\d+}/revoke',
+        ['ApiTokenController', 'destroy'],
+        ['csrf', 'can:integrations_manage']
+    );
+
     // Leaving Safe Mode is its own permission: it is the moment the app starts
     // messaging real guests, so it should not ride along with general settings.
     $router->post('/safe-mode', ['SettingsController', 'toggleSafeMode'], ['csrf', 'can:sending_override']);
@@ -738,4 +749,45 @@ $router->group('/reports', ['auth', 'can:view_reports'], function ($router): voi
         ['can:reports_export'],
         'reports.export'
     );
+});
+
+// ---------------------------------------------------------------------------
+// REST API v1
+//
+// `api` REPLACES `auth` rather than sitting beside it, and there is no `csrf`
+// here. Both are deliberate and they are the same decision: the API accepts
+// exactly one credential, a bearer token, and never a session cookie. A route
+// that accepted both would be reachable from any logged-in tab on the
+// internet with no CSRF token to stop it, because the API has no form to put
+// one in.
+//
+// Permissions are NOT on the routes. One controller serves every resource and
+// each resource names its own read and write permission in
+// `ApiResource::RESOURCES`, which the controller checks — putting `can:` here
+// would mean one permission for twelve different resources, which is either
+// too loose or too tight for eleven of them.
+//
+// The throttle is per IP per path per method, like everywhere else. 600 reads
+// a minute is generous for an integration and still a bound.
+// ---------------------------------------------------------------------------
+
+$router->group('/api/v1', ['api'], function ($router): void {
+    $router->get('', ['ApiController', 'index'], ['throttle:120,1'], 'api.index');
+
+    // The non-CRUD endpoints come FIRST: `/contacts/{id}/consent` would
+    // otherwise be matched by nothing and `/visits` by the generic store,
+    // and route order is what decides.
+    $router->post(
+        '/contacts/{id:\d+}/consent',
+        ['ApiController', 'consent'],
+        ['throttle:120,1'],
+        'api.consent'
+    );
+
+    $router->get('/{resource:[a-z-]+}', ['ApiController', 'list'], ['throttle:600,1'], 'api.list');
+    $router->post('/{resource:[a-z-]+}', ['ApiController', 'store'], ['throttle:300,1'], 'api.store');
+    $router->get('/{resource:[a-z-]+}/{id:\d+}', ['ApiController', 'show'], ['throttle:600,1'], 'api.show');
+    $router->patch('/{resource:[a-z-]+}/{id:\d+}', ['ApiController', 'update'], ['throttle:300,1'], 'api.update');
+    $router->put('/{resource:[a-z-]+}/{id:\d+}', ['ApiController', 'update'], ['throttle:300,1']);
+    $router->delete('/{resource:[a-z-]+}/{id:\d+}', ['ApiController', 'destroy'], ['throttle:120,1'], 'api.destroy');
 });

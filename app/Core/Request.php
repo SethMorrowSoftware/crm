@@ -544,6 +544,30 @@ final class Request
             }
         }
 
+        /*
+         * THE AUTHORIZATION HEADER ON cPANEL.
+         *
+         * Apache with mod_rewrite does not pass `Authorization` through to
+         * CGI/FastCGI unless it is told to, and the venue this is built for
+         * runs on exactly that. The symptom is the worst kind: every API
+         * token is rejected with "this endpoint needs an API token", the
+         * header is visibly in the request, and nothing anywhere says the
+         * server ate it.
+         *
+         * `.htaccess` asks for it back under this name (see the rule there),
+         * and this is the other half. Only used when the real header is
+         * absent, so a server that passes it properly is unaffected.
+         */
+        if (!isset($headers['authorization'])) {
+            foreach (['REDIRECT_HTTP_AUTHORIZATION', 'HTTP_X_AUTHORIZATION'] as $fallback) {
+                if (isset($_SERVER[$fallback]) && (string) $_SERVER[$fallback] !== '') {
+                    $headers['authorization'] = (string) $_SERVER[$fallback];
+
+                    break;
+                }
+            }
+        }
+
         return $headers;
     }
 }

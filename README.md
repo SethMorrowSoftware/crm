@@ -40,7 +40,7 @@ handoffs:
 | 8 | Hardening: security review, accessibility audit, load test, backup/restore | |
 
 Everything shipped so far is verified end to end against real MySQL 8.0, MariaDB 10.11
-and MySQL 5.7: **1,560 tests** plus a full installer walk-through. See
+and MySQL 5.7: **1,594 tests** plus a full installer walk-through. See
 [docs/TESTING.md](docs/TESTING.md).
 
 ## Install
