@@ -151,6 +151,14 @@ final class Assert
         }
     }
 
+    /** @param array<array-key,mixed> $haystack */
+    public static function notInArray(mixed $needle, array $haystack, string $because = ''): void
+    {
+        if (in_array($needle, $haystack, true)) {
+            self::fail('Expected ' . self::describe($needle) . ' NOT to be in the list', $because);
+        }
+    }
+
     public static function empty(mixed $value, string $because = ''): void
     {
         if (!empty($value)) {

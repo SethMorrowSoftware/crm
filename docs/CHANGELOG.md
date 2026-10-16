@@ -931,6 +931,59 @@ The full method and every figure are in `docs/AUDIT.md`. What changed:
   widths, contrast taken from real pixels wherever a gradient made it
   uncomputable. Zero findings after the captions.
 
+### Fixed in review (the API)
+
+Five of these are the same mistake in five places: **the API checked that a
+permission was HELD and not what it covered**, so a role an operator can
+build in Settings in one afternoon reached further through `/api/v1` than
+through its own pages. None of them failed visibly, and none of them was
+reachable by accident — which is exactly why they needed finding.
+
+- **Deleting through the API checked the EDIT permission.** This application
+  separates the two everywhere a page does — `contacts_manage` edits a guest
+  and `contacts_delete` removes one, `bookings_manage` edits a party and
+  `bookings_cancel` takes it off the calendar — because the front-desk role
+  holds the first and not the second. A front-desk token could delete exactly
+  what the same person's own pages refuse them. Each resource now names its
+  own delete permission, the discovery endpoint reports `deletable` beside
+  `writable`, and a test states the four that are deletable as data so a new
+  one cannot open an endpoint by existing.
+- **Every write loaded its record under the READ scope.** Scopes are per
+  permission, so "see everyone, edit your own" — ordinary, and buildable in
+  Settings — was honoured on the read and ignored on the write: a token could
+  PATCH, delete, record consent for, or add a visit to somebody else's guest.
+  The permission that governs the call now decides the lookup, and a record
+  outside it is a 404 rather than a 403, so an id space cannot be walked.
+- **A visit took any `contact_id` at all** — no scope, and a soft-deleted
+  guest too, which would have quietly revived them in every report that
+  counts visits.
+- **A deal's stage was a writable column.** Setting it skipped every
+  consequence of a move: the stage clock the velocity report measures, the
+  won/lost date, the SLA deadline, the stage-history row, and the events that
+  start the deposit chase and the thank-you. The board would show a deal in
+  "Won" with no won date and no automation ever running. Moving a deal is now
+  `POST /api/v1/deals/{id}/stage`, by stage name or id, through the same code
+  the board posts to — idempotent, and a stage on another pipeline is refused
+  with a reason. Deals created through the API now also open with the stage
+  clock running and an opening history row, as ones created on the board do.
+- **An empty ability list on a token read as "no restrictions".** Reachable,
+  not theoretical: a token asked for with a renamed or misspelled permission
+  had every entry dropped by the cleaner — correctly — and was then stored as
+  an empty list and read back as full access. The narrowest request anybody
+  could make produced the widest token, with nothing beside it on the page to
+  say so. An empty list now grants nothing, such a token is refused at
+  creation with the names that were not recognised, and a row already holding
+  one says so on the page instead of showing a blank cell.
+- **Imported money is parsed by integer arithmetic**, not through a float.
+  The reported half-cent loss did not reproduce — PHP's `round()` compensates,
+  measured over 3,000,001 values — but the correctness of a venue's imported
+  history rested on a rounding helper's fuzz compensation, which no reader can
+  verify by looking. Two real defects fell out of writing it exactly: a
+  figure in scientific notation had its letters stripped like a currency code
+  (`2.5E+3` became $2.53 — $2,500 was meant), and above about $90 trillion a
+  float loses the last cent. Both are now refused and reported against the
+  line they came from, rather than imported as a number nobody typed.
+
 ---
 
 ## Unreleased — next

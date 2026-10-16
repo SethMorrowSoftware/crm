@@ -88,6 +88,12 @@ $grouped = $catalogue;
                             <td>
                                 <?php if (in_array(ApiToken::ALL, $token['ability_list'], true)): ?>
                                     <span class="muted">Everything that account can</span>
+                                <?php elseif ($token['ability_list'] === []): ?>
+                                    <?php /* An empty set grants NOTHING, and it has to say
+                                             so: a blank cell reads as "no restrictions",
+                                             which is the opposite. Reachable on an old row
+                                             whose abilities were all renamed away. */ ?>
+                                    <span class="badge badge-warn">Nothing — refuses every call</span>
                                 <?php else: ?>
                                     <?php foreach ($token['ability_list'] as $ability): ?>
                                         <span class="badge badge-muted"><?= e($ability) ?></span>

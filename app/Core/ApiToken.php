@@ -161,25 +161,66 @@ final class ApiToken
     {
         $abilities = self::abilities($token);
 
-        if ($abilities === [] || in_array(self::ALL, $abilities, true)) {
+        /*
+         * AN EMPTY LIST GRANTS NOTHING. Only `['*']` grants everything.
+         *
+         * This read `$abilities === [] || in_array(ALL, …)` — an empty set as
+         * a synonym for unrestricted — and that is the wrong way for an
+         * authorization check to be wrong. It is reachable, not theoretical:
+         * `cleanAbilities()` DROPS any ability that is not in the permission
+         * catalogue, on purpose, so a token asked for with a renamed or
+         * misspelled permission (`['contacts_create']`, a stale checkbox name,
+         * a hand-rolled POST) was cleaned to `[]` and stored as `[]` — and
+         * then read back as full access to everything its user holds. The
+         * narrowest request anybody could make produced the widest token, and
+         * the page would have shown no abilities beside it.
+         *
+         * Failing closed means such a token simply refuses every call, which
+         * is visible immediately. `ApiTokenController` now also declines to
+         * mint one, so it cannot get this far.
+         */
+        if ($abilities === []) {
+            return false;
+        }
+
+        if (in_array(self::ALL, $abilities, true)) {
             return true;
         }
 
         return in_array($permission, $abilities, true);
     }
 
-    /** @return list<string> */
+    /**
+     * The abilities on a token.
+     *
+     * NO VALUE AT ALL means unrestricted — a row whose column is null or
+     * empty predates the column and was created when every token was a
+     * full-access token, and reading those as powerless would silently break
+     * a venue's working integration on upgrade. An empty JSON LIST is a
+     * different thing: somebody chose a set and nothing in it survived, so it
+     * grants nothing (see `allows()`). The two must not be conflated, which
+     * is why this returns `[]` rather than `[ALL]` for `'[]'`.
+     *
+     * @return list<string>
+     */
     public static function abilities(array $token): array
     {
         $raw = $token['abilities'] ?? null;
 
-        if (!is_string($raw) || $raw === '') {
+        if (!is_string($raw) || trim($raw) === '') {
             return [self::ALL];
         }
 
         $decoded = json_decode($raw, true);
 
-        return is_array($decoded) ? array_values(array_filter($decoded, 'is_string')) : [self::ALL];
+        if (!is_array($decoded)) {
+            // Unparseable is not a reason to widen a token either, but it is
+            // also not a choice anybody made — a corrupt value reads as the
+            // legacy case above rather than as a deliberate empty set.
+            return [self::ALL];
+        }
+
+        return array_values(array_filter($decoded, 'is_string'));
     }
 
     public static function revoke(int $id): bool

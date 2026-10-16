@@ -666,6 +666,430 @@ Harness::test('updated_since filters, and rubbish is refused rather than ignored
     Assert::same(422, $bad['status']);
 });
 
+// ============================================ scope, on the WRITING side
+
+/*
+ * The block review asked for, and the one the API had no test of at all.
+ *
+ * Scopes are per permission (`role_permissions.scope`), and `Acl::can()`
+ * answers only whether a permission is held AT ALL — not how widely. So
+ * "see everyone, edit your own" — an ordinary pairing an operator can build
+ * in Settings — was honoured on the read and ignored on every write: the
+ * record was loaded under the READ scope and then changed.
+ */
+
+$splitRole = ha_role('split', [
+    'view_contacts'   => 'all',
+    'contacts_manage' => 'own',
+    'contacts_delete' => 'own',
+    'view_deals'      => 'all',
+    'deals_manage'    => 'own',
+]);
+$splitUser = ha_user($splitRole, 'split');
+$split     = ha_token($splitUser, 'split');
+
+/** A contact owned by somebody — or by nobody, which 0 means here. */
+function ha_contact(int $ownerId, string $last): int
+{
+    return (int) DB::insert('contacts', [
+        'first_name' => 'Scope',
+        'last_name'  => $last,
+        // `owner_id` is a real foreign key, so unowned is NULL rather than 0.
+        'owner_id'   => $ownerId > 0 ? $ownerId : null,
+        'source'     => 'hatest',
+        'created_at' => now_utc(),
+        'updated_at' => now_utc(),
+    ]);
+}
+
+Harness::test('A WRITE IS SCOPED BY THE WRITE PERMISSION, NOT THE READ ONE', function () use ($split, $splitUser, $ownerId): void {
+    ha_clear();
+
+    $mine      = ha_contact($splitUser, 'Mine');
+    $somebodys = ha_contact($ownerId, 'Somebody Elses');
+
+    // Both are READABLE: view_contacts is held at 'all', and that half was
+    // never in doubt.
+    Assert::same(200, ha_call('GET', '/api/v1/contacts/' . $mine, $split)['status']);
+    Assert::same(200, ha_call('GET', '/api/v1/contacts/' . $somebodys, $split)['status'], 'reading everyone is the point of all+own');
+
+    // Mine, I may edit.
+    Assert::same(200, ha_call('PATCH', '/api/v1/contacts/' . $mine, $split, ['city' => 'Chester'])['status']);
+
+    /*
+     * Somebody else's, I may not — and it is a 404, not a 403. A 403 here
+     * would confirm the record exists, which is how an id space gets walked
+     * by a token that was never meant to see one.
+     */
+    $patch = ha_call('PATCH', '/api/v1/contacts/' . $somebodys, $split, ['city' => 'Taken Over']);
+    Assert::same(404, $patch['status'], 'editing out of scope is refused');
+
+    Assert::null(
+        DB::value('SELECT city FROM {contacts} WHERE id = :id', ['id' => $somebodys]),
+        'and nothing was written'
+    );
+
+    // The same for every other write that takes an id: delete, consent, and
+    // a visit. Each one moves a figure on a guest's record.
+    Assert::same(404, ha_call('DELETE', '/api/v1/contacts/' . $somebodys, $split)['status'], 'delete');
+
+    $consent = ha_call('POST', '/api/v1/contacts/' . $somebodys . '/consent', $split, [
+        'channel'    => 'email',
+        'granted'    => true,
+        'source'     => 'ha-scope',
+        'disclosure' => 'Agreed to hear about parties.',
+    ]);
+    Assert::same(404, $consent['status'], 'consent');
+
+    $visit = ha_call('POST', '/api/v1/visits', $split, [
+        'contact_id'  => $somebodys,
+        'visit_date'  => gmdate('Y-m-d', time() - 86400),
+        'spend_cents' => 5000,
+    ]);
+    Assert::same(404, $visit['status'], 'a visit on somebody else\'s guest');
+
+    // None of it landed: not the flag, not the visit, not the derived
+    // figures a visit moves.
+    $row = DB::first(
+        'SELECT email_consent, visit_count, lifetime_value_cents, deleted_at
+           FROM {contacts} WHERE id = :id',
+        ['id' => $somebodys]
+    );
+
+    Assert::same(0, (int) $row['email_consent']);
+    Assert::same(0, (int) $row['visit_count']);
+    Assert::same(0, (int) $row['lifetime_value_cents']);
+    Assert::null($row['deleted_at']);
+
+    Assert::same(
+        0,
+        (int) DB::value('SELECT COUNT(*) FROM {visits} WHERE contact_id = :c', ['c' => $somebodys])
+    );
+
+    // And my own guest still works, so the scope narrowed rather than broke.
+    $ok = ha_call('POST', '/api/v1/visits', $split, [
+        'contact_id'  => $mine,
+        'visit_date'  => gmdate('Y-m-d', time() - 86400),
+        'spend_cents' => 5000,
+    ]);
+    Assert::same(201, $ok['status'], 'my own guest is fine');
+
+    ha_clear();
+});
+
+Harness::test('a visit cannot be recorded on a DELETED guest either', function () use ($full): void {
+    ha_clear();
+
+    $id = ha_contact(0, 'Deleted Guest');
+    DB::update('contacts', ['deleted_at' => now_utc()], 'id = :id', ['id' => $id]);
+
+    // Quietly reviving a deleted guest in every report that counts visits is
+    // not something an integration should be able to do by accident.
+    $response = ha_call('POST', '/api/v1/visits', $full, [
+        'contact_id'  => $id,
+        'visit_date'  => gmdate('Y-m-d', time() - 86400),
+        'spend_cents' => 1000,
+    ]);
+
+    Assert::same(404, $response['status']);
+    Assert::same(
+        0,
+        (int) DB::value('SELECT COUNT(*) FROM {visits} WHERE contact_id = :c', ['c' => $id])
+    );
+
+    ha_clear();
+});
+
+Harness::test('A VISIT NEEDS A REAL CONTACT, so the id space cannot be walked', function () use ($full): void {
+    foreach ([999999999, 1, -1, 0] as $id) {
+        $response = ha_call('POST', '/api/v1/visits', $full, [
+            'contact_id' => $id,
+            'visit_date' => gmdate('Y-m-d', time() - 86400),
+        ]);
+
+        Assert::true(
+            in_array($response['status'], [404, 422], true),
+            'contact_id ' . $id . ' gave ' . $response['status']
+        );
+    }
+});
+
+// ================================================== deleting is its own power
+
+Harness::test('DELETING NEEDS THE DELETE PERMISSION, NOT THE EDIT ONE', function () use ($ownerId): void {
+    ha_clear();
+
+    /*
+     * The front-desk role, as an operator really builds it: create and edit
+     * guests, but not remove them. Deleting used to be checked against the
+     * WRITE permission, so this token could delete through the API exactly
+     * what this person's own pages refuse them.
+     */
+    $editorRole = ha_role('editor', [
+        'view_contacts'   => 'all',
+        'contacts_manage' => 'all',
+        'view_bookings'   => 'all',
+        'bookings_manage' => 'all',
+    ]);
+    $editor = ha_token(ha_user($editorRole, 'editor'), 'editor');
+
+    $created = ha_call('POST', '/api/v1/contacts', $editor, [
+        'first_name' => 'Editable',
+        'last_name'  => 'NotDeletable',
+        'source'     => 'hatest',
+    ]);
+
+    Assert::same(201, $created['status'], 'it can still create');
+    $id = (int) $created['json']['data']['id'];
+
+    Assert::same(
+        200,
+        ha_call('PATCH', '/api/v1/contacts/' . $id, $editor, ['city' => 'Chester'])['status'],
+        'and edit'
+    );
+
+    $refused = ha_call('DELETE', '/api/v1/contacts/' . $id, $editor);
+
+    Assert::same(403, $refused['status']);
+    Assert::same('contacts_delete', $refused['json']['permission'] ?? null, 'and it names the right permission');
+
+    Assert::true(
+        DB::exists('SELECT id FROM {contacts} WHERE id = :id AND deleted_at IS NULL', ['id' => $id]),
+        'the guest is still there'
+    );
+
+    // A booking says `bookings_cancel`, which is the permission its own
+    // pages check — the names differ per resource and the message must too.
+    $booking = (int) DB::insert('bookings', [
+        'booking_number' => 'HA-' . strtoupper(bin2hex(random_bytes(3))),
+        'type'           => 'birthday',
+        'status'         => 'inquiry',
+        'event_date'     => gmdate('Y-m-d', time() + 86400 * 30),
+        'source'         => 'hatest',
+        'created_at'     => now_utc(),
+        'updated_at'     => now_utc(),
+    ]);
+
+    $cancel = ha_call('DELETE', '/api/v1/bookings/' . $booking, $editor);
+
+    Assert::same(403, $cancel['status']);
+    Assert::same('bookings_cancel', $cancel['json']['permission'] ?? null);
+
+    // With the permission, it goes.
+    $deleterRole = ha_role('deleter', [
+        'view_contacts'   => 'all',
+        'contacts_manage' => 'all',
+        'contacts_delete' => 'all',
+    ]);
+    $deleter = ha_token(ha_user($deleterRole, 'deleter'), 'deleter');
+
+    Assert::same(200, ha_call('DELETE', '/api/v1/contacts/' . $id, $deleter)['status']);
+    Assert::true(
+        DB::exists('SELECT id FROM {contacts} WHERE id = :id AND deleted_at IS NOT NULL', ['id' => $id])
+    );
+
+    ha_clear();
+});
+
+Harness::test('the index says what a token may delete, separately from what it may write', function () use ($full): void {
+    $index = ha_call('GET', '/api/v1', $full);
+
+    Assert::same(200, $index['status']);
+
+    $contacts = $index['json']['resources']['contacts'] ?? [];
+
+    Assert::true((bool) ($contacts['writable'] ?? false));
+    Assert::true((bool) ($contacts['deletable'] ?? false), 'the owner token can delete');
+
+    // A resource with no delete path says so rather than leaving an
+    // integration to find out from a 405.
+    Assert::false((bool) ($index['json']['resources']['visits']['deletable'] ?? true));
+    Assert::false((bool) ($index['json']['resources']['memberships']['deletable'] ?? true));
+});
+
+// =================================================== a stage is a transition
+
+Harness::test('A STAGE CANNOT BE PATCHED, AND MOVING ONE DOES EVERYTHING A MOVE DOES', function () use ($full): void {
+    ha_clear();
+
+    $stages = DB::all(
+        'SELECT id, name, pipeline_id, is_won FROM {pipeline_stages}
+          WHERE pipeline_id = (SELECT MIN(pipeline_id) FROM {pipeline_stages})
+          ORDER BY sort_order, id'
+    );
+
+    Assert::greaterThan(2, count($stages), 'precondition: the first pipeline has stages to move between');
+
+    $first = $stages[0];
+    $next  = $stages[1];
+    $won   = null;
+
+    foreach ($stages as $stage) {
+        if ((int) $stage['is_won'] === 1) {
+            $won = $stage;
+        }
+    }
+
+    Assert::notNull($won, 'precondition: the first pipeline has a won stage');
+
+    $created = ha_call('POST', '/api/v1/deals', $full, [
+        'title'  => 'HA stage walk',
+        'source' => 'hatest',
+    ]);
+
+    Assert::same(201, $created['status']);
+    $id = (int) $created['json']['data']['id'];
+
+    /*
+     * A deal created through the API opens exactly as one created on the
+     * board does: in the first stage, with the stage clock running and an
+     * opening history row. Without them the velocity report cannot measure
+     * the time it spent in its first stage, which is the figure the pipeline
+     * report opens with.
+     */
+    $row = DB::first('SELECT * FROM {deals} WHERE id = :id', ['id' => $id]);
+
+    Assert::same((int) $first['id'], (int) $row['stage_id']);
+    Assert::notNull($row['stage_entered_at'], 'the stage clock is running');
+    Assert::same('open', (string) $row['status']);
+    Assert::same(
+        1,
+        (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id]),
+        'the opening history row'
+    );
+
+    // `stage_id` is not a writable field, and a refusal says so rather than
+    // ignoring it.
+    $patch = ha_call('PATCH', '/api/v1/deals/' . $id, $full, ['stage_id' => (int) $next['id']]);
+
+    Assert::same(422, $patch['status']);
+    Assert::inArray('stage_id', $patch['json']['refused']);
+    Assert::same(
+        (int) $first['id'],
+        (int) DB::value('SELECT stage_id FROM {deals} WHERE id = :id', ['id' => $id]),
+        'and the deal did not move'
+    );
+
+    // By name, the way an automation step names one.
+    $move = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, ['stage' => (string) $next['name']]);
+
+    Assert::same(200, $move['status']);
+    Assert::true((bool) $move['json']['moved']);
+    Assert::same((string) $next['name'], $move['json']['to']);
+    Assert::same((int) $next['id'], (int) $move['json']['data']['stage_id']);
+
+    Assert::same(
+        2,
+        (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id]),
+        'the move is in the history'
+    );
+
+    // Again, to the same stage: not an error, and not a second history row —
+    // re-entering would reset the stage clock the report measures.
+    $same = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, ['stage_id' => (int) $next['id']]);
+
+    Assert::same(200, $same['status']);
+    Assert::false((bool) $same['json']['moved']);
+    Assert::notNull($same['json']['note']);
+    Assert::same(
+        2,
+        (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id])
+    );
+
+    // A stage that does not exist, and one on another board: refused with a
+    // reason, never a silent no-op.
+    foreach (['Not A Stage Here', '0'] as $nonsense) {
+        $bad = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, ['stage' => $nonsense]);
+        Assert::same(422, $bad['status'], $nonsense);
+    }
+
+    $elsewhere = DB::first(
+        'SELECT id, name FROM {pipeline_stages} WHERE pipeline_id <> :p ORDER BY id LIMIT 1',
+        ['p' => (int) $first['pipeline_id']]
+    );
+
+    if ($elsewhere !== null) {
+        $crossed = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, [
+            'stage_id' => (int) $elsewhere['id'],
+        ]);
+
+        Assert::same(422, $crossed['status'], 'a stage on another board is refused');
+        Assert::contains('pipeline', strtolower($crossed['body']));
+    }
+
+    // Winning stamps the won date and closes the deal, which is the whole
+    // reason this is not a column.
+    $win = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, ['stage_id' => (int) $won['id']]);
+
+    Assert::same(200, $win['status']);
+
+    $after = DB::first('SELECT status, won_at, stage_id FROM {deals} WHERE id = :id', ['id' => $id]);
+
+    Assert::same('won', (string) $after['status']);
+    Assert::notNull($after['won_at'], 'and it says when');
+    Assert::same((int) $won['id'], (int) $after['stage_id']);
+
+    ha_clear();
+});
+
+Harness::test('moving a stage needs deals_manage, and the deal has to be in scope', function () use ($readOnly, $split, $splitUser, $ownerId): void {
+    ha_clear();
+
+    $mine = (int) DB::insert('deals', [
+        'pipeline_id' => (int) DB::value('SELECT MIN(pipeline_id) FROM {pipeline_stages}'),
+        'stage_id'    => (int) DB::value('SELECT id FROM {pipeline_stages} ORDER BY pipeline_id, sort_order LIMIT 1'),
+        'title'       => 'HA scoped deal',
+        'owner_id'    => $splitUser,
+        'status'      => 'open',
+        'source'      => 'hatest',
+        'created_at'  => now_utc(),
+        'updated_at'  => now_utc(),
+    ]);
+
+    $theirs = (int) DB::insert('deals', [
+        'pipeline_id' => (int) DB::value('SELECT MIN(pipeline_id) FROM {pipeline_stages}'),
+        'stage_id'    => (int) DB::value('SELECT id FROM {pipeline_stages} ORDER BY pipeline_id, sort_order LIMIT 1'),
+        'title'       => 'HA somebody elses deal',
+        'owner_id'    => $ownerId,
+        'status'      => 'open',
+        'source'      => 'hatest',
+        'created_at'  => now_utc(),
+        'updated_at'  => now_utc(),
+    ]);
+
+    $target = DB::first(
+        'SELECT id, name FROM {pipeline_stages}
+          WHERE pipeline_id = (SELECT MIN(pipeline_id) FROM {pipeline_stages})
+          ORDER BY sort_order, id LIMIT 1 OFFSET 1'
+    );
+
+    // A read-only token cannot move anything, and says which permission it
+    // wanted.
+    $refused = ha_call('POST', '/api/v1/deals/' . $mine . '/stage', $readOnly, ['stage_id' => (int) $target['id']]);
+
+    Assert::same(403, $refused['status']);
+    Assert::same('deals_manage', $refused['json']['permission'] ?? null);
+
+    // The split token holds deals_manage at 'own': its own deal moves...
+    Assert::same(
+        200,
+        ha_call('POST', '/api/v1/deals/' . $mine . '/stage', $split, ['stage_id' => (int) $target['id']])['status']
+    );
+
+    // ...and somebody else's is a 404, with no history row to show for it.
+    Assert::same(
+        404,
+        ha_call('POST', '/api/v1/deals/' . $theirs . '/stage', $split, ['stage_id' => (int) $target['id']])['status']
+    );
+
+    Assert::same(
+        0,
+        (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $theirs])
+    );
+
+    ha_clear();
+});
+
 ha_clear();
 ha_clear_users();
 ha_clear_tokens();

@@ -27,7 +27,7 @@ Harness::suite('unit/api-resource');
 
 Harness::test('every resource declares the keys the controller relies on', function (): void {
     foreach (ApiResource::RESOURCES as $name => $definition) {
-        foreach (['table', 'read', 'write', 'owner', 'fields', 'writable',
+        foreach (['table', 'read', 'write', 'delete', 'owner', 'fields', 'writable',
                   'money', 'dates', 'soft_delete', 'search', 'sort'] as $key) {
             Assert::hasKey($key, $definition, $name . ' is missing "' . $key . '"');
         }
@@ -312,4 +312,97 @@ Harness::test('a page is bounded whatever the caller asks for', function (): voi
     Assert::same(ApiResource::MAX_PER_PAGE, ApiResource::perPage('100000'));
     Assert::same(1, ApiResource::perPage('0'));
     Assert::same(1, ApiResource::perPage('-20'));
+});
+
+// ----------------------------------------------- deleting is its own power
+
+Harness::test('DELETING NAMES ITS OWN PERMISSION, NEVER THE WRITE ONE', function (): void {
+    /*
+     * The hole this closes, and why it is worth a test of its own.
+     *
+     * This application separates editing from deleting everywhere a page does
+     * it: `contacts_manage` edits a guest and `contacts_delete` removes one,
+     * `bookings_manage` edits a party and `bookings_cancel` takes it off the
+     * calendar. It separates them because the front-desk role an operator
+     * actually builds holds the first and not the second.
+     *
+     * The API's DELETE checked the WRITE permission, so a front-desk token
+     * could delete through `/api/v1` exactly what the same person's own pages
+     * refuse them — and nothing on any page would have shown it. Found by
+     * review.
+     */
+    foreach (ApiResource::RESOURCES as $name => $definition) {
+        if ($definition['delete'] === null) {
+            continue;
+        }
+
+        Assert::notSame(
+            $definition['write'],
+            $definition['delete'],
+            $name . ' deletes under its write permission, which is the hole this test exists for'
+        );
+
+        Assert::hasKey(
+            (string) $definition['delete'],
+            \App\Core\Acl::CATALOG,
+            $name . ' names a delete permission that is not in the catalogue, so nothing can grant it'
+        );
+
+        // A delete permission on a resource with no `deleted_at` column would
+        // be a promise the controller cannot keep.
+        Assert::true(
+            (bool) $definition['soft_delete'],
+            $name . ' names a delete permission but has nothing to soft-delete into'
+        );
+    }
+});
+
+Harness::test('the resources a venue deletes through the API are the ones with a delete key', function (): void {
+    // Stated as data rather than derived, so that ADDING a soft-deletable
+    // resource is a decision somebody makes here instead of an endpoint that
+    // opens itself.
+    $expected = [
+        'contacts'   => 'contacts_delete',
+        'companies'  => 'contacts_delete',
+        'deals'      => 'deals_delete',
+        'bookings'   => 'bookings_cancel',
+    ];
+
+    $actual = [];
+
+    foreach (ApiResource::RESOURCES as $name => $definition) {
+        if ($definition['delete'] !== null) {
+            $actual[$name] = (string) $definition['delete'];
+        }
+    }
+
+    Assert::same($expected, $actual);
+});
+
+Harness::test('A STAGE IS NOT A WRITABLE COLUMN ON A DEAL', function (): void {
+    /*
+     * `stage_id` was in this list, and a PATCH that set it skipped every
+     * consequence of a move: the stage clock the velocity report measures,
+     * `won_at`/`lost_at`, the SLA deadline, the stage-history row the
+     * pipeline report reads, and `deal.stage_changed`/`deal.won`/`deal.lost`
+     * — the events that start the deposit chase and the thank-you. The board
+     * would show the deal in "Won" with no won date, no history and no
+     * automation ever running.
+     *
+     * `POST /api/v1/deals/{id}/stage` goes through `DealStage::move()`
+     * instead, which is the path the board itself posts to.
+     */
+    $deals = ApiResource::get('deals') ?? [];
+
+    Assert::notInArray('stage_id', $deals['writable'], 'a stage is a move, not a field');
+    Assert::notInArray('status', $deals['writable'], 'won and lost are transitions');
+
+    // Still READABLE: an integration has to be able to see where a deal is.
+    Assert::inArray('stage_id', $deals['fields']);
+    Assert::inArray('status', $deals['fields']);
+
+    // `pipeline_id` stays writable — moving between boards is a plain
+    // reassignment, and `DealStage::move()` refuses a stage from another
+    // pipeline, so the two cannot disagree.
+    Assert::inArray('pipeline_id', $deals['writable']);
 });

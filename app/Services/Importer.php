@@ -588,6 +588,29 @@ final class Importer
      *
      * Null when it cannot be read. `$1,234.50`, `1234.5`, `(12.00)` for a
      * refund and a bare `-12` all appear in POS exports.
+     *
+     * **BY INTEGER ARITHMETIC ON THE DIGITS, NOT THROUGH A FLOAT.** This read
+     * `(int) round(((float) $clean) * 100)`, and review flagged it as
+     * understating a half-cent — `0.145` reaching cents as 14. Measured, it
+     * does not: PHP's `round()` compensates for binary representation, and
+     * over every two-decimal value to $20,000 and every three-decimal value
+     * to $1,000 — 3,000,001 of them — the float path agreed with exact
+     * arithmetic on every single one. But the reviewer was right about the
+     * SHAPE of it even with the arithmetic coming out: the correctness of a
+     * venue's imported money rested on a rounding helper's fuzz
+     * compensation, which is a thing that can change under us and a thing no
+     * reader can verify by looking. It does not rest on anything now, and two
+     * real defects fell out of writing it exactly:
+     *
+     *   - a float loses the last cent above about $90 trillion
+     *     (`99999999999999.99` came back a cent short). No venue has that in
+     *     a spend column, but a column of the wrong sort might, and a
+     *     silently adjusted figure is the worst way to find out — so an
+     *     amount too large to be money here is REFUSED and reported.
+     *   - `2.5E+3` had its letters stripped like a currency code and became
+     *     `2.53` — $2.53 where the cell said $2,500. Spreadsheets really do
+     *     export a number column that way. Also refused: a reported row a
+     *     venue can look at beats a wrong number they cannot see.
      */
     public static function readCents(string $value): ?int
     {
@@ -601,20 +624,50 @@ final class Importer
         $negative = preg_match('/^\((.*)\)$/', $value, $m) === 1;
 
         if ($negative) {
-            $value = $m[1];
+            $value = trim($m[1]);
         }
 
         if (str_starts_with($value, '-')) {
             $negative = true;
         }
 
+        /*
+         * Scientific notation is refused rather than guessed at. Stripping
+         * the non-digits out of `2.5E+3` leaves `2.53`, which is a plausible
+         * amount and the wrong one by a factor of a thousand.
+         */
+        if (preg_match('/\d\s*[eE]\s*[-+]?\d/', $value) === 1) {
+            return null;
+        }
+
         $clean = (string) preg_replace('/[^0-9.]/', '', $value);
 
+        // `is_numeric` FIRST, so that a second decimal point ("1.2.3") is a
+        // refusal rather than something the split below quietly truncates.
         if ($clean === '' || !is_numeric($clean)) {
             return null;
         }
 
-        $cents = (int) round(((float) $clean) * 100);
+        [$whole, $fraction] = array_pad(explode('.', $clean, 2), 2, '');
+
+        $whole = ltrim($whole, '0');
+
+        // Twelve digits is a trillion dollars. A figure that size in a spend
+        // column is the wrong column, not a large party, and `(int)` on a
+        // longer digit string saturates — so it is refused here while it can
+        // still be reported against the row it came from.
+        if (strlen($whole) > 12) {
+            return null;
+        }
+
+        /*
+         * Thousandths, then half-up to cents. Three fractional digits is
+         * exactly enough: rounding to two places turns on whether the tail is
+         * at least half a cent, and that is decided by the third digit alone
+         * (0.004999… is below it however long the tail runs).
+         */
+        $thousandths = ((int) $whole * 1000) + (int) str_pad(substr($fraction, 0, 3), 3, '0');
+        $cents       = intdiv($thousandths + 5, 10);
 
         return $negative ? -$cents : $cents;
     }

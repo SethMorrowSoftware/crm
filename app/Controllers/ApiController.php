@@ -13,6 +13,7 @@ use App\Core\Request;
 use App\Core\Response;
 use App\Core\Validator;
 use App\Services\ApiResource;
+use App\Services\DealStage;
 use App\Services\VisitRecorder;
 use RuntimeException;
 use Throwable;
@@ -79,6 +80,13 @@ final class ApiController extends Controller
                 'writable' => $definition['write'] !== null
                     && $definition['writable'] !== []
                     && Acl::can((string) $definition['write']),
+                // Reported separately because it IS separate: deleting is its
+                // own permission, and a token that may edit a contact
+                // commonly may not delete one. An integration can see that
+                // here rather than discovering it from a 403.
+                'deletable' => $definition['delete'] !== null
+                    && $definition['soft_delete']
+                    && Acl::can((string) $definition['delete']),
                 'fields'   => $definition['fields'],
             ];
         }
@@ -344,10 +352,21 @@ final class ApiController extends Controller
             return $this->forbidden($definition['write']);
         }
 
-        // Found through the READ scope first: a 404 for a record outside the
-        // caller's scope, never a 403, so the API does not confirm that a
-        // record they may not see exists.
-        $existing = $this->findScoped($definition, $request->routeInt('id'));
+        /*
+         * Found THROUGH THE WRITE PERMISSION'S OWN SCOPE, and a 404 for a
+         * record outside it rather than a 403 — the API must not confirm that
+         * a record the caller may not touch exists.
+         *
+         * The write permission, not the read one: "see everyone, edit your
+         * own" is a scope pairing an operator can build in Settings, and
+         * loading the row under `view_*` would honour the first half and
+         * ignore the second.
+         */
+        $existing = $this->findScoped(
+            $definition,
+            $request->routeInt('id'),
+            (string) $definition['write']
+        );
 
         if ($existing === null) {
             return $this->notFoundJson('No ' . rtrim($name, 's') . ' with that id.');
@@ -404,17 +423,35 @@ final class ApiController extends Controller
             return $this->notFoundJson('There is no resource called "' . $name . '".');
         }
 
-        if ($definition['write'] === null || !$definition['soft_delete']) {
+        /*
+         * DELETING IS ITS OWN PERMISSION.
+         *
+         * This used to check `write`, and that was a real hole rather than an
+         * untidy one: this application separates the two everywhere a page
+         * does — `contacts_manage` edits and `contacts_delete` deletes,
+         * `bookings_manage` edits and `bookings_cancel` cancels — precisely
+         * because the front-desk role an operator builds holds the first and
+         * not the second. So a front-desk token could DELETE through the API
+         * what the same person's own pages refuse them, and nothing on any
+         * page would have shown it.
+         */
+        if ($definition['delete'] === null || !$definition['soft_delete']) {
             return Response::json([
                 'error' => ucfirst($name) . ' cannot be deleted through the API.',
             ], 405);
         }
 
-        if (!Acl::can((string) $definition['write'])) {
-            return $this->forbidden($definition['write']);
+        if (!Acl::can((string) $definition['delete'])) {
+            return $this->forbidden($definition['delete']);
         }
 
-        $existing = $this->findScoped($definition, $request->routeInt('id'));
+        // And found through THAT permission's scope, for the reason spelled
+        // out on `findScoped()`.
+        $existing = $this->findScoped(
+            $definition,
+            $request->routeInt('id'),
+            (string) $definition['delete']
+        );
 
         if ($existing === null) {
             return $this->notFoundJson('No ' . rtrim($name, 's') . ' with that id.');
@@ -471,6 +508,31 @@ final class ApiController extends Controller
             return Response::json(['error' => 'A visit needs a contact_id.'], 422);
         }
 
+        /*
+         * THE CONTACT HAS TO BE ONE THIS TOKEN MAY WRITE TO.
+         *
+         * Any positive id used to be passed straight to the recorder, which
+         * made this the one write in the API that ignored scope entirely: a
+         * role holding `contacts_manage` at 'own' could add visits — and so
+         * move the visit count, the lifetime value and the last-visit date,
+         * and start the welcome series — on a guest belonging to somebody
+         * else, or walk the id space doing it. A soft-deleted contact was
+         * reachable too, which would have quietly revived them in every
+         * report that counts visits.
+         *
+         * 404 rather than 403, same as everywhere else here: a caller who may
+         * not touch a record does not get told it exists.
+         */
+        $contact = $this->findScoped(
+            ApiResource::get('contacts') ?? [],
+            $contactId,
+            'contacts_manage'
+        );
+
+        if ($contact === null) {
+            return $this->notFoundJson('No contact with that id.');
+        }
+
         $result = VisitRecorder::record([
             'contact_id'  => $contactId,
             'visit_date'  => $input['visit_date'] ?? null,
@@ -511,6 +573,90 @@ final class ApiController extends Controller
     }
 
     /**
+     * Move a deal to another stage.
+     *
+     * NOT a PATCH on `stage_id`, which is why it is its own endpoint — and
+     * `stage_id` was in the writable list until review caught it. A stage is
+     * not a column, it is a move: entering one stamps `stage_entered_at`
+     * (what the velocity report measures), sets `status` and `won_at`/
+     * `lost_at`, computes the SLA deadline, writes the stage-history row the
+     * pipeline report reads, and fires `deal.stage_changed` plus
+     * `deal.won`/`deal.lost` — the events that start the deposit chase and
+     * the thank-you. A PATCH that set the column did none of it: the board
+     * showed the deal in "Won" with no won date, no history and no
+     * automation ever running, and nothing anywhere said so.
+     *
+     * `DealStage::move()` is the same path the board posts to, so the two
+     * cannot drift.
+     */
+    public function moveDealStage(Request $request): Response
+    {
+        if (!Acl::can('deals_manage')) {
+            return $this->forbidden('deals_manage');
+        }
+
+        $definition = ApiResource::get('deals') ?? [];
+        $deal       = $this->findScoped($definition, $request->routeInt('id'), 'deals_manage');
+
+        if ($deal === null) {
+            return $this->notFoundJson('No deal with that id.');
+        }
+
+        $input = $request->json();
+
+        if (!is_array($input)) {
+            return Response::json(['error' => 'Send a JSON object.'], 400);
+        }
+
+        // By NAME or by id: an integration written against this venue's board
+        // knows "Deposit chased", and one written against the product knows
+        // neither, so both are accepted exactly as an automation step is.
+        $wanted = trim((string) ($input['stage'] ?? $input['stage_id'] ?? ''));
+
+        if ($wanted === '') {
+            return Response::json([
+                'error' => 'Name the stage to move to, as "stage" (its name) or "stage_id".',
+            ], 422);
+        }
+
+        $before = $deal;
+        $result  = DealStage::move((int) $deal['id'], $wanted);
+
+        /*
+         * Already in that stage is NOT an error: it is the right answer, and
+         * an integration retrying a failed batch depends on it. Told apart
+         * from a refusal by its shape rather than its words — a move that was
+         * refused names no from-stage.
+         */
+        $alreadyThere = !$result['moved']
+            && $result['from'] !== null
+            && $result['from'] === $result['to'];
+
+        if (!$result['moved'] && !$alreadyThere) {
+            return Response::json([
+                'error' => 'That deal was not moved: ' . (string) ($result['reason'] ?? 'the stage was refused') . '.',
+                'stage' => $result['to'],
+            ], 422);
+        }
+
+        $row = DB::first('SELECT * FROM {deals} WHERE id = :id', ['id' => (int) $deal['id']]);
+
+        if ($result['moved']) {
+            Audit::record('api_deal_stage_changed', 'deals', (int) $deal['id'], $before, $row ?? []);
+        }
+
+        return $this->json([
+            'data'  => ApiResource::present($row ?? [], $definition, Acl::can('view_revenue')),
+            'moved' => (bool) $result['moved'],
+            'from'  => $result['from'],
+            'to'    => $result['to'],
+            'note'  => $result['moved']
+                ? null
+                : 'That deal was already in ' . (string) $result['to'] . ', so nothing changed.',
+        ]);
+    }
+
+    /**
      * Set a consent flag, WITH its evidence.
      *
      * The one write in this API that cannot be a PATCH on a field, because a
@@ -544,7 +690,14 @@ final class ApiController extends Controller
             ], 422);
         }
 
-        $contact = $this->findScoped(ApiResource::get('contacts') ?? [], $request->routeInt('id'));
+        // Under `contacts_manage`'s scope, not `view_contacts`'s: recording
+        // consent is a write on somebody's guest, and a role that may only
+        // edit its own must not be able to set a flag on anybody else's.
+        $contact = $this->findScoped(
+            ApiResource::get('contacts') ?? [],
+            $request->routeInt('id'),
+            'contacts_manage'
+        );
 
         if ($contact === null) {
             return $this->notFoundJson('No contact with that id.');
@@ -635,29 +788,42 @@ final class ApiController extends Controller
     // =================================================================
 
     /**
-     * Find one row, THROUGH THE CALLER'S READ SCOPE.
+     * Find one row, THROUGH THE SCOPE OF THE PERMISSION THAT GOVERNS THE CALL.
      *
      * Every single-record endpoint goes through this. Looking a row up by id
      * and then checking the scope is the same thing written in two steps, and
      * the second step is the one somebody forgets.
      *
+     * `$permission` DEFAULTS TO THE READ ONE AND A WRITE MUST PASS ITS OWN.
+     * Scopes are per permission (`role_permissions.scope`) and `Acl::can()`
+     * only answers whether a permission is held AT ALL — not how widely. So a
+     * role holding `view_contacts` at 'all' and `contacts_manage` at 'own' —
+     * "see everyone, edit your own", an ordinary setup an operator can build
+     * in Settings — passed `can()` and then loaded the record under the READ
+     * scope, which let a token PATCH, delete or record consent for somebody
+     * else's guest. The same mistake, in the same shape, as the one
+     * `ContactController::visible()` carries a comment about: the fix there
+     * was to take the governing permission as an argument, and this is that
+     * fix on the API's side of the house.
+     *
      * @param array<string,mixed> $definition
      * @return array<string,mixed>|null
      */
-    private function findScoped(array $definition, int $id): ?array
+    private function findScoped(array $definition, int $id, ?string $permission = null): ?array
     {
         if ($id <= 0 || $definition === []) {
             return null;
         }
 
-        $alias = $this->alias($definition);
+        $alias      = $this->alias($definition);
+        $permission = $permission ?? (string) $definition['read'];
 
         [$scopeWhere, $params] = Acl::scopeCondition(
-            (string) $definition['read'],
+            $permission,
             $definition['owner'] === null ? '' : $alias . '.' . $definition['owner']
         );
 
-        if ($definition['owner'] === null && Acl::scope((string) $definition['read']) !== 'all') {
+        if ($definition['owner'] === null && Acl::scope($permission) !== 'all') {
             return null;
         }
 
@@ -689,6 +855,9 @@ final class ApiController extends Controller
     {
         $now = gmdate('Y-m-d H:i:s');
 
+        /** @var array<string,mixed>|null The stage a new deal opens in. */
+        $openingStage = null;
+
         if (DB::columnExists((string) $definition['table'], 'created_at')) {
             $data['created_at'] = $now;
         }
@@ -711,24 +880,40 @@ final class ApiController extends Controller
                 throw new RuntimeException('A deal needs a title.');
             }
 
-            // A pipeline and a stage are NOT NULL. Defaulted to the first
-            // stage of the first pipeline rather than refused, so the common
-            // case — a website form posting a lead — needs no knowledge of
-            // this venue's board.
-            if ((int) ($data['pipeline_id'] ?? 0) <= 0 || (int) ($data['stage_id'] ?? 0) <= 0) {
-                $stage = DB::first(
-                    'SELECT pipeline_id, id FROM {pipeline_stages} ORDER BY pipeline_id, sort_order LIMIT 1'
-                );
+            /*
+             * A new deal OPENS AT THE TOP OF ITS BOARD, and the stage decides
+             * the rest of the row.
+             *
+             * `stage_id` is not writable — a stage is a move, not a field (see
+             * `ApiResource`) — so there is nothing to validate here and
+             * nothing for a caller to get wrong: the first stage of the
+             * pipeline they named, or of the first pipeline if they named
+             * none, so the common case (a website form posting a lead) needs
+             * no knowledge of this venue's board.
+             *
+             * `DealStage::columns()` then fills the stage clock, the SLA
+             * deadline and the won/lost status exactly as it does on the
+             * board, which is what makes an API-created deal measurable by
+             * the velocity report instead of a row with no `stage_entered_at`.
+             */
+            $pipelineId = (int) ($data['pipeline_id'] ?? 0);
 
-                if ($stage === null) {
-                    throw new RuntimeException('This install has no pipeline to put a deal on.');
-                }
+            $stage = $pipelineId > 0
+                ? DB::first(
+                    'SELECT * FROM {pipeline_stages} WHERE pipeline_id = :p ORDER BY sort_order, id LIMIT 1',
+                    ['p' => $pipelineId]
+                )
+                : DB::first('SELECT * FROM {pipeline_stages} ORDER BY pipeline_id, sort_order LIMIT 1');
 
-                $data['pipeline_id'] = (int) $stage['pipeline_id'];
-                $data['stage_id']    = (int) $stage['id'];
+            if ($stage === null) {
+                throw new RuntimeException($pipelineId > 0
+                    ? 'There is no pipeline with that id, or it has no stages.'
+                    : 'This install has no pipeline to put a deal on.');
             }
 
-            $data['status'] ??= 'open';
+            $data['pipeline_id'] = (int) $stage['pipeline_id'];
+            $data                = array_merge($data, DealStage::columns([], $stage, $now));
+            $openingStage        = $stage;
         }
 
         if ($name === 'contacts' && trim((string) ($data['first_name'] ?? '')) === ''
@@ -748,6 +933,26 @@ final class ApiController extends Controller
         }
 
         $id = DB::insert($definition['table'], $data);
+
+        if ($openingStage !== null) {
+            /*
+             * The opening history row, with no from-stage — the same one
+             * `DealController::store()` writes. Without it the deal's history
+             * would start at its first MOVE and the time it spent in its
+             * first stage could not be measured, which is the figure the
+             * pipeline report opens with.
+             */
+            DB::insert('deal_stage_history', [
+                'deal_id'          => $id,
+                'from_stage_id'    => null,
+                'to_stage_id'      => (int) $openingStage['id'],
+                'user_id'          => Auth::id(),
+                'duration_seconds' => null,
+                'created_at'       => $now,
+            ]);
+
+            DealStage::fireOutcome($id, $openingStage);
+        }
 
         // The same events the UI fires, so an automation does not care which
         // door a record came in through.

@@ -845,6 +845,18 @@ $router->group('/api/v1', ['api'], function ($router): void {
         'api.consent'
     );
 
+    // Moving a deal is a transition, not a field: it stamps the stage clock,
+    // may close the deal, writes the history row the pipeline report reads
+    // and fires the events that start the follow-up. `stage_id` is therefore
+    // not writable through PATCH, and this goes through the same
+    // `DealStage::move()` the board posts to.
+    $router->post(
+        '/deals/{id:\d+}/stage',
+        ['ApiController', 'moveDealStage'],
+        ['throttle:300,1'],
+        'api.deal.stage'
+    );
+
     $router->get('/{resource:[a-z-]+}', ['ApiController', 'list'], ['throttle:600,1'], 'api.list');
     $router->post('/{resource:[a-z-]+}', ['ApiController', 'store'], ['throttle:300,1'], 'api.store');
     $router->get('/{resource:[a-z-]+}/{id:\d+}', ['ApiController', 'show'], ['throttle:600,1'], 'api.show');

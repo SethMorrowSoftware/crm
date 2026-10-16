@@ -25,6 +25,16 @@ namespace App\Services;
  * freely writable: it needs its evidence, which is why it is not in any
  * `writable` list and has its own endpoint.
  *
+ * **AND `delete` IS ITS OWN PERMISSION, NOT `write`.** This application
+ * separates them everywhere a page does — editing a contact is
+ * `contacts_manage`, deleting one is `contacts_delete`; editing a booking is
+ * `bookings_manage`, cancelling one is `bookings_cancel` — because the roles
+ * an operator actually builds give the front desk the first and not the
+ * second. An API that deleted under the write permission would hand every
+ * front-desk token a power its own pages refuse it, which is a worse hole
+ * than a missing endpoint: it is an endpoint nobody knew was open. `null`
+ * means this resource cannot be deleted through the API at all.
+ *
  * This class holds no I/O and no request handling, so the shapes can be
  * tested without a database or a server.
  */
@@ -37,7 +47,7 @@ final class ApiResource
 
     /**
      * @var array<string,array{
-     *     table:string, read:string, write:?string, owner:?string,
+     *     table:string, read:string, write:?string, delete:?string, owner:?string,
      *     fields:list<string>, writable:list<string>,
      *     money:list<string>, dates:list<string>,
      *     soft_delete:bool, search:list<string>, sort:string
@@ -48,6 +58,7 @@ final class ApiResource
             'table'    => 'contacts',
             'read'     => 'view_contacts',
             'write'    => 'contacts_manage',
+            'delete'   => 'contacts_delete',
             'owner'    => 'owner_id',
             'fields'   => [
                 'id', 'first_name', 'last_name', 'email', 'phone', 'company_id',
@@ -81,6 +92,8 @@ final class ApiResource
             'table'       => 'households',
             'read'        => 'view_contacts',
             'write'       => 'contacts_manage',
+            // No soft-delete column, so there is nothing to delete through.
+            'delete'      => null,
             'owner'       => null,
             'fields'      => ['id', 'name', 'primary_contact_id', 'city', 'state',
                               'postal_code', 'notes', 'created_at', 'updated_at'],
@@ -97,6 +110,11 @@ final class ApiResource
             'table'       => 'companies',
             'read'        => 'view_contacts',
             'write'       => 'contacts_manage',
+            // A school or a corporate client is a contact record of the
+            // organisation kind, and the catalogue has one delete permission
+            // for that family rather than a separate `companies_delete`
+            // nothing would grant.
+            'delete'      => 'contacts_delete',
             'owner'       => 'owner_id',
             'fields'      => ['id', 'name', 'type', 'district', 'website', 'phone',
                               'city', 'state', 'postal_code', 'owner_id',
@@ -115,6 +133,7 @@ final class ApiResource
             'table'    => 'deals',
             'read'     => 'view_deals',
             'write'    => 'deals_manage',
+            'delete'   => 'deals_delete',
             'owner'    => 'owner_id',
             'fields'   => [
                 'id', 'pipeline_id', 'stage_id', 'title', 'contact_id', 'company_id',
@@ -122,11 +141,30 @@ final class ApiResource
                 'guest_count', 'lost_reason_id', 'next_action', 'next_action_at',
                 'won_at', 'lost_at', 'created_at', 'updated_at',
             ],
-            // `status` is absent deliberately: won and lost are transitions
-            // that stamp their own timestamps and fire events, so they are
-            // their own endpoints rather than a column somebody sets.
+            /*
+             * `status` is absent deliberately: won and lost are transitions
+             * that stamp their own timestamps and fire events, so they are
+             * their own endpoints rather than a column somebody sets.
+             *
+             * AND SO IS `stage_id`, for exactly the same reason — it was in
+             * this list, and that was the bug. A stage is not a column, it is
+             * a MOVE: entering one stamps `stage_entered_at` (which is what
+             * the velocity report measures), sets or clears `won_at`/`lost_at`
+             * and `status`, computes the SLA deadline, writes the
+             * stage-history row the pipeline report reads, and fires
+             * `deal.stage_changed` plus `deal.won`/`deal.lost` — which is
+             * what starts the deposit chase and the thank-you. A PATCH that
+             * set the column did none of it: the board showed the deal in
+             * "Won" with no won date, no history, and no automation ever
+             * running. `POST /api/v1/deals/{id}/stage` goes through
+             * `DealStage::move()`, which is the same path the board uses.
+             *
+             * `pipeline_id` stays writable: moving a deal between boards is a
+             * plain reassignment, and `DealStage::move()` refuses a stage
+             * from another pipeline, so the two cannot disagree.
+             */
             'writable' => [
-                'pipeline_id', 'stage_id', 'title', 'contact_id', 'company_id',
+                'pipeline_id', 'title', 'contact_id', 'company_id',
                 'owner_id', 'value_cents', 'source', 'event_date', 'guest_count',
                 'next_action', 'next_action_at',
             ],
@@ -141,6 +179,10 @@ final class ApiResource
             'table'    => 'bookings',
             'read'     => 'view_bookings',
             'write'    => 'bookings_manage',
+            // Taking a party off the calendar is `bookings_cancel` on every
+            // page that does it, and the front-desk role holds
+            // `bookings_manage` without it on purpose.
+            'delete'   => 'bookings_cancel',
             'owner'    => 'host_user_id',
             'fields'   => [
                 'id', 'booking_number', 'deal_id', 'contact_id', 'company_id',
@@ -174,6 +216,9 @@ final class ApiResource
             'table'       => 'visits',
             'read'        => 'view_contacts',
             'write'       => 'contacts_manage',
+            // A visit is a recorded fact, not a row to tidy up: deleting one
+            // would silently change a guest's visit count and lifetime value.
+            'delete'      => null,
             'owner'       => null,
             'fields'      => ['id', 'contact_id', 'household_id', 'visit_date', 'source',
                               'spend_cents', 'party_size', 'booking_id', 'external_ref',
@@ -195,6 +240,7 @@ final class ApiResource
             'table'       => 'memberships',
             'read'        => 'view_memberships',
             'write'       => null,
+            'delete'      => null,
             'owner'       => null,
             'fields'      => ['id', 'member_number', 'plan_id', 'contact_id',
                               'household_id', 'status', 'started_at', 'expires_at',
@@ -220,6 +266,7 @@ final class ApiResource
             // UNLOCKED door rather than a locked one: `Acl::can()` on an
             // unknown permission is false for a role and TRUE for an owner.
             'write'       => 'inbox_assign',
+            'delete'      => null,
             'owner'       => 'assigned_to',
             'fields'      => ['id', 'title', 'description', 'assigned_to', 'created_by',
                               'entity_type', 'entity_id', 'due_at', 'completed_at',
@@ -237,6 +284,7 @@ final class ApiResource
             'table'       => 'messages',
             'read'        => 'view_inbox',
             'write'       => null,
+            'delete'      => null,
             'owner'       => null,
             // No `body` and no `body_text`. A listing endpoint that returns
             // the text of every message a venue has ever sent or received is
@@ -257,6 +305,7 @@ final class ApiResource
             'table'       => 'conversations',
             'read'        => 'view_inbox',
             'write'       => null,
+            'delete'      => null,
             'owner'       => 'assigned_to',
             'fields'      => ['id', 'contact_id', 'channel', 'subject', 'status',
                               'assigned_to', 'last_message_at', 'snoozed_until',
@@ -273,6 +322,7 @@ final class ApiResource
             'table'       => 'form_submissions',
             'read'        => 'view_marketing',
             'write'       => null,
+            'delete'      => null,
             'owner'       => null,
             // No `data`, `ip` or `user_agent`. The answers are the guest's own
             // words and the other two are their network identity — a listing
@@ -292,6 +342,7 @@ final class ApiResource
             'table'       => 'reviews',
             'read'        => 'view_reputation',
             'write'       => null,
+            'delete'      => null,
             'owner'       => null,
             'fields'      => ['id', 'platform', 'external_id', 'author_name', 'rating',
                               'body', 'review_url', 'replied_at', 'sentiment',

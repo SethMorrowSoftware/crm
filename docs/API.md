@@ -199,6 +199,7 @@ curl https://crm.example.com/api/v1 \
   "version": "v1",
   "resources": {
     "contacts": { "path": "/api/v1/contacts", "readable": true, "writable": true,
+                  "deletable": false,
                   "fields": ["id", "first_name", "..."] }
   },
   "you": { "user_id": 1, "name": "Owner", "role": "owner", "revenue": true }
@@ -209,6 +210,11 @@ It lists only what THIS token can reach, resolved against the owner's current
 role — so an integration can check itself rather than guessing, and a token
 that lost access because its user was demoted says so.
 
+`writable` and `deletable` are reported **separately because they are
+separate permissions** — see below. A front-desk token commonly comes back
+`"writable": true, "deletable": false`, and an integration can see that here
+rather than discovering it from a 403.
+
 ### Resources
 
 | Resource | Methods | Notes |
@@ -218,6 +224,7 @@ that lost access because its user was demoted says so.
 | `/api/v1/households` | GET, POST, PATCH | |
 | `/api/v1/companies` | GET, POST, PATCH, DELETE | |
 | `/api/v1/deals` | GET, POST, PATCH, DELETE | won/lost are transitions, not a column |
+| `/api/v1/deals/{id}/stage` | POST | move a deal — see below |
 | `/api/v1/bookings` | GET, POST, PATCH, DELETE | money is derived from the payment ledger |
 | `/api/v1/visits` | GET, POST | POST goes through the visit recorder |
 | `/api/v1/memberships` | GET | read-only: every change is a lifecycle transition |
@@ -228,6 +235,31 @@ that lost access because its user was demoted says so.
 | `/api/v1/reviews` | GET | |
 
 A resource that refuses a write answers **405** with the reason, not 500.
+
+### Which permission each method needs
+
+Reading, writing and deleting are **three different permissions**, exactly as
+they are on the pages — this application separates them because the
+front-desk role an operator actually builds creates and edits guests without
+being able to remove them.
+
+| Resource | GET | POST / PATCH | DELETE |
+|---|---|---|---|
+| contacts, households, companies, visits | `view_contacts` | `contacts_manage` | `contacts_delete` |
+| deals | `view_deals` | `deals_manage` | `deals_delete` |
+| bookings | `view_bookings` | `bookings_manage` | `bookings_cancel` |
+| tasks | `view_tasks` | `inbox_assign` | — |
+| memberships, messages, conversations, form-submissions, reviews | the matching `view_*` | — | — |
+
+A refused call answers **403** and names the permission it wanted
+(`{"error": "...", "permission": "contacts_delete"}`), so an integration can
+report something a venue can act on.
+
+**And each permission's SCOPE applies to the call it governs.** A role can
+hold `view_contacts` at *everyone* and `contacts_manage` at *their own* —
+"see everyone, edit your own" — and then a PATCH, a DELETE, a consent write
+or a visit on somebody else's guest answers **404**, not 403: a caller who
+may not touch a record is not told it exists.
 
 ### Examples
 
@@ -279,6 +311,37 @@ curl -X POST https://crm.example.com/api/v1/visits \
 `201`→`200` with `"recorded": false`, the same visit id, and a note. A family
 checked in one child at a time is one visit, and a retried batch does not give
 anybody eleven.
+
+### Moving a deal
+
+`stage_id` is **not** a writable field. A stage is not a column, it is a
+move — entering one starts the stage clock the velocity report measures,
+sets won or lost and stamps the date, computes the SLA deadline, writes the
+stage-history row, and fires the events that start the deposit chase and the
+thank-you. A PATCH that set the column would do none of it, and the board
+would show a deal in "Won" with no won date and no automation ever running.
+
+```bash
+curl -X POST https://crm.example.com/api/v1/deals/812/stage \
+  -H "Authorization: Bearer ..." -H "Content-Type: application/json" \
+  -d '{"stage":"Deposit Paid"}'
+```
+
+By **name** or by `stage_id` — a name is matched inside the deal's own
+pipeline first, because two boards may both have a "Confirmed". Needs
+`deals_manage`.
+
+**Idempotent**, like a visit: a deal already in that stage comes back `200`
+with `"moved": false` and a note, and no second history row — re-entering
+would reset the stage clock. A stage that does not exist, or one belonging to
+another pipeline, is a `422` that says which.
+
+```json
+{
+  "data": { "id": 812, "stage_id": 6, "status": "open", "...": "..." },
+  "moved": true, "from": "Quote Sent", "to": "Deposit Paid", "note": null
+}
+```
 
 ### Consent
 

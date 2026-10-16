@@ -263,6 +263,91 @@ Harness::test('money is read from whatever the old system wrote', function (): v
     Assert::null(Importer::readCents('n/a'));
 });
 
+Harness::test('MONEY IS EXACT, BY INTEGER ARITHMETIC, NOT THROUGH A FLOAT', function (): void {
+    /*
+     * Review flagged the float path as understating a half-cent, and measured
+     * it did not — PHP's `round()` compensates for binary representation.
+     * But the correctness of a venue's imported history rested on a rounding
+     * helper's fuzz compensation, which is not a thing a reader can check by
+     * looking and not a thing that has to stay true. It rests on integer
+     * arithmetic now, and these are the cases where a naive
+     * `(float) * 100` would be a cent light.
+     */
+    foreach ([
+        '0.145' => 15,
+        '1.005' => 101,
+        '2.675' => 268,
+        '8.165' => 817,
+        '1.115' => 112,
+        '0.285' => 29,
+        '0.005' => 1,
+        // And the other side of the boundary: below half a cent rounds down
+        // however long the tail runs.
+        '0.1449999' => 14,
+        '0.004999'  => 0,
+        '0.135'     => 14,
+    ] as $written => $cents) {
+        Assert::same($cents, Importer::readCents((string) $written), (string) $written);
+    }
+
+    // Exhaustive at the grain a POS export actually writes: every cent to
+    // $2,000, and every tenth of a cent to $20. A rounding rule is the kind
+    // of thing that is right in the examples somebody chose and wrong four
+    // values later.
+    for ($c = 0; $c <= 200000; $c++) {
+        $written = sprintf('%d.%02d', intdiv($c, 100), $c % 100);
+
+        if (Importer::readCents($written) !== $c) {
+            Assert::fail('two-decimal money is off at ' . $written);
+        }
+    }
+
+    for ($t = 0; $t <= 20000; $t++) {
+        $written = sprintf('%d.%03d', intdiv($t, 1000), $t % 1000);
+
+        if (Importer::readCents($written) !== intdiv($t + 5, 10)) {
+            Assert::fail('three-decimal money is off at ' . $written);
+        }
+    }
+
+    Assert::true(true, 'every cent to $2,000 and every tenth of a cent to $20 reads exactly');
+});
+
+Harness::test('an amount that cannot be money is REFUSED, not silently mangled', function (): void {
+    /*
+     * Both of these came out of writing the parse exactly, and both were
+     * silent: the import reported a clean row carrying a number nobody typed.
+     * A refusal is reported against the line it came from
+     * (`visitRow()` → `bad_amount`), which a venue can look at.
+     */
+
+    // Scientific notation. Stripping the letters out of this the way a
+    // currency code is stripped leaves "2.53" — $2.53 where the cell said
+    // $2,500. Spreadsheets really do export a number column this way.
+    Assert::null(Importer::readCents('2.5E+3'));
+    Assert::null(Importer::readCents('1e3'));
+    Assert::null(Importer::readCents('1.0E+15'));
+
+    // A figure too large to be a visit's spend. A float loses the last cent
+    // above about $90 trillion, and `(int)` on a longer digit string
+    // saturates — so a value this size is the wrong column, and it says so
+    // instead of arriving a cent adrift.
+    Assert::null(Importer::readCents('99999999999999.99'));
+    Assert::null(Importer::readCents('1234567890123.00'));
+
+    // Still fine at a scale a venue could really take in a day.
+    Assert::same(99999999999999, Importer::readCents('999999999999.99'));
+
+    // Two decimal points is a refusal rather than a truncation.
+    Assert::null(Importer::readCents('1.2.3'));
+
+    // The shapes that must keep working.
+    Assert::same(50, Importer::readCents('.5'));
+    Assert::same(1200, Importer::readCents('12.'));
+    Assert::same(12345, Importer::readCents('000123.45'));
+    Assert::same(-701, Importer::readCents('-7.005'));
+});
+
 // -------------------------------------------------------------------- names
 
 Harness::test('a full name splits on the LAST space', function (): void {

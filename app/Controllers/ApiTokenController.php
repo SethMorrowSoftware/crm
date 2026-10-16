@@ -160,6 +160,31 @@ final class ApiTokenController extends Controller
             $abilities = [ApiToken::ALL];
         }
 
+        /*
+         * A CHOSEN SET THAT SURVIVES NOTHING IS REFUSED, NOT MINTED EMPTY.
+         *
+         * `cleanAbilities()` drops anything not in the permission catalogue,
+         * which is the right direction — but if it drops EVERYTHING the
+         * result is a token that can do nothing, stored under a name that
+         * suggests otherwise. (It used to be worse: an empty list read as
+         * unrestricted, so the narrowest request produced the widest token.
+         * `ApiToken::allows()` now fails closed, and this stops the useless
+         * token being created in the first place.) The likely cause is a
+         * renamed permission, so say which names were not recognised.
+         */
+        $cleaned = ApiToken::cleanAbilities($abilities);
+
+        if ($cleaned === []) {
+            flash(
+                'error',
+                'None of those abilities exist any more: '
+                    . implode(', ', array_slice(array_map('strval', $abilities), 0, 6))
+                    . '. Pick them again from the list.'
+            );
+
+            return $this->redirect('/settings/api-tokens');
+        }
+
         if (count($abilities) > self::MAX_ABILITIES) {
             flash('error', 'That is a lot of separate abilities. Use "everything this user can do" instead.');
 
