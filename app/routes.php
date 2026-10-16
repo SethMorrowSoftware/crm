@@ -438,6 +438,47 @@ $router->group('/calendar', ['auth', 'can:view_bookings'], function ($router): v
 });
 
 // ---------------------------------------------------------------------------
+// Waivers and check-in
+//
+// `/waiver` and `/waiver/{token}` ARE NOT BEHIND `auth`: a parent signing a
+// waiver on their phone at the door has no account, and never will. They are
+// the second and third public pages in the application after the web forms,
+// and they follow the same rules — CSRF-protected (rendering the page mints a
+// token into the visitor's own session), rate limited, never indexed, never
+// cached, and handed only the keys a guest may know.
+//
+// Managing VERSIONS is `waivers_manage`, because the wording is a legal
+// document. Checking guests in is `checkin`, which the Front Desk role holds
+// and which deliberately does not include editing a booking: the person at
+// the counter with a child in front of them should be able to add the name
+// and tick them in without being able to re-price the party.
+// ---------------------------------------------------------------------------
+
+$router->get('/waiver', ['WaiverController', 'sign'], ['throttle:120,5'], 'waiver');
+$router->post('/waiver', ['WaiverController', 'storeSignature'], ['csrf', 'throttle:20,10']);
+$router->get('/waiver/{token:[a-f0-9]{32}}', ['WaiverController', 'receipt'], ['throttle:60,5'], 'waiver.receipt');
+
+$router->group('/waivers', ['auth', 'can:waivers_manage'], function ($router): void {
+    $router->get('', ['WaiverController', 'index'], [], 'waivers');
+    $router->get('/new', ['WaiverController', 'create'], [], 'waivers.create');
+    $router->post('', ['WaiverController', 'store'], ['csrf']);
+    $router->get('/{id:\d+}', ['WaiverController', 'show'], [], 'waivers.show');
+    $router->get('/{id:\d+}/edit', ['WaiverController', 'edit'], [], 'waivers.edit');
+    $router->post('/{id:\d+}', ['WaiverController', 'update'], ['csrf']);
+    $router->post('/{id:\d+}/publish', ['WaiverController', 'publish'], ['csrf']);
+    $router->post('/{id:\d+}/delete', ['WaiverController', 'destroy'], ['csrf']);
+});
+
+$router->group('/checkin', ['auth', 'can:checkin'], function ($router): void {
+    $router->get('', ['CheckinController', 'index'], [], 'checkin');
+    $router->get('/{id:\d+}', ['CheckinController', 'show'], [], 'checkin.show');
+    $router->post('/{id:\d+}/guest', ['CheckinController', 'toggleGuest'], ['csrf']);
+    $router->post('/{id:\d+}/arrive-all', ['CheckinController', 'arriveAll'], ['csrf']);
+    $router->post('/{id:\d+}/guests', ['CheckinController', 'storeGuest'], ['csrf']);
+    $router->post('/{id:\d+}/waiver', ['CheckinController', 'linkWaiver'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2+ module routes are added as each module lands. The placeholders
 // below give the navigation somewhere real to point in Phase 1, and each
 // renders an honest "coming in Phase N" state rather than a broken link.

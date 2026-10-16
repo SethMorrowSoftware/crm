@@ -42,6 +42,7 @@ $nav = [
             ['Pipelines', '/deals', 'view_deals', 'trending'],
             ['Bookings', '/bookings', 'view_bookings', 'calendar'],
             ['Calendar', '/calendar', 'view_bookings', 'calendar'],
+            ['Check-in', '/checkin', 'checkin', 'check'],
             ['Memberships', '/memberships', 'view_memberships', 'card'],
         ],
     ],
@@ -133,9 +134,18 @@ $isCurrent = static function (string $href) use ($path): bool {
                 </ul>
             <?php endforeach; ?>
 
-            <?php if (can_any(['settings', 'users_manage', 'roles_manage', 'view_logs'])): ?>
+            <?php if (can_any(['settings', 'users_manage', 'roles_manage', 'view_logs', 'waivers_manage'])): ?>
                 <p class="nav-heading">Admin</p>
                 <ul class="nav-list">
+                    <?php if (can('waivers_manage')): ?>
+                        <li>
+                            <a href="<?= e(url('/waivers')) ?>"
+                               class="nav-link<?= $isCurrent('/waivers') ? ' is-current' : '' ?>">
+                                <?= icon('shield') ?>
+                                <span>Waivers</span>
+                            </a>
+                        </li>
+                    <?php endif; ?>
                     <?php if (can('settings')): ?>
                         <li><a href="<?= e(url('/settings')) ?>"
                                class="nav-link<?= $isCurrent('/settings') ? ' is-current' : '' ?>">
