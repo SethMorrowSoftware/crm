@@ -846,6 +846,37 @@ webhooks to be told when something happens inside.
   a hostname that resolves inwards, re-checked at delivery time with the
   approved address pinned for the connection.
 
+### Bringing a venue's history across
+
+- **CSV import for guests and visit history** (Settings → Import a file).
+  Upload, map the columns — guessed from your own headings — check the whole
+  file without writing anything, then import. A big file carries on in the
+  background a batch a minute, so fifty thousand rows works on shared hosting
+  where a web request would time out.
+- **Nothing is written until the check has run**, and the server refuses a
+  commit without one, not just the button. The check reads the real file
+  against the real database, so what it reports is what will happen.
+- **Every row is accounted for, by row number.** A count of refusals tells a
+  venue that guests are missing and nothing about which ones. The report names
+  each one with the reason in words, groups them so it is obvious whether it is
+  one problem or a hundred, and downloads as a CSV to fix and re-upload.
+- **Imported guests are consented to nothing**, whatever the file says — the
+  column that looks like consent is usually a default somebody set once for
+  everybody. A consent column is honoured only if you tick a box affirming you
+  hold the records, which is audited with your name on it. A do-not-contact
+  column is always honoured, and an import can never change a consent that
+  already exists.
+- **A date that could be read two ways is refused, not guessed.** `03/04/2024`
+  is two different birthdays, and one wrong by a month sends the offer to the
+  wrong week every year. The mapping screen asks which order your dates are in.
+- **Re-uploading the same file is safe.** People match on email then phone;
+  visits go through the same recorder the front desk uses, so one guest on one
+  day is one visit however many transactions the file holds, and lifetime value
+  is derived rather than added up.
+- A visit for somebody not in the database is **refused, never used to create
+  them** — otherwise a till export becomes tens of thousands of nameless
+  records whose only field is a card number.
+
 ### Fixed
 
 - **An upgrade no longer depends on somebody remembering to edit `VERSION`.**
@@ -874,7 +905,7 @@ webhooks to be told when something happens inside.
 
 Phase 8: the security review of everything above against `docs/AUDIT.md`, a
 measured accessibility audit, a 50,000-contact load test and a real
-backup-and-restore drill. CSV import for contacts and visit history is the
-last unbuilt feature. See `docs/SPEC.md` §13 for the full plan, and §14 for
-the questions that still need the venue's answers — the CenterEdge reporting
-credentials and the real party prices being the two that block the most.
+backup-and-restore drill. Every feature in the spec is now built. See
+`docs/SPEC.md` §13 for the full plan, and §14 for the questions that still need
+the venue's answers — the CenterEdge reporting credentials and the real party
+prices being the two that block the most.

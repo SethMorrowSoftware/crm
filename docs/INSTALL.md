@@ -297,6 +297,65 @@ php ~/public_html/tools/backup.php --export=contacts > contacts.csv
 
 ---
 
+## Bringing your guests across
+
+**Settings → Import a file**, or `/imports`. Needs the same permission as
+backups, because importing is the mirror image of exporting.
+
+Export your old guest list as CSV, with the column names in the first row.
+At minimum you need **an email address or a phone number** per person — that
+is what identifies them. A name is not enough: two different families called
+Smith are not one guest, and an import cannot undo merging them.
+
+The flow is four steps, and the third is the one that matters:
+
+1. **Upload.** The file is checked for being a CSV at all and stored outside
+   the web root. Nothing is read beyond the heading row yet.
+2. **Map the columns.** Castle CRM guesses from your column names — `E-Mail
+   Address`, `Mobile`, `DOB` and `ZIP` all land in the right place — and you
+   correct anything wrong. Columns it has no use for are ignored.
+3. **Check the file.** It reads the whole thing against the real database and
+   **writes nothing**, then reports exactly what it would add, who is already
+   here, and which rows it cannot read — by row number, so you can find them
+   in your spreadsheet. The refusals download as a CSV you can fix and
+   re-upload. **The import button does not appear until this has run**, and
+   the server refuses a commit without it.
+4. **Import.** A big file carries on in the background, a batch a minute, so
+   you can close the tab.
+
+Three things worth knowing before you start:
+
+- **Imported guests are consented to nothing**, whatever your file says.
+  See §2 of `docs/PRIVACY.md` for why, and for the one box that changes it.
+- **Dates that could be read two ways are refused, not guessed.**
+  `03/04/2024` is two different dates; a birthday wrong by a month sends the
+  offer to the wrong week every year. Tell the mapping screen whether your
+  dates are day-first or month-first and they read fine. `2024-03-04` and
+  `25/03/2024` are never ambiguous.
+- **Re-uploading the same file is safe.** People are matched on email, then
+  phone; a second run reports them as already here and changes nothing.
+
+### Visit history
+
+A second file, uploaded the same way, with one row per guest per day they
+came: an email, phone number or your old card number to find them by, the
+date, and what they spent.
+
+**Import your guests first.** A visit file matches people who are already
+here; it never creates them, because a POS export would otherwise become tens
+of thousands of nameless records whose only field is a card number.
+
+One guest on one day is **one visit**, however many transactions the file
+holds for them — so a till export with a row per purchase is read correctly,
+and lifetime value is derived from the visits rather than added up, which is
+what makes a re-run harmless.
+
+If your host's `upload_max_filesize` is small (2MB is common, and the page
+tells you yours), split the file and import the parts. The limit is PHP's,
+not Castle CRM's.
+
+---
+
 ## Recovering a lost password
 
 Three routes, in order of preference.

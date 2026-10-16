@@ -18,6 +18,9 @@ $sections = [
     ['Roles & permissions', '/settings/roles', $counts['roles'] . ' roles.', 'lock', 'roles_manage'],
     ['Playbooks', '/playbooks', $counts['playbooks'] . ' of 8 active.', 'book', 'view_automations'],
     ['Backups & export', '/settings/backups', $backupLabel, 'database', 'backup_manage'],
+    // Beside the export, behind the same permission, because it is the same
+    // decision in the other direction.
+    ['Import a file', '/imports', $importLabel, 'upload', 'backup_manage'],
     ['System health', '/settings/health', 'Cron, the queue, extensions and HTTPS.', 'shield', 'settings'],
     ['Audit log', '/settings/audit', 'Who changed what, and when.', 'list', 'view_logs'],
 ];

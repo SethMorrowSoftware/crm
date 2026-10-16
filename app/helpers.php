@@ -550,5 +550,67 @@ if (!function_exists('request')) {
     }
 }
 
+if (!function_exists('bytes_human')) {
+    /**
+     * A byte count somebody can read.
+     *
+     * HERE RATHER THAN ON A CONTROLLER, because the second thing that needed
+     * it would otherwise copy it — `BackupController` had its own private
+     * copy, and the import screens need the same thing to report an upload
+     * limit. One definition is also what stops two pages describing the same
+     * file as 12.3 MB and 12 MB.
+     */
+    function bytes_human(int $bytes): string
+    {
+        if ($bytes < 1024) {
+            return $bytes . ' B';
+        }
+
+        $units = ['KB', 'MB', 'GB', 'TB'];
+        $value = $bytes / 1024;
+        $unit  = 0;
+
+        while ($value >= 1024 && $unit < count($units) - 1) {
+            $value /= 1024;
+            $unit++;
+        }
+
+        return round($value, $value < 10 ? 1 : 0) . ' ' . $units[$unit];
+    }
+}
+
+if (!function_exists('bytes_from_ini')) {
+    /**
+     * Read a PHP ini size — `8M`, `512K`, `1G`, or a bare byte count.
+     *
+     * Needed because `upload_max_filesize` is a STRING in that shorthand, and
+     * comparing it numerically reads `8M` as 8. A venue whose host allows 8MB
+     * and whose file is 12MB gets "no file was uploaded" from PHP, with no
+     * number anywhere, so the import page has to work the real limit out and
+     * say it.
+     *
+     * 0 when it cannot be read, which callers treat as "no limit known"
+     * rather than "no bytes allowed".
+     */
+    function bytes_from_ini(string $value): int
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return 0;
+        }
+
+        $number = (float) $value;
+        $suffix = strtolower(substr($value, -1));
+
+        return (int) match ($suffix) {
+            'g'     => $number * 1024 * 1024 * 1024,
+            'm'     => $number * 1024 * 1024,
+            'k'     => $number * 1024,
+            default => $number,
+        };
+    }
+}
+
 // The icon set defines icon(); loaded here so every view and controller has it.
 require_once __DIR__ . '/Views/partials/icons.php';

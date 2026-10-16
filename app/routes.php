@@ -241,6 +241,37 @@ $router->group('/settings/backups', ['auth', 'can:backup_manage'], function ($ro
 });
 
 // ---------------------------------------------------------------------------
+// CSV import
+//
+// `backup_manage`, the same permission as the export, because importing is the
+// mirror image of exporting: one takes the guest database out of the building
+// and the other puts a file of unknown provenance into it, with consent claims
+// attached. That is a narrower decision than "can change a setting", and it
+// already has a permission that means exactly it.
+// ---------------------------------------------------------------------------
+
+$router->group('/imports', ['auth', 'can:backup_manage'], function ($router): void {
+    $router->get('', ['ImportController', 'index'], [], 'imports');
+    /*
+     * Throttled because each one writes a file to the server's disk — but not
+     * tightly, and the reason matters: a host whose `upload_max_filesize` is
+     * 2MB forces a venue with a decade of guests to SPLIT their export, and a
+     * limit of a dozen turns that into a migration they have to do in
+     * sittings, with a "too many requests" page and no explanation when they
+     * hit it. The real guard on this endpoint is `backup_manage`; this one
+     * exists to bound an accident or a stolen session.
+     */
+    $router->post('', ['ImportController', 'store'], ['csrf', 'throttle:30,10']);
+
+    $router->get('/{id:\d+}', ['ImportController', 'show'], [], 'imports.show');
+    $router->get('/{id:\d+}/export', ['ImportController', 'export'], ['throttle:20,10'], 'imports.export');
+
+    $router->post('/{id:\d+}/start', ['ImportController', 'start'], ['csrf', 'throttle:20,10']);
+    $router->post('/{id:\d+}/cancel', ['ImportController', 'cancel'], ['csrf']);
+    $router->post('/{id:\d+}/delete', ['ImportController', 'destroy'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Audit log
 // ---------------------------------------------------------------------------
 

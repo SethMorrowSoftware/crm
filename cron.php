@@ -443,7 +443,52 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 11. Nightly maintenance — once a day, not every minute
+// 11. Walk any running CSV import forward by one batch
+//
+// A venue migrating off a previous system arrives with one file of every guest
+// they have ever had. Fifty thousand rows is not a web request on shared
+// hosting — `max_execution_time` is commonly 30 seconds and the browser tab
+// will be closed halfway through — so the job records a byte offset and this
+// moves it along a batch at a time. A resumed job seeks rather than re-reading,
+// so it can neither double-write nor lose its place.
+//
+// Both passes come through here: the dry run reads the real file against the
+// real database and writes nothing, so what it reports is what will happen
+// rather than an estimate of it.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $importRows = 0;
+
+        foreach (App\Services\ImportRunner::dueJobs() as $importId) {
+            if (!$budgetLeft()) {
+                break;
+            }
+
+            $result = App\Services\ImportRunner::work($importId, $budgetLeft);
+            $importRows += $result['rows'];
+
+            if ($result['error'] !== null) {
+                $stats['errors']++;
+                cron_out('  ! import ' . $importId . ': ' . $result['error']);
+            }
+        }
+
+        $stats['import_rows'] = $importRows;
+
+        if ($importRows > 0) {
+            cron_out('  ' . $importRows . ' import row(s) processed.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: import failed', ['error' => $e->getMessage()]);
+        cron_out('  ! imports: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 12. Nightly maintenance — once a day, not every minute
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft() && cron_shouldRunDaily()) {
@@ -459,7 +504,7 @@ if ($budgetLeft() && cron_shouldRunDaily()) {
 }
 
 // ---------------------------------------------------------------------------
-// 12. Heartbeat
+// 13. Heartbeat
 // ---------------------------------------------------------------------------
 
 Settings::set('system.cron_last_run', gmdate('Y-m-d H:i:s'));

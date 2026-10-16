@@ -420,6 +420,38 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
 .stat-value { font-size: 1.6rem; font-weight: 650; letter-spacing: -.02em; line-height: 1.1; }
 .stat-note { font-size: .78rem; color: var(--muted); }
 .stat-pending .stat-value { color: var(--faint); }
+/*
+ * A count that is a finding rather than a fact — refusals in an import.
+ *
+ * The LABEL carries the colour, not the number: a figure in red reads as an
+ * error in the figure itself, where what is being said is "this many rows need
+ * your attention". The number stays in the ordinary ink so it is still the
+ * most legible thing in the tile.
+ */
+.stat-warn .stat-label { color: var(--warn); }
+.stat-warn { border-color: var(--warn); }
+
+/*
+ * A progress bar for work that runs in the background.
+ *
+ * No percentage is drawn inside it: the caller prints the figure beside it in
+ * words, because a bar with text in it is unreadable at the width a phone
+ * gives it. `role="img"` with an aria-label is how the value reaches a screen
+ * reader — a div has no implicit value, and `role="progressbar"` would need
+ * aria-valuenow kept in step by script this app does not run.
+ */
+.bar {
+    height: .5rem; border-radius: 999px; overflow: hidden;
+    background: var(--bg); border: 1px solid var(--line);
+    margin: .6rem 0 .3rem;
+}
+.bar-fill {
+    height: 100%; background: var(--brand);
+    transition: width .3s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+    .bar-fill { transition: none; }
+}
 
 /* -------------------------------------------------------------- Checklist */
 

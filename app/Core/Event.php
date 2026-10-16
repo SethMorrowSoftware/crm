@@ -186,6 +186,19 @@ final class Event
         'campaign.completed' => 'a campaign finishes sending',
         'waiver.published'   => 'a new waiver version is published',
         'automation.failed'  => 'an automation run fails',
+        /*
+         * A CSV import finishing is a staff admin action like
+         * `waiver.published`, so it is not offered as a trigger. It also must
+         * not be one: the obvious automation to attach is a welcome sequence,
+         * and the event that finishes a migration of fifty thousand guests is
+         * the worst possible moment to start one.
+         *
+         * Note what is NOT here — the import fires nothing per ROW. A
+         * `contact.created` per imported guest would enrol the venue's entire
+         * history into every sequence they have switched on and then message
+         * all of them. A migration is not fifty thousand people walking in.
+         */
+        'import.finished'    => 'a CSV import finishes',
     ];
 
     /** Can an automation on this trigger actually happen yet? */

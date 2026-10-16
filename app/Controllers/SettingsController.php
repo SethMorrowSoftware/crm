@@ -36,7 +36,42 @@ final class SettingsController extends Controller
             'backupLabel'     => $this->backupLabel(),
             'apiTokenLabel'   => $this->apiTokenLabel(),
             'webhookLabel'    => $this->webhookLabel(),
+            'importLabel'     => $this->importLabel(),
         ]);
+    }
+
+    /**
+     * The tile answers "is anything still in flight?"
+     *
+     * A running import is the state worth surfacing from a settings index: it
+     * is the only thing in the application that changes guest records while
+     * nobody is looking at the page that started it.
+     */
+    private function importLabel(): string
+    {
+        $running = (int) DB::value(
+            "SELECT COUNT(*) FROM {imports} WHERE status IN ('dry_run','importing')"
+        );
+
+        if ($running > 0) {
+            return $running === 1 ? 'One import is running now.' : $running . ' imports are running now.';
+        }
+
+        $waiting = (int) DB::value(
+            "SELECT COUNT(*) FROM {imports} WHERE status IN ('mapping','dry_run_done')"
+        );
+
+        if ($waiting > 0) {
+            return $waiting === 1
+                ? 'One uploaded file is waiting for you.'
+                : $waiting . ' uploaded files are waiting for you.';
+        }
+
+        $done = (int) DB::value("SELECT COUNT(*) FROM {imports} WHERE status = 'done'");
+
+        return $done === 0
+            ? 'Bring guests and visit history in from a spreadsheet.'
+            : $done . ' file' . ($done === 1 ? '' : 's') . ' imported.';
     }
 
     /**
