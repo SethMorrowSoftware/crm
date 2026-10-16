@@ -93,7 +93,15 @@ final class ApiController extends Controller
 
         return $this->json([
             'version'   => 'v1',
-            'resources' => $resources,
+            /*
+             * AN OBJECT EVEN WHEN IT IS EMPTY. A PHP array with no keys
+             * encodes as `[]`, so a token that can read nothing — which is
+             * what a narrowly scoped token legitimately looks like — would
+             * hand a client a list where every other response hands it a map,
+             * and a typed client parses that as a failure rather than as "no
+             * resources". Non-empty, the cast changes nothing.
+             */
+            'resources' => (object) $resources,
             'you'       => [
                 'user_id'  => Auth::id(),
                 'name'     => (string) (Auth::user()['name'] ?? ''),

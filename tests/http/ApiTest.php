@@ -907,6 +907,25 @@ Harness::test('the index says what a token may delete, separately from what it m
     Assert::false((bool) ($index['json']['resources']['memberships']['deletable'] ?? true));
 });
 
+Harness::test('the index is an object even when a token can read nothing', function () use ($ownerId): void {
+    /*
+     * `view_logs` gates no API resource, so this token reads none of them —
+     * which is what a narrowly scoped token legitimately looks like, and what
+     * the fail-closed abilities fix makes more common.
+     *
+     * A PHP array with no keys encodes as `[]`, so the shape of `resources`
+     * would change with its contents: a map on every ordinary response and a
+     * list on this one. A JavaScript client survives that; a typed one reads
+     * it as a parse failure rather than as "no resources".
+     */
+    $narrow = ha_token($ownerId, 'reads nothing', ['view_logs']);
+    $index  = ha_call('GET', '/api/v1', $narrow);
+
+    Assert::same(200, $index['status']);
+    Assert::contains('"resources":{}', $index['body']);
+    Assert::same([], $index['json']['resources'], 'and it really is empty');
+});
+
 // =================================================== a stage is a transition
 
 Harness::test('A STAGE CANNOT BE PATCHED, AND MOVING ONE DOES EVERYTHING A MOVE DOES', function () use ($full): void {
