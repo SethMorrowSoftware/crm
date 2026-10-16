@@ -469,11 +469,51 @@ final class ApiController extends Controller
             );
 
             if (!$stillFits) {
+                /*
+                 * A PATCH MAY NOT OPEN OR CLOSE A DEAL.
+                 *
+                 * Review caught two ways this did. MEASURED: a deal won two
+                 * minutes earlier — `status: won`, `won_at` stamped — came
+                 * back `status: open, won_at: NULL` from a PATCH that named
+                 * nothing but a board, because the new board's first stage is
+                 * an open one and the stage columns follow the stage. That
+                 * erases the date every revenue report keys on, with a 200
+                 * and no event to say a won deal stopped being won.
+                 *
+                 * And the mirror image: a board whose first stage an operator
+                 * has marked won or lost (the stage editor allows it) would
+                 * have CLOSED the deal from the same PATCH, firing `deal.won`
+                 * or `deal.lost` — and `deal.lost` starts a guest-facing
+                 * email.
+                 *
+                 * Both are refused. Winning and losing are transitions with
+                 * their own endpoint, which is the rule this whole module is
+                 * built on; a board change is a reassignment and has no
+                 * business being either.
+                 */
+                $status = strtolower(trim((string) ($existing['status'] ?? 'open')));
+
+                if (in_array($status, ['won', 'lost'], true)) {
+                    return Response::json([
+                        'error' => 'That deal is ' . $status . ', and moving it to another board would '
+                            . 'reopen it and erase the date it was ' . $status . '. Move it through '
+                            . 'POST /api/v1/deals/{id}/stage, where reopening is the thing you asked for.',
+                    ], 422);
+                }
+
                 $stage = $this->firstStageOf($wantedPipeline);
 
                 if ($stage === null) {
                     return Response::json([
                         'error' => 'There is no pipeline with that id, or it has no stages.',
+                    ], 422);
+                }
+
+                if ((int) $stage['is_won'] === 1 || (int) $stage['is_lost'] === 1) {
+                    return Response::json([
+                        'error' => 'The first stage of that board closes a deal, so moving one there '
+                            . 'is a win or a loss rather than a reassignment. Use '
+                            . 'POST /api/v1/deals/{id}/stage, which records it as the outcome it is.',
                     ], 422);
                 }
 
@@ -514,7 +554,14 @@ final class ApiController extends Controller
                 'to_stage_id'   => (int) $boardMove['stage']['id'],
             ]);
 
-            DealStage::fireOutcome((int) $existing['id'], $boardMove['stage']);
+            /*
+             * NO `DealStage::fireOutcome()` HERE, deliberately, and it is not
+             * an omission: the guard above refuses a board whose first stage
+             * closes a deal, so a board move cannot be a win or a loss and
+             * the call could only ever be a no-op. Leaving it in would read
+             * as though a PATCH can close a deal, which is exactly what this
+             * must not do.
+             */
         }
 
         Audit::record(

@@ -156,6 +156,32 @@ Harness::test('EVERY PERMISSION THE API CONSULTS CAN BE PUT ON A TOKEN', functio
         'deals_manage'    => 'the deal stage endpoint',
     ];
 
+    /*
+     * AND IT HAS TO BE IN THE RESOURCE'S OWN GROUP, not merely somewhere on
+     * the page. `visits` had its write permission offered under Contacts and
+     * nowhere else, because its `writable` list is empty on purpose — so the
+     * Visits group showed Read alone, and an operator who ticked it got a
+     * token that could not record a visit. A test that only asked "is the
+     * slug on the page anywhere" could not see that, which is why this asks
+     * per group.
+     */
+    $groups = ApiTokenController::apiPermissions();
+
+    foreach (ApiResource::RESOURCES as $name => $definition) {
+        if ($definition['write'] === null) {
+            continue;
+        }
+
+        $label = ucfirst(str_replace('-', ' ', $name));
+
+        Assert::hasKey($label, $groups, $name . ' has no group of its own on the token page');
+        Assert::hasKey(
+            (string) $definition['write'],
+            $groups[$label],
+            $name . ' can be written through the API, but its own group offers no box for it'
+        );
+    }
+
     foreach (ApiResource::RESOURCES as $name => $definition) {
         $needed[(string) $definition['read']] = $name . ' reads';
 

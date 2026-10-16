@@ -122,13 +122,23 @@ final class ApiTokenController extends Controller
         }
 
         /*
-         * The two writes that are their own endpoints rather than a field, so
-         * they are named by `ApiController` directly and would otherwise be
-         * missing from this list for the same reason delete was: recording
-         * consent and moving a deal between stages.
+         * The writes that are their own ENDPOINT rather than a field, so they
+         * are named by `ApiController` directly and would otherwise be missing
+         * from this list for the same reason delete was.
+         *
+         * `visits` is the one that bit: its `writable` list is empty on
+         * purpose (a visit goes through the recorder, not a plain insert), so
+         * the loop above skipped its write permission and the Visits group
+         * offered nothing but Read. An operator ticking the only Visits box
+         * got a token that cannot record a visit, which is the single thing
+         * that endpoint exists for. The label says plainly that it is the
+         * same permission as writing a contact, because it is — one
+         * permission cannot be two checkboxes, and a reader deserves to know
+         * that rather than discover it.
          */
         $groups['Contacts']['contacts_manage'] ??= 'Write — ' . (Acl::CATALOG['contacts_manage'][1] ?? 'contacts_manage');
         $groups['Deals']['deals_manage']       ??= 'Write — ' . (Acl::CATALOG['deals_manage'][1] ?? 'deals_manage');
+        $groups['Visits']['contacts_manage']   ??= 'Write — record a visit (the same permission as writing contacts)';
 
         $groups['Money'] = [
             'view_revenue' => 'See money: without this, every total comes back empty',

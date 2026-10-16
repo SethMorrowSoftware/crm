@@ -1286,26 +1286,134 @@ Harness::test('MOVING A DEAL TO ANOTHER BOARD TAKES ITS STAGE WITH IT', function
     ha_clear();
 });
 
-Harness::test('no body, a non-object body and a huge body are all refused, never a 500', function () use ($full): void {
+Harness::test('a body that is not an object is refused with 422, and never leaks a path', function () use ($full): void {
     ha_clear();
 
     $created = ha_call('POST', '/api/v1/deals', $full, ['title' => 'HA body walk', 'source' => 'hatest']);
     $id      = (int) $created['json']['data']['id'];
 
+    /*
+     * 422 EXACTLY, not "400 or 422" — which is what this asserted until
+     * review pointed out the test could not fail for the reason it claimed.
+     *
+     * `Request::json()` is typed `: array` and returns `[]` for a body that
+     * is a list, a scalar, or not JSON at all, so every write handler's
+     * `if (!is_array($input)) return 400` branch is unreachable: the request
+     * arrives looking like an empty object and is refused by whatever field
+     * check comes next. Measured — a list, a string, a number, `null`,
+     * `true`, `{}`, unparseable text, an empty body and a 2MB body all come
+     * back 422.
+     *
+     * That is an acceptable answer but not a precise one, so it is written
+     * down here rather than papered over: a caller who sent `[1,2,3]`
+     * deserves "send a JSON object", not "name the stage".
+     */
     foreach ([
-        'an array body'  => [1, 2, 3],
+        'a list body'    => [1, 2, 3],
         'a string body'  => 'Deposit Paid',
         'a number body'  => 7,
         'an empty body'  => [],
     ] as $label => $body) {
         $response = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, $body);
 
-        Assert::true(
-            in_array($response['status'], [400, 422], true),
-            $label . ' gave ' . $response['status']
-        );
+        Assert::same(422, $response['status'], $label);
         Assert::notContains('/home/', $response['body'], $label . ' must not carry a path');
+        Assert::notContains('Stack trace', $response['body'], $label);
     }
+
+    // And the deal did not move for any of them.
+    Assert::same(
+        1,
+        (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id]),
+        'only the opening history row'
+    );
+
+    ha_clear();
+});
+
+Harness::test('A PATCH CANNOT OPEN OR CLOSE A DEAL', function () use ($full): void {
+    ha_clear();
+
+    $here  = (int) DB::value('SELECT MIN(pipeline_id) FROM {pipeline_stages}');
+    $there = (int) DB::value('SELECT MIN(pipeline_id) FROM {pipeline_stages} WHERE pipeline_id > :p', ['p' => $here]);
+
+    if ($there <= 0) {
+        Assert::true(true, 'one pipeline only on this install');
+
+        return;
+    }
+
+    $won = DB::first(
+        'SELECT id, name FROM {pipeline_stages} WHERE pipeline_id = :p AND is_won = 1 ORDER BY sort_order LIMIT 1',
+        ['p' => $here]
+    );
+
+    Assert::notNull($won, 'precondition: the first board has a won stage');
+
+    $created = ha_call('POST', '/api/v1/deals', $full, ['title' => 'HA won guard', 'source' => 'hatest']);
+    $id      = (int) $created['json']['data']['id'];
+
+    Assert::same(
+        200,
+        ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, ['stage_id' => (int) $won['id']])['status']
+    );
+
+    $wonRow = DB::first('SELECT status, won_at FROM {deals} WHERE id = :id', ['id' => $id]);
+
+    Assert::same('won', (string) $wonRow['status']);
+    Assert::notNull($wonRow['won_at']);
+
+    /*
+     * MEASURED BEFORE THE FIX: a PATCH naming nothing but a board turned a
+     * deal won two minutes earlier into `status: open, won_at: NULL` — with a
+     * 200 and no event — because the new board's first stage is an open one
+     * and the stage columns follow the stage. That erases the date every
+     * revenue report keys on.
+     */
+    $refused = ha_call('PATCH', '/api/v1/deals/' . $id, $full, ['pipeline_id' => $there]);
+
+    Assert::same(422, $refused['status']);
+    Assert::contains('won', strtolower($refused['json']['error'] ?? ''), 'and it says why');
+
+    $after = DB::first('SELECT pipeline_id, status, won_at FROM {deals} WHERE id = :id', ['id' => $id]);
+
+    Assert::same($here, (int) $after['pipeline_id'], 'it did not move');
+    Assert::same('won', (string) $after['status'], 'it is still won');
+    Assert::same((string) $wonRow['won_at'], (string) $after['won_at'], 'and the date it was won is intact');
+
+    /*
+     * The mirror image: a board whose first stage CLOSES a deal would have
+     * won or lost it from the same PATCH, firing `deal.won` or `deal.lost` —
+     * and `deal.lost` starts a guest-facing email. Also refused.
+     */
+    $open  = ha_call('POST', '/api/v1/deals', $full, ['title' => 'HA closing board', 'source' => 'hatest']);
+    $openId = (int) $open['json']['data']['id'];
+
+    $firstThere = (int) DB::value(
+        'SELECT id FROM {pipeline_stages} WHERE pipeline_id = :p ORDER BY sort_order, id LIMIT 1',
+        ['p' => $there]
+    );
+
+    DB::update('pipeline_stages', ['is_won' => 1], 'id = :id', ['id' => $firstThere]);
+
+    try {
+        $closing = ha_call('PATCH', '/api/v1/deals/' . $openId, $full, ['pipeline_id' => $there]);
+
+        Assert::same(422, $closing['status']);
+
+        $still = DB::first('SELECT pipeline_id, status FROM {deals} WHERE id = :id', ['id' => $openId]);
+
+        Assert::same($here, (int) $still['pipeline_id'], 'it did not move');
+        Assert::same('open', (string) $still['status'], 'and it was not closed');
+    } finally {
+        DB::update('pipeline_stages', ['is_won' => 0], 'id = :id', ['id' => $firstThere]);
+    }
+
+    // With that board back to normal, the ordinary move still works.
+    Assert::same(
+        200,
+        ha_call('PATCH', '/api/v1/deals/' . $openId, $full, ['pipeline_id' => $there])['status']
+    );
 
     ha_clear();
 });

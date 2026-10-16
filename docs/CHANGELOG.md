@@ -997,6 +997,28 @@ reachable by accident — which is exactly why they needed finding.
   stage of the board it is moving to, through the same transition as any other
   move, with the history row and the events. A pipeline that does not exist is
   refused rather than applied.
+- **A PATCH can no longer open or close a deal.** Two ways it could. Moving a
+  deal to another board applies the new board's first stage, and that stage's
+  columns follow the stage — so a deal won two minutes earlier came back
+  `status: open` with `won_at` **erased**, from a request that named nothing
+  but a pipeline, with a 200 and no event to say a won deal had stopped being
+  won. That is the date every revenue report keys on. And the mirror image: a
+  board whose first stage an operator has marked won or lost (the stage editor
+  allows it) would have *closed* a deal from the same PATCH, firing `deal.won`
+  or `deal.lost` — and `deal.lost` starts a guest-facing email. Both are
+  refused now, pointing at the stage endpoint, where reopening or closing a
+  deal is the thing being asked for rather than a side effect. Winning and
+  losing are transitions with their own endpoint; that was always the rule,
+  and a field update had found a way around it.
+- **The one permission that records a visit could not be ticked on a token.**
+  The Visits group offered Read and nothing else, because `visits` has an
+  empty writable list on purpose — a visit goes through the recorder, not a
+  plain insert — so the loop that builds the checkboxes skipped its write
+  permission. An operator ticking the only Visits box got a token that cannot
+  do the single thing that endpoint exists for. The box is there now, labelled
+  as the same permission as writing a contact, because it is one. The test
+  that was supposed to catch this asked only whether the slug appeared
+  *somewhere* on the page; it now asks per resource.
 - **A field that names another record now has to be its id — one rule, in one
   place, instead of a fourth patch.** Three of the fixes above were the same
   bug wearing different clothes, and it took a third review round to see it:
