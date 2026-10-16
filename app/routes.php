@@ -318,6 +318,37 @@ $router->group('/forms', ['auth', 'can:view_marketing'], function ($router): voi
 });
 
 // ---------------------------------------------------------------------------
+// Tasks (replaces the /tasks placeholder)
+//
+// `view_tasks` to read, and it is SCOPED: the controller runs every read
+// through Acl::scopeCondition('view_tasks', 't.assigned_to'), so a Front Desk
+// account holding it at 'own' sees the tasks assigned to them and a manager
+// holding it at 'all' sees the venue's.
+//
+// Writing gates on `inbox_assign`. Acl::CATALOG has no `tasks_manage` key and
+// this module does not add one, so it uses the closest existing fit — "Assign
+// and close conversations" is the same capability these buttons exercise, and
+// in the seeded roles it lands on exactly the people who hand work out. See
+// TaskController::WRITE_PERMISSION, which states the trade-off.
+//
+// Completing and reopening are POSTs with their own routes rather than a
+// status field on the edit form alone, because each one stamps who finished the
+// task and when — the record the weekly scorecard is built from.
+// ---------------------------------------------------------------------------
+
+$router->group('/tasks', ['auth', 'can:view_tasks'], function ($router): void {
+    $router->get('', ['TaskController', 'index'], [], 'tasks');
+    $router->get('/new', ['TaskController', 'create'], ['can:inbox_assign'], 'tasks.create');
+    $router->post('', ['TaskController', 'store'], ['csrf', 'can:inbox_assign']);
+    $router->get('/{id:\d+}', ['TaskController', 'show'], [], 'tasks.show');
+    $router->get('/{id:\d+}/edit', ['TaskController', 'edit'], ['can:inbox_assign'], 'tasks.edit');
+    $router->post('/{id:\d+}', ['TaskController', 'update'], ['csrf', 'can:inbox_assign']);
+    $router->post('/{id:\d+}/complete', ['TaskController', 'complete'], ['csrf']);
+    $router->post('/{id:\d+}/reopen', ['TaskController', 'reopen'], ['csrf']);
+    $router->post('/{id:\d+}/comments', ['TaskController', 'storeComment'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2+ module routes are added as each module lands. The placeholders
 // below give the navigation somewhere real to point in Phase 1, and each
 // renders an honest "coming in Phase N" state rather than a broken link.
@@ -328,5 +359,4 @@ $router->get('/bookings', ['PlaceholderController', 'bookings'], ['auth', 'can:v
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
 $router->get('/reputation', ['PlaceholderController', 'reputation'], ['auth', 'can:view_reputation'], 'reputation');
 $router->get('/memberships', ['PlaceholderController', 'memberships'], ['auth', 'can:view_memberships'], 'memberships');
-$router->get('/tasks', ['PlaceholderController', 'tasks'], ['auth', 'can:view_tasks'], 'tasks');
 $router->get('/reports', ['PlaceholderController', 'reports'], ['auth', 'can:view_reports'], 'reports');
