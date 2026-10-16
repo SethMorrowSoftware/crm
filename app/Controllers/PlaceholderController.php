@@ -42,16 +42,10 @@ final class PlaceholderController extends Controller
     // `MembershipController` — the method is gone rather than left pointing
     // at a page that exists.
 
-
-    public function reports(Request $request): Response
-    {
-        return $this->placeholder('Reports', 6, 'reports', [
-            'Revenue by day, package and attraction, with year-over-year',
-            'Funnel conversion, velocity and win/loss by reason',
-            'Campaign attribution and cost per booking by channel',
-            'Guest cohorts, RFM segmentation and lifetime value by source',
-        ], 'Reports state their data grain: anything from the POS Sales table is day-grain only.');
-    }
+    // Reports was a placeholder until Phase 6. It is now `ReportController`,
+    // backed by `Services\Reports` (the catalogue) and
+    // `Services\ReportRunner` (the queries) — 23 reports across six
+    // families, so the method is gone rather than left behind.
 
     /**
      * @param list<string> $features

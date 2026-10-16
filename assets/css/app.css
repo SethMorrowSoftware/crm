@@ -1252,6 +1252,147 @@ ul.checks li:last-child { border-bottom: 0; }
 body.embed { background: transparent; padding: 0; }
 body.embed .review-wall { padding: .25rem; }
 
+/* ---------------------------------------------------------------- Reports */
+
+/* The picker. A report is listed by the QUESTION it answers, with the name
+   above it in the role of a label — "Lead time" means nothing to a new
+   manager, "How far ahead do people book?" means something to everybody. */
+.report-list { list-style: none; margin: 0; padding: 0; }
+
+.report-list > li {
+    display: flex; align-items: center; gap: .75rem;
+    padding: .55rem 0; border-bottom: 1px solid var(--line);
+}
+.report-list > li:last-child { border-bottom: 0; }
+
+.report-link { flex: 1 1 auto; display: grid; gap: .1rem; text-decoration: none; }
+.report-link:hover .report-name { text-decoration: underline; }
+.report-name { font-weight: 600; color: var(--text); }
+.report-question { font-size: .85rem; color: var(--muted); }
+
+.saved-reports { list-style: none; margin: 0; padding: 0; }
+.saved-reports > li {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+    padding: .45rem 0; border-bottom: 1px solid var(--line);
+}
+.saved-reports > li:last-child { border-bottom: 0; }
+.saved-reports form { margin: 0 0 0 auto; }
+.saved-report-dead { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+
+/* The period picker. A row on a desktop, a stack on a phone; no inline
+   handler anywhere, because the CSP forbids inline script and a select that
+   submits on change cannot be used with a keyboard. */
+.report-window {
+    display: flex; flex-wrap: wrap; gap: .75rem; align-items: flex-end;
+    padding: .75rem 0; border-bottom: 1px solid var(--line); margin-bottom: .75rem;
+}
+.report-window .field { margin: 0; flex: 0 1 11rem; }
+.report-window .field-actions { flex: 1 1 14rem; }
+.report-window .field-hint { margin: .25rem 0 0; }
+
+.report-period { display: flex; align-items: center; gap: .4rem; font-size: .88rem; color: var(--muted); }
+.report-period svg { flex: 0 0 auto; }
+
+/* The trend: one bar per day, same approach as the NPS chart — a div whose
+   height is a percentage. No library, no canvas, no third-party request.
+
+   The columns GROW to fill the card. Twelve bars at a fixed width left a
+   chart hugging the left third of a wide card with two thirds of white space
+   beside it, which reads as a rendering fault rather than as a short month. */
+.report-chart {
+    display: flex; align-items: flex-end; gap: .2rem;
+    overflow-x: auto; padding: .5rem 0 0;
+}
+
+/* The baseline. Without a track behind each bar, this is what a day with
+   almost nothing on it sits on. */
+.report-chart .report-bar { border-bottom: 1px solid var(--line); }
+
+/* The COLUMN grows to fill the card; the BAR inside it is capped and
+   centred. Capping the column instead left twelve bars occupying the left
+   half of a wide card, which reads as a chart that failed to draw rather
+   than as a month with twelve trading days in it. */
+.report-col {
+    display: grid; gap: .2rem; justify-items: center;
+    flex: 1 1 0; min-width: 1.5rem;
+}
+
+/* NO TRACK BEHIND THE BAR. A filled column above each bar reads as a target
+   the day fell short of, which is a claim this chart is not making and the
+   opposite of the ACTUALS ONLY rule; at ninety bars it also turned the panel
+   into stripes. The baseline under the chart is what gives a near-zero day
+   something to sit on. */
+.report-bar {
+    display: flex; flex-direction: column-reverse;
+    width: 100%; max-width: 2.2rem; height: 7rem;
+    background: transparent;
+}
+.report-fill {
+    display: block; width: 100%; background: var(--brand);
+    border-radius: 2px 2px 0 0;
+}
+.report-bar-label {
+    font-size: .66rem; color: var(--faint); white-space: nowrap;
+    min-height: 1em;
+}
+
+/* Figures right-aligned and tabular so a column of money lines up on the
+   decimal point, which is the only way a column of money can be scanned. */
+.table-report .num-col { text-align: right; }
+.table-report .num { font-variant-numeric: tabular-nums; }
+.table-report tfoot th,
+.table-report tfoot td { font-weight: 700; border-top: 2px solid var(--line); }
+
+/* A wide table scrolls inside its card rather than pushing the page sideways.
+   The fade on the right edge is the only thing that says so on a phone, where
+   there is no scrollbar until you touch it. */
+.table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    background:
+        linear-gradient(to right, var(--panel) 30%, transparent) left / 2rem 100% no-repeat,
+        linear-gradient(to left, var(--panel) 30%, transparent) right / 2rem 100% no-repeat,
+        radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, .12), transparent) left / .6rem 100% no-repeat,
+        radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, .12), transparent) right / .6rem 100% no-repeat;
+    background-attachment: local, local, scroll, scroll;
+}
+
+.delta-up   { color: var(--ok); }
+.delta-down { color: var(--bad); }
+.delta-flat { color: var(--muted); }
+
+@media (max-width: 40rem) {
+    .report-window .field,
+    .report-window .field-actions { flex: 1 1 100%; }
+
+    /* MEASURED at 390px: "$26,326.64" at the full stat size overflowed its
+       own card. Money is the longest thing these tiles ever hold. */
+    .report-page .stat-value,
+    .stat-row .stat-value { font-size: 1.15rem; overflow-wrap: anywhere; }
+
+    .report-chart { gap: .1rem; }
+    .report-col { min-width: .9rem; }
+}
+
+/* The ninety-day strip on the picker. A sparkline of divs, same approach as
+   the NPS chart — no library, no canvas, no third-party request. */
+.pulse-row {
+    display: grid; gap: .75rem;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
+.pulse { display: grid; gap: .15rem; }
+.pulse-label { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.pulse-total { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+
+.pulse-spark {
+    display: flex; align-items: flex-end; gap: 1px;
+    height: 2.6rem; margin: .25rem 0;
+}
+.pulse-bar { flex: 1 1 0; min-width: 1px; background: var(--brand); border-radius: 1px; }
+
+.pulse-note { font-size: .72rem; color: var(--faint); }
+
 /* ------------------------------------------------------------------ Print */
 
 @media print {

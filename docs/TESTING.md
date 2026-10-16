@@ -81,6 +81,16 @@ and had to be moved back out.
   HMAC actually depends on the install's key), and that a configured `app_url`
   beats the request's Host header. The rest of the link-host precedence falls
   back through stored settings, so it lives in `integration/mailer`.
+- **reports** — the report catalogue and the window arithmetic, with today
+  passed in rather than read from a clock. The prior window is the same number
+  of days immediately before (any overlap and both sides of "+12% on last
+  month" contain the same business); the end of a month is not the end of the
+  one before it; a delta is NULL with no prior period rather than a 100% rise,
+  and its percentage is null when the base is zero. Money scrubbing keeps its
+  columns and empties them, CSV money is a plain decimal a spreadsheet can
+  total, and a null exports as an empty cell rather than a zero. Plus the SQL
+  `LocalDay` emits in each of its three modes, which is what decides whether a
+  venue day is a venue day.
 
 ### `tests/static` — the quality gates, as executable rules
 
@@ -195,6 +205,21 @@ Four more integration suites cover the operator-facing machinery:
   time back on the end date, renewing early keeps the time already paid for,
   and the nightly sweep is idempotent — a second pass writes nothing and fires
   nothing, or every welcome series would go out once a minute
+- **reports** — all twenty-three reports run against real rows and return the
+  agreed shape, every column type is one the table knows how to draw, and the
+  catalogue's `money` flag matches the columns each query really returns (a
+  report marked otherwise hands guest spend to a technician). Then the three
+  things only a database can catch: that a placeholder is never bound twice
+  (`PDO::ATTR_EMULATE_PREPARES` is off, so the second binding is an HY093 and
+  a bare 500); that the prior period is read from the prior period; and that
+  **a venue day is cut in the venue's timezone** — a nine-in-the-evening
+  enquiry is counted on the day it was taken and NOT also on the following
+  one, which is what `DATE(created_at)` on a UTC column does to most of a
+  Saturday night, every week, in every report. The nightly rollup is covered
+  here too: it recomputes rather than accumulating (so a second run writes the
+  same answer, and a correction made a week later lands), it reaches back over
+  a gap longer than its trailing window rather than leaving a permanent hole,
+  it never stores today, and its totals agree with the live report to the cent
 - **upgrade** — a pending schema file is applied and recorded on the first
   request after an upload; a failing file leaves the version marker alone so
   the next request retries; and re-running a partially applied file completes
@@ -264,6 +289,17 @@ And two further HTTP suites:
   family cannot invent a twelve-pound season pass. Plus every button a manager
   presses — freeze, unfreeze, renew, cancel — driven through the real forms,
   and the rule that a plan nobody has priced is not offered for sale
+- **reports** — every report renders with no warning and no notice, on every
+  preset including the empty ones; and the money gate in both places it has to
+  hold. A role with `view_reports` and no `view_revenue` reads every count and
+  no dollars, with the column still present and empty so the rows line up with
+  what a manager sees — and **the CSV export is scrubbed the same way**, which
+  is the hole the obvious implementation leaves, because the export is a
+  separate endpoint and gating it on `reports_export` alone hands a technician
+  the whole money column in a file. Plus: exporting is its own permission
+  (money on screen is not money in a file), an export is audited, and a saved
+  report keeps its period BY NAME so "Last 30 days" still means the last 30
+  days next month
 - **admin** — the operator pages: the stored SMTP password is never rendered
   back into the form and a blank field keeps it; the front desk cannot reach
   email settings, backups or export; a backup taken over HTTP downloads as a

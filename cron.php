@@ -683,6 +683,54 @@ function cron_dailyMaintenance(): int
         Log::warning('Maintenance: audit purge failed', ['error' => $e->getMessage()]);
     }
 
+    // --- The daily reporting rollup
+    //
+    // BEFORE the backup, so a slow backup cannot starve it, and before any
+    // pruning that might one day trim the detail it is built from. It
+    // recomputes a trailing window rather than accumulating, so running it
+    // twice in a night is a no-op and a night it did not run is repaired by
+    // the next one — see ReportRollup's note on permanent holes.
+    //
+    // Its own try, like everything else here: the reports read the real rows
+    // and do not depend on this, so a failed rollup is a warning in the log
+    // rather than a venue with no figures.
+    try {
+        $budget = static fn (): bool => (microtime(true) - CC_START) < 180.0;
+
+        // The one-time backfill first, and only while it has not finished.
+        // The trailing window fills FORWARD a day a night and never
+        // backward, so a venue that imported five years of history would
+        // otherwise have a rollup covering the fortnight since they
+        // installed this — and every long-range figure would read as though
+        // they opened last month.
+        $backfill = App\Services\ReportRollup::backfill($budget);
+
+        if ($backfill['ran']) {
+            cron_out('  Rollup backfill: ' . $backfill['days'] . ' day(s) from '
+                . $backfill['from'] . ' — ' . $backfill['reason'] . '.');
+        }
+
+        $rollup = App\Services\ReportRollup::refresh($budget);
+
+        Settings::set('system.rollup_last_run', gmdate('Y-m-d H:i:s'));
+        Settings::set('system.rollup_covered_through', $rollup['to']);
+
+        cron_out('  Rollup: ' . $rollup['days'] . ' day(s), ' . $rollup['rows'] . ' figure(s)'
+            . ($rollup['stopped'] ? ' — STOPPED on the time budget, the rest is next run.' : '.'));
+
+        if ($rollup['stopped']) {
+            // Said out loud rather than left to be inferred from a short
+            // table. A venue whose rollup never finishes needs to know.
+            Log::warning('Rollup ran out of time', $rollup);
+        }
+
+        App\Services\ReportRollup::prune((int) Settings::get('system.rollup_keep_days', 1460));
+        $done++;
+    } catch (Throwable $e) {
+        Log::warning('Maintenance: rollup failed', ['error' => $e->getMessage()]);
+        cron_out('  ! rollup: ' . $e->getMessage());
+    }
+
     // --- Nightly database backup
     //
     // Last in the maintenance list, deliberately: a pruning sweep that failed

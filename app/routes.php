@@ -715,4 +715,27 @@ $router->group('/memberships', ['auth', 'can:view_memberships'], function ($rout
     $router->post('/{id:\d+}/cancel', ['MembershipController', 'cancel'], ['csrf', 'can:memberships_manage']);
     $router->post('/{id:\d+}/renew', ['MembershipController', 'renew'], ['csrf', 'can:memberships_manage']);
 });
-$router->get('/reports', ['PlaceholderController', 'reports'], ['auth', 'can:view_reports'], 'reports');
+// ---------------------------------------------------------------------------
+// Reports
+//
+// `{report}` is a catalogue id (`revenue_by_day`), matched loosely here and
+// checked against `Reports::CATALOG` in the controller — the pattern decides
+// what a URL may contain, the catalogue decides what exists, and conflating
+// the two means adding a report means editing a regex.
+// ---------------------------------------------------------------------------
+
+$router->group('/reports', ['auth', 'can:view_reports'], function ($router): void {
+    $router->get('', ['ReportController', 'index'], [], 'reports');
+
+    $router->post('/saved', ['ReportController', 'save'], ['csrf']);
+    $router->get('/saved/{id:\d+}', ['ReportController', 'open'], [], 'reports.saved');
+    $router->post('/saved/{id:\d+}/delete', ['ReportController', 'deleteSaved'], ['csrf']);
+
+    $router->get('/{report:[a-z0-9_]+}', ['ReportController', 'show'], [], 'reports.show');
+    $router->get(
+        '/{report:[a-z0-9_]+}/export',
+        ['ReportController', 'export'],
+        ['can:reports_export'],
+        'reports.export'
+    );
+});
