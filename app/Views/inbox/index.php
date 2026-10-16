@@ -45,13 +45,6 @@ $withFilter = static function (string $target) use ($channel, $search): string {
     return '/inbox' . ($query === [] ? '' : '?' . http_build_query($query));
 };
 
-$channelIcon = static fn (string $ch): string => match ($ch) {
-    'sms'      => 'message-square',
-    'email'    => 'mail',
-    'internal' => 'file-text',
-    default    => 'message-square',
-};
-
 ?>
 <div class="page-actions">
     <p class="page-lede"><?= e($blurb[$filter] ?? '') ?></p>
@@ -160,7 +153,25 @@ $channelIcon = static fn (string $ch): string => match ($ch) {
                                 <?= e((string) $row['preview']) ?>
                             </td>
                             <td>
-                                <?= icon($channelIcon((string) $row['channel'])) ?>
+                                <?php
+                                /*
+                                 * The icon name is a LITERAL at the call,
+                                 * not returned from a helper. `icon()`
+                                 * renders nothing for a name it does not
+                                 * know — the right failure for a decorative
+                                 * glyph, and a silent one for whoever wrote
+                                 * the view — so the static gate checks every
+                                 * name a view asks for, and it can only see
+                                 * the ones written here.
+                                 */
+                                ?>
+                                <?php if ((string) $row['channel'] === 'sms'): ?>
+                                    <?= icon('message') ?>
+                                <?php elseif ((string) $row['channel'] === 'internal'): ?>
+                                    <?= icon('edit') ?>
+                                <?php else: ?>
+                                    <?= icon('inbox') ?>
+                                <?php endif; ?>
                                 <?= e(ucfirst((string) $row['channel'])) ?>
                             </td>
                             <td>

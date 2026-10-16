@@ -526,6 +526,25 @@ $router->group('/inbox', ['auth', 'can:view_inbox'], function ($router): void {
     $router->post('/{id:\d+}/close', ['InboxController', 'close'], ['csrf', 'can:inbox_assign']);
     $router->post('/{id:\d+}/reopen', ['InboxController', 'reopen'], ['csrf', 'can:inbox_assign']);
 });
+// ---------------------------------------------------------------------------
+// Segments — saved questions about the guest list
+//
+// `view_marketing` to look, `campaigns_manage` to build. Counting is NOT
+// sending: permission to contact the people in a segment is `campaigns_send`,
+// checked where the sending happens.
+// ---------------------------------------------------------------------------
+
+$router->group('/segments', ['auth', 'can:view_marketing'], function ($router): void {
+    $router->get('', ['SegmentController', 'index'], [], 'segments');
+    $router->get('/new', ['SegmentController', 'create'], ['can:campaigns_manage'], 'segments.create');
+    $router->post('', ['SegmentController', 'store'], ['csrf', 'can:campaigns_manage']);
+    $router->get('/{id:\d+}', ['SegmentController', 'show'], [], 'segments.show');
+    $router->get('/{id:\d+}/edit', ['SegmentController', 'edit'], ['can:campaigns_manage'], 'segments.edit');
+    $router->post('/{id:\d+}', ['SegmentController', 'update'], ['csrf', 'can:campaigns_manage']);
+    $router->post('/{id:\d+}/refresh', ['SegmentController', 'refresh'], ['csrf', 'can:campaigns_manage']);
+    $router->post('/{id:\d+}/delete', ['SegmentController', 'destroy'], ['csrf', 'can:campaigns_manage']);
+});
+
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
 $router->get('/reputation', ['PlaceholderController', 'reputation'], ['auth', 'can:view_reputation'], 'reputation');
 $router->get('/memberships', ['PlaceholderController', 'memberships'], ['auth', 'can:view_memberships'], 'memberships');

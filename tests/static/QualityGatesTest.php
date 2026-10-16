@@ -341,6 +341,61 @@ Harness::test('no controller action shadows a base Controller helper', function 
     Assert::same([], $offenders, implode("\n   ", $offenders));
 });
 
+Harness::test('every icon a view asks for exists in the set', function (): void {
+    // `icon()` renders NOTHING for a name it does not know. That is the right
+    // failure for a decorative glyph — a missing icon must never break a page
+    // — and a completely silent one for whoever wrote the view. Found three
+    // at once in the inbox views, which had been written against a different
+    // icon library's names.
+    $source = (string) file_get_contents(CC_ROOT . '/app/Views/partials/icons.php');
+
+    preg_match_all("/'([a-z-]+)' +=>/", $source, $defined);
+
+    $known = $defined[1];
+
+    Assert::greaterThan(20, count($known), 'the icon set was parsed');
+
+    $offenders = [];
+
+    // Recursive, because five views sit at the top of app/Views and a
+    // two-level glob misses them. It can only see names written as literals
+    // at the call — one returned from a helper is invisible here, which is
+    // why the inbox view writes its three out longhand rather than through a
+    // match().
+    $views = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator(CC_ROOT . '/app/Views', FilesystemIterator::SKIP_DOTS)
+    );
+
+    foreach ($views as $entry) {
+        $file = (string) $entry;
+
+        if (!str_ends_with($file, '.php') || str_ends_with($file, 'icons.php')) {
+            continue;
+        }
+
+        preg_match_all("/icon\(\s*'([a-z-]+)'/", (string) file_get_contents($file), $asked);
+
+        foreach ($asked[1] as $name) {
+            if (!in_array($name, $known, true)) {
+                $offenders[] = basename(dirname($file)) . '/' . basename($file) . ' asks for "' . $name . '"';
+            }
+        }
+    }
+
+    // And the navigation, whose icon names are data rather than calls.
+    $layout = (string) file_get_contents(CC_ROOT . '/app/Views/layouts/app.php');
+
+    preg_match_all("/\['[^']+', '\/[^']*', '[a-z_]+', '([a-z-]+)'\]/", $layout, $nav);
+
+    foreach ($nav[1] as $name) {
+        if (!in_array($name, $known, true)) {
+            $offenders[] = 'the navigation asks for "' . $name . '"';
+        }
+    }
+
+    Assert::same([], array_values(array_unique($offenders)), implode("\n   ", array_unique($offenders)));
+});
+
 Harness::test('NO CONTROLLER THROWS AWAY AN AUTHORIZE REFUSAL', function (): void {
     // `Controller::authorize()` RETURNS the 403 rather than throwing, so a
     // bare `$this->authorize('view_x');` compiles, lints, reads like a guard
