@@ -250,6 +250,34 @@ $router->group('/pipelines', ['auth', 'can:view_deals'], function ($router): voi
     $router->post('/{id:\d+}/stages', ['PipelineController', 'saveStages'], ['csrf', 'can:deals_manage']);
 });
 
+
+// ---------------------------------------------------------------------------
+// Quotes
+//
+// `view_deals` opens the group, because a quote belongs to a deal and the two
+// are the same thing to look at. Editing needs `deals_manage`. SENDING has its
+// own permission, `quotes_send`, and only the send route carries it: that is
+// the moment a figure leaves the building with the venue's name on it, and a
+// Party Host who may price a party is not automatically the person who commits
+// it to a guest in writing.
+//
+// There is no status route that can reach `sent` — see QuoteController's
+// TRANSITIONS — so the send gate cannot be stepped around through the
+// cheaper-gated status form.
+// ---------------------------------------------------------------------------
+
+$router->group('/quotes', ['auth', 'can:view_deals'], function ($router): void {
+    $router->get('', ['QuoteController', 'index'], [], 'quotes');
+    $router->get('/new', ['QuoteController', 'create'], ['can:deals_manage'], 'quotes.create');
+    $router->post('', ['QuoteController', 'store'], ['csrf', 'can:deals_manage']);
+    $router->get('/{id:\d+}', ['QuoteController', 'show'], [], 'quotes.show');
+    $router->get('/{id:\d+}/print', ['QuoteController', 'printable'], [], 'quotes.print');
+    $router->get('/{id:\d+}/edit', ['QuoteController', 'edit'], ['can:deals_manage'], 'quotes.edit');
+    $router->post('/{id:\d+}', ['QuoteController', 'update'], ['csrf', 'can:deals_manage']);
+    $router->post('/{id:\d+}/status', ['QuoteController', 'status'], ['csrf', 'can:deals_manage']);
+    $router->post('/{id:\d+}/send', ['QuoteController', 'send'], ['csrf', 'can:quotes_send']);
+});
+
 // ---------------------------------------------------------------------------
 // Phase 2+ module routes are added as each module lands. The placeholders
 // below give the navigation somewhere real to point in Phase 1, and each
