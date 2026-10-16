@@ -173,12 +173,49 @@ $router->group('/playbooks', ['auth', 'can:view_automations'], function ($router
 });
 
 // ---------------------------------------------------------------------------
+// Contacts & households
+//
+// Reading gates on view_contacts and is scoped per role by
+// Acl::scopeCondition(); writing gates on contacts_manage; deleting has its
+// own narrower permission.
+//
+// Consent is NOT part of the contact form. It has its own two endpoints
+// because recording it means stamping a time, naming a source and appending a
+// consent_log row — docs/PRIVACY.md §3. A guest's permission to be marketed
+// to is evidence of something they did, so it cannot be a column somebody
+// edits in passing.
+// ---------------------------------------------------------------------------
+
+$router->group('/contacts', ['auth', 'can:view_contacts'], function ($router): void {
+    $router->get('', ['ContactController', 'index'], [], 'contacts');
+    $router->get('/new', ['ContactController', 'create'], ['can:contacts_manage'], 'contacts.create');
+    $router->post('', ['ContactController', 'store'], ['csrf', 'can:contacts_manage']);
+    $router->get('/{id:\d+}', ['ContactController', 'show'], [], 'contacts.show');
+    $router->get('/{id:\d+}/edit', ['ContactController', 'edit'], ['can:contacts_manage'], 'contacts.edit');
+    $router->post('/{id:\d+}', ['ContactController', 'update'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/notes', ['ContactController', 'storeNote'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/consent', ['ContactController', 'updateConsent'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/do-not-contact', ['ContactController', 'setDoNotContact'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/delete', ['ContactController', 'destroy'], ['csrf', 'can:contacts_delete']);
+});
+
+$router->group('/households', ['auth', 'can:view_contacts'], function ($router): void {
+    $router->get('', ['HouseholdController', 'index'], [], 'households');
+    $router->get('/new', ['HouseholdController', 'create'], ['can:contacts_manage'], 'households.create');
+    $router->post('', ['HouseholdController', 'store'], ['csrf', 'can:contacts_manage']);
+    $router->get('/{id:\d+}', ['HouseholdController', 'show'], [], 'households.show');
+    $router->get('/{id:\d+}/edit', ['HouseholdController', 'edit'], ['can:contacts_manage'], 'households.edit');
+    $router->post('/{id:\d+}', ['HouseholdController', 'update'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/members', ['HouseholdController', 'addMember'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/members/remove', ['HouseholdController', 'removeMember'], ['csrf', 'can:contacts_manage']);
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2+ module routes are added as each module lands. The placeholders
 // below give the navigation somewhere real to point in Phase 1, and each
 // renders an honest "coming in Phase N" state rather than a broken link.
 // ---------------------------------------------------------------------------
 
-$router->get('/contacts', ['PlaceholderController', 'contacts'], ['auth', 'can:view_contacts'], 'contacts');
 $router->get('/inbox', ['PlaceholderController', 'inbox'], ['auth', 'can:view_inbox'], 'inbox');
 $router->get('/deals', ['PlaceholderController', 'deals'], ['auth', 'can:view_deals'], 'deals');
 $router->get('/bookings', ['PlaceholderController', 'bookings'], ['auth', 'can:view_bookings'], 'bookings');
