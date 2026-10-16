@@ -236,6 +236,26 @@ rather than discovering it from a 403.
 
 A resource that refuses a write answers **405** with the reason, not 500.
 
+### A field that names another record has to be its id
+
+Any field ending in `_id` — `contact_id`, `company_id`, `household_id`,
+`owner_id`, `pipeline_id`, `booking_id` — must be a **positive integer**, or a
+string of digits, or `null` to clear the link. Anything else is a **422** that
+names the field and says what was wrong with it:
+
+```json
+{
+  "error": "These fields name another record, so each has to be its id: household_id (true and false are not record ids).",
+  "invalid": { "household_id": "true and false are not record ids" }
+}
+```
+
+This is strict on purpose, and the strictness is the feature. PHP turns `true`
+into `1` and `"abc"` into `0`, so a field sent wrong used to resolve silently
+to "record 1" or "no record" and answer **200** — a deal attached to whichever
+company happens to be id 1, a visit filed against a stranger's party. A
+refusal that names the field is the only version of that a caller can act on.
+
 ### Which permission each method needs
 
 Reading, writing and deleting are **three different permissions**, exactly as

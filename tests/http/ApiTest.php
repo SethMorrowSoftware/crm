@@ -1310,6 +1310,148 @@ Harness::test('no body, a non-object body and a huge body are all refused, never
     ha_clear();
 });
 
+Harness::test('A BOARD IS NAMED BY AN ID, NOT BY WHATEVER CASTS TO ONE', function () use ($full): void {
+    ha_clear();
+
+    /*
+     * The third appearance of one mistake, and the reason this test is phrased
+     * as a sweep rather than a case.
+     *
+     * A stage named by `true` moved a deal to stage id 1. That was fixed. The
+     * fix for it then read `(int) $data['pipeline_id']`, and MEASURED:
+     * `null`, `0`, `""`, `false`, `true`, `-3`, `"abc"` and `[]` each cast to
+     * 0 or 1, fell through to "no pipeline named", and relocated the deal to
+     * the FIRST board's first stage — 200, with a history row. Worse than the
+     * stranding it replaced: a stranded deal is at least still on the board
+     * somebody picked.
+     *
+     * So: anything that is not the id of a board is a 422, and the deal does
+     * not move an inch.
+     */
+    $there = (int) DB::value(
+        'SELECT MIN(pipeline_id) FROM {pipeline_stages}
+          WHERE pipeline_id > (SELECT MIN(pipeline_id) FROM {pipeline_stages})'
+    );
+
+    if ($there <= 0) {
+        Assert::true(true, 'one pipeline only on this install');
+
+        return;
+    }
+
+    $created = ha_call('POST', '/api/v1/deals', $full, [
+        'title'       => 'HA coercion walk',
+        'source'      => 'hatest',
+        'pipeline_id' => $there,
+    ]);
+
+    Assert::same(201, $created['status']);
+    $id = (int) $created['json']['data']['id'];
+
+    $parked  = DB::first('SELECT pipeline_id, stage_id FROM {deals} WHERE id = :id', ['id' => $id]);
+    $history = (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id]);
+
+    Assert::same($there, (int) $parked['pipeline_id'], 'it was created on the board that was asked for');
+
+    foreach ([null, 0, '', false, true, -3, 'abc', ['x'], 1.5, '2abc', ' '] as $rubbish) {
+        $response = ha_call('PATCH', '/api/v1/deals/' . $id, $full, ['pipeline_id' => $rubbish]);
+
+        Assert::same(
+            422,
+            $response['status'],
+            'pipeline_id = ' . var_export($rubbish, true) . ' must be refused, not cast'
+        );
+
+        $now = DB::first('SELECT pipeline_id, stage_id FROM {deals} WHERE id = :id', ['id' => $id]);
+
+        Assert::same((int) $parked['pipeline_id'], (int) $now['pipeline_id'], 'and the board did not change');
+        Assert::same((int) $parked['stage_id'], (int) $now['stage_id'], 'and neither did the stage');
+    }
+
+    Assert::same(
+        $history,
+        (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id]),
+        'and none of it wrote a history row'
+    );
+
+    // A real id still works, as a number and as the string a JSON client may
+    // well send.
+    $here = (int) DB::value('SELECT MIN(pipeline_id) FROM {pipeline_stages}');
+
+    Assert::same(200, ha_call('PATCH', '/api/v1/deals/' . $id, $full, ['pipeline_id' => $here])['status']);
+    Assert::same(200, ha_call('PATCH', '/api/v1/deals/' . $id, $full, ['pipeline_id' => (string) $there])['status']);
+    Assert::same(
+        $there,
+        (int) DB::value('SELECT pipeline_id FROM {deals} WHERE id = :id', ['id' => $id]),
+        'a digit string names a board too'
+    );
+
+    // And the same rule on CREATE, where a bogus id used to land the deal on
+    // the default board with a 201.
+    $bogus = ha_call('POST', '/api/v1/deals', $full, [
+        'title'       => 'HA coercion create',
+        'source'      => 'hatest',
+        'pipeline_id' => 'abc',
+    ]);
+
+    Assert::same(422, $bogus['status']);
+    Assert::false(
+        DB::exists("SELECT id FROM {deals} WHERE title = 'HA coercion create'"),
+        'and nothing was created'
+    );
+
+    ha_clear();
+});
+
+Harness::test('a bad id is a 422 that NAMES the field, on any resource', function () use ($full): void {
+    ha_clear();
+
+    $created = ha_call('POST', '/api/v1/contacts', $full, [
+        'first_name' => 'Root', 'last_name' => 'Cause', 'source' => 'hatest',
+    ]);
+
+    $id = (int) $created['json']['data']['id'];
+
+    // Every foreign key on the resource, not just the one a bug was found in.
+    foreach (['household_id', 'company_id', 'owner_id'] as $field) {
+        foreach ([true, 'abc', 0, -1, ['x']] as $rubbish) {
+            $response = ha_call('PATCH', '/api/v1/contacts/' . $id, $full, [$field => $rubbish]);
+
+            Assert::same(422, $response['status'], $field . ' = ' . var_export($rubbish, true));
+            Assert::hasKey($field, $response['json']['invalid'] ?? [], 'and it says which field');
+        }
+    }
+
+    // Nothing landed on the row from any of it.
+    $row = DB::first(
+        'SELECT household_id, company_id, owner_id FROM {contacts} WHERE id = :id',
+        ['id' => $id]
+    );
+
+    Assert::null($row['household_id']);
+    Assert::null($row['company_id']);
+    Assert::null($row['owner_id']);
+
+    // Null clears a link, which is a real thing to want.
+    Assert::same(200, ha_call('PATCH', '/api/v1/contacts/' . $id, $full, ['company_id' => null])['status']);
+
+    // And the visit endpoint, which takes its body raw rather than through
+    // the writable filter, follows the same rule.
+    foreach ([['contact_id' => true], ['contact_id' => 'abc'],
+              ['contact_id' => $id, 'booking_id' => true],
+              ['contact_id' => $id, 'booking_id' => 'abc']] as $body) {
+        Assert::same(422, ha_call('POST', '/api/v1/visits', $full, $body)['status'], json_encode($body));
+    }
+
+    Assert::same(
+        0,
+        (int) DB::value('SELECT COUNT(*) FROM {visits} WHERE contact_id = :c', ['c' => $id]),
+        'and no visit was recorded by any of them'
+    );
+
+    ha_clear();
+});
+
 ha_clear();
 ha_clear_users();
 ha_clear_tokens();

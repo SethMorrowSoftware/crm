@@ -406,3 +406,95 @@ Harness::test('A STAGE IS NOT A WRITABLE COLUMN ON A DEAL', function (): void {
     // pipeline, so the two cannot disagree.
     Assert::inArray('pipeline_id', $deals['writable']);
 });
+
+// ------------------------------------------- a field that names a record
+
+Harness::test('A FIELD THAT NAMES ANOTHER RECORD HAS TO BE AN ID', function (): void {
+    /*
+     * THE ROOT CAUSE OF THREE SEPARATE BUGS, fixed here once instead of a
+     * fourth time at a fourth call site.
+     *
+     * `writable()` filtered WHICH keys could be written and never what shape
+     * they were. PHP casts `true` to 1 and `"abc"` to 0, so every `*_id` field
+     * in every resource quietly resolved to "record 1" or "no record" and
+     * answered 200: a stage named by `true` moved a deal to stage 1, a
+     * pipeline named by `null` relocated it to the first board, a booking
+     * named by `true` filed a guest's visit against somebody else's party.
+     * Three symptoms, one cause.
+     */
+    foreach ([true, false, 'abc', '', '  ', 0, -1, 1.5, ['x'], (object) [], '12abc', '1.0'] as $rubbish) {
+        Assert::notNull(
+            ApiResource::idProblem($rubbish),
+            var_export($rubbish, true) . ' is not a record id and must be refused'
+        );
+    }
+
+    // What a real client sends, including one that quotes its numbers.
+    foreach ([1, 42, 999999, '1', '42', ' 42 '] as $good) {
+        Assert::null(ApiResource::idProblem($good), var_export($good, true) . ' is a record id');
+    }
+
+    // Null clears a link, which is a real thing to want — "this deal is not
+    // attached to a company any more". The column decides whether it may.
+    Assert::null(ApiResource::idProblem(null));
+});
+
+Harness::test('every foreign key in a writable list is covered by that rule', function (): void {
+    // The rule is by NAME, so this asserts the names really do follow the
+    // convention it depends on — a foreign key called `company` rather than
+    // `company_id` would slip past it silently.
+    $covered   = 0;
+    $uncovered = [];
+
+    foreach (ApiResource::RESOURCES as $name => $definition) {
+        foreach ($definition['writable'] as $field) {
+            if (ApiResource::namesARecord($field)) {
+                $covered++;
+
+                continue;
+            }
+
+            // A field that LOOKS like a reference but is not covered.
+            if (preg_match('/(^|_)(id|ref|key)$/', $field) === 1) {
+                $uncovered[] = $name . '.' . $field;
+            }
+        }
+    }
+
+    Assert::greaterThan(5, $covered, 'the rule should be protecting real foreign keys');
+
+    /*
+     * EMPTY, and that is the assertion. Every writable field that reads like a
+     * reference ends in `_id` and is therefore covered. The helper's two
+     * exemptions — `external_pos_id` and `external_ref`, a foreign system's
+     * own strings, which may be anything at all — turn out not to be writable
+     * through the API at all, so they never reach the rule either way.
+     *
+     * If this ever fails it is naming a foreign key the id rule does not
+     * protect, which is the hole this whole family of bugs came through.
+     */
+    Assert::same([], $uncovered);
+});
+
+Harness::test('writable() refuses a bad id by name, and still writes a good one', function (): void {
+    $contacts = ApiResource::get('contacts') ?? [];
+
+    $result = ApiResource::writable([
+        'first_name'   => 'Dana',
+        'household_id' => true,
+        'company_id'   => 'abc',
+    ], $contacts);
+
+    Assert::same(['first_name' => 'Dana'], $result['data'], 'the good field is kept');
+    Assert::same([], $result['refused']);
+    Assert::hasKey('household_id', $result['invalid']);
+    Assert::hasKey('company_id', $result['invalid']);
+
+    // Normalised to an int, so a downstream `(int)` cast cannot be the thing
+    // that decides anything.
+    $good = ApiResource::writable(['household_id' => ' 42 ', 'company_id' => null], $contacts);
+
+    Assert::same(42, $good['data']['household_id']);
+    Assert::null($good['data']['company_id'], 'null clears the link');
+    Assert::same([], $good['invalid']);
+});

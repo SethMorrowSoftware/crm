@@ -310,10 +310,16 @@ final class ApiController extends Controller
             return Response::json(['error' => 'Send a JSON object.'], 400);
         }
 
-        ['data' => $data, 'refused' => $refused] = ApiResource::writable($input, $definition);
+        ['data' => $data, 'refused' => $refused, 'invalid' => $invalid] = ApiResource::writable($input, $definition);
 
         if ($refused !== []) {
             return $this->refusedFields($refused, $definition);
+        }
+
+        // A field that names another record but is not an id. Reported by
+        // name and reason rather than cast — see ApiResource::writable().
+        if ($invalid !== []) {
+            return $this->invalidFields($invalid);
         }
 
         if ($data === []) {
@@ -386,10 +392,16 @@ final class ApiController extends Controller
             return Response::json(['error' => 'Send a JSON object.'], 400);
         }
 
-        ['data' => $data, 'refused' => $refused] = ApiResource::writable($input, $definition);
+        ['data' => $data, 'refused' => $refused, 'invalid' => $invalid] = ApiResource::writable($input, $definition);
 
         if ($refused !== []) {
             return $this->refusedFields($refused, $definition);
+        }
+
+        // A field that names another record but is not an id. Reported by
+        // name and reason rather than cast — see ApiResource::writable().
+        if ($invalid !== []) {
+            return $this->invalidFields($invalid);
         }
 
         if ($data === []) {
@@ -423,8 +435,33 @@ final class ApiController extends Controller
         $boardMove = null;
 
         if ($name === 'deals' && array_key_exists('pipeline_id', $data)) {
-            $wantedPipeline = (int) $data['pipeline_id'];
-            $currentStage   = (int) ($existing['stage_id'] ?? 0);
+            /*
+             * THE ID OF A BOARD, NOT WHATEVER CASTS TO ONE.
+             *
+             * This read `(int) $data['pipeline_id']` — and review caught that
+             * as the same mistake, in the code written to fix the same
+             * mistake. MEASURED: `null`, `0`, `""`, `false`, `true`, `-3`,
+             * `"abc"` and `[]` each cast to 0 or 1, fell through to "no
+             * pipeline named", and SILENTLY RELOCATED THE DEAL to the first
+             * board's first stage — with a 200 saying so, and a history row
+             * to match. Worse than the stranding it replaced, because a
+             * stranded deal is at least still on the board somebody chose.
+             */
+            $askedFor = $data['pipeline_id'];
+
+            $validId = (is_int($askedFor) && $askedFor > 0)
+                || (is_string($askedFor) && ctype_digit(trim($askedFor)) && (int) trim($askedFor) > 0);
+
+            if (!$validId) {
+                return Response::json([
+                    'error' => 'pipeline_id has to be the id of a pipeline. To take a deal off '
+                        . 'its board entirely, there is nowhere for it to go — a deal lives on one.',
+                ], 422);
+            }
+
+            $wantedPipeline      = (int) trim((string) $askedFor);
+            $data['pipeline_id'] = $wantedPipeline;
+            $currentStage        = (int) ($existing['stage_id'] ?? 0);
 
             $stillFits = $currentStage > 0 && DB::exists(
                 'SELECT id FROM {pipeline_stages} WHERE id = :id AND pipeline_id = :p',
@@ -584,11 +621,26 @@ final class ApiController extends Controller
             return Response::json(['error' => 'Send a JSON object.'], 400);
         }
 
-        $contactId = (int) ($input['contact_id'] ?? 0);
-
-        if ($contactId <= 0) {
+        /*
+         * The same id rule the writable fields get, through the same helper —
+         * this endpoint takes its body raw rather than through
+         * `ApiResource::writable()`, so it has to ask. `(int)` alone turned
+         * `true` into 1, which recorded the visit against whichever guest is
+         * contact 1.
+         */
+        if (!array_key_exists('contact_id', $input) || $input['contact_id'] === null) {
             return Response::json(['error' => 'A visit needs a contact_id.'], 422);
         }
+
+        $problem = ApiResource::idProblem($input['contact_id']);
+
+        if ($problem !== null) {
+            return Response::json([
+                'error' => 'contact_id has to be the id of a contact: ' . $problem . '.',
+            ], 422);
+        }
+
+        $contactId = (int) trim((string) $input['contact_id']);
 
         /*
          * THE CONTACT HAS TO BE ONE THIS TOKEN MAY WRITE TO.
@@ -615,13 +667,46 @@ final class ApiController extends Controller
             return $this->notFoundJson('No contact with that id.');
         }
 
+        /*
+         * AND A `booking_id` IS A RECORD SELECTOR, SO IT IS VALIDATED TOO.
+         *
+         * Found by sweeping this file for the mistake that had already
+         * appeared three times: `(int) $input['booking_id']` turns `true`
+         * into 1, so a visit would be filed against whichever party happens
+         * to be booking 1 — somebody else's. `"abc"` became 0, which
+         * `VisitRecorder` reads as "no booking", so a caller who named a
+         * booking silently got a visit without one. Neither is a number
+         * anybody typed.
+         *
+         * Scoped as well as validated: a booking the caller may not see is
+         * not a booking they may attach a guest's visit to.
+         */
+        $bookingId = null;
+
+        if (array_key_exists('booking_id', $input) && $input['booking_id'] !== null) {
+            $problem = ApiResource::idProblem($input['booking_id']);
+
+            if ($problem !== null) {
+                return Response::json([
+                    'error' => 'booking_id has to be the id of a booking (' . $problem . '). '
+                        . 'Leave it out if the visit was not part of a booked party.',
+                ], 422);
+            }
+
+            $bookingId = (int) trim((string) $input['booking_id']);
+
+            if ($this->findScoped(ApiResource::get('bookings') ?? [], $bookingId, 'view_bookings') === null) {
+                return $this->notFoundJson('No booking with that id.');
+            }
+        }
+
         $result = VisitRecorder::record([
             'contact_id'  => $contactId,
             'visit_date'  => $input['visit_date'] ?? null,
             'source'      => (string) ($input['source'] ?? 'manual'),
             'spend_cents' => (int) ($input['spend_cents'] ?? 0),
             'party_size'  => isset($input['party_size']) ? (int) $input['party_size'] : null,
-            'booking_id'  => isset($input['booking_id']) ? (int) $input['booking_id'] : null,
+            'booking_id'  => $bookingId,
             'external_ref' => $input['external_ref'] ?? null,
         ]);
 
@@ -1006,6 +1091,28 @@ final class ApiController extends Controller
              * board, which is what makes an API-created deal measurable by
              * the velocity report instead of a row with no `stage_entered_at`.
              */
+            /*
+             * Same rule as a board move on PATCH: a pipeline the caller NAMES
+             * has to be an id, and is refused rather than cast. Absent is
+             * different and fine — that is the documented default, the first
+             * board, which is what lets a website form post a lead knowing
+             * nothing about this venue's pipelines.
+             */
+            if (array_key_exists('pipeline_id', $data)) {
+                $askedFor = $data['pipeline_id'];
+
+                $validId = (is_int($askedFor) && $askedFor > 0)
+                    || (is_string($askedFor) && ctype_digit(trim($askedFor)) && (int) trim($askedFor) > 0);
+
+                if (!$validId) {
+                    throw new RuntimeException(
+                        'pipeline_id has to be the id of a pipeline. Leave it out to use the first one.'
+                    );
+                }
+
+                $data['pipeline_id'] = (int) trim((string) $askedFor);
+            }
+
             $pipelineId = (int) ($data['pipeline_id'] ?? 0);
             $stage      = $this->firstStageOf($pipelineId);
 
@@ -1078,6 +1185,12 @@ final class ApiController extends Controller
      * knowledge of this venue's board. Shared by create and by a board move
      * so the two cannot pick differently.
      *
+     * **0 MEANS "THE CALLER NAMED NONE", AND ONLY A CALLER WHO REALLY NAMED
+     * NONE MAY PASS IT.** Both call sites validate the id first, because
+     * reaching here with a 0 that came from casting `null`, `""` or `"abc"`
+     * turns a typo into a silent relocation to a board nobody chose. That was
+     * a measured bug, not a hypothetical one.
+     *
      * @return array<string,mixed>|null
      */
     private function firstStageOf(int $pipelineId): ?array
@@ -1112,6 +1225,32 @@ final class ApiController extends Controller
     }
 
     /** @param list<string> $refused */
+    /**
+     * A field whose value cannot be what it claims to be.
+     *
+     * Separate from `refusedFields()` because it is a different answer to a
+     * different mistake: there the field may not be written at all, here it
+     * may be written but not with that. Both are 422, and both name the
+     * field — a write that silently resolved `true` to record 1 is the bug
+     * this exists to make impossible.
+     *
+     * @param array<string,string> $invalid field => why
+     */
+    private function invalidFields(array $invalid): Response
+    {
+        $parts = [];
+
+        foreach ($invalid as $field => $why) {
+            $parts[] = $field . ' (' . $why . ')';
+        }
+
+        return Response::json([
+            'error'   => 'These fields name another record, so each has to be its id: '
+                . implode(', ', $parts) . '.',
+            'invalid' => $invalid,
+        ], 422);
+    }
+
     private function refusedFields(array $refused, array $definition): Response
     {
         return Response::json([

@@ -420,30 +420,119 @@ final class ApiResource
      * PATCH has no effect: the request succeeded, the response looked right,
      * and the field it cared about was never written.
      *
+     * **AND A FIELD THAT NAMES ANOTHER RECORD HAS TO BE AN ID.** This filtered
+     * WHICH keys could be written and never what shape they were, which is a
+     * different job and the one that was missing. Three separate bugs were
+     * found and fixed one at a time — a stage named by `true` becoming stage
+     * 1, a pipeline named by `null` relocating a deal to the first board, a
+     * booking named by `true` filing a guest's visit against somebody else's
+     * party — before it was clear they were all the same bug: PHP casts
+     * `true` to 1 and `"abc"` to 0, so **any** `*_id` field in any resource
+     * quietly resolved to "record 1" or "no record" and answered 200.
+     *
+     * So it is checked here, once, for every resource and every field anybody
+     * adds later: `*_id` must be a positive integer (or a digit string, which
+     * plenty of JSON clients send), or null where the column allows it. The
+     * caller is told which field, not left to find the wrong row later.
+     *
      * @param array<string,mixed> $input
      * @param array<string,mixed> $definition
-     * @return array{data:array<string,mixed>,refused:list<string>}
+     * @return array{data:array<string,mixed>,refused:list<string>,invalid:array<string,string>}
      */
     public static function writable(array $input, array $definition): array
     {
         $data    = [];
         $refused = [];
+        $invalid = [];
 
         foreach ($input as $key => $value) {
             if (!is_string($key)) {
                 continue;
             }
 
-            if (in_array($key, $definition['writable'], true)) {
-                $data[$key] = $value;
+            if (!in_array($key, $definition['writable'], true)) {
+                $refused[] = $key;
 
                 continue;
             }
 
-            $refused[] = $key;
+            if (self::namesARecord($key)) {
+                $problem = self::idProblem($value);
+
+                if ($problem !== null) {
+                    $invalid[$key] = $problem;
+
+                    continue;
+                }
+
+                $data[$key] = $value === null ? null : (int) trim((string) $value);
+
+                continue;
+            }
+
+            $data[$key] = $value;
         }
 
-        return ['data' => $data, 'refused' => $refused];
+        return ['data' => $data, 'refused' => $refused, 'invalid' => $invalid];
+    }
+
+    /**
+     * Does this field name another record?
+     *
+     * By name, deliberately: every foreign key in this schema ends in `_id`,
+     * and a rule that reads the schema instead would stop protecting a field
+     * the moment somebody added one. `external_ref` and `external_pos_id` are
+     * NOT record references — they are a foreign system's own string, which
+     * may be anything at all.
+     */
+    public static function namesARecord(string $field): bool
+    {
+        if (in_array($field, ['external_pos_id', 'external_ref'], true)) {
+            return false;
+        }
+
+        return str_ends_with($field, '_id');
+    }
+
+    /**
+     * Why this value is not the id of a record, or null when it is one.
+     *
+     * A digit string counts: a JSON client that quotes its numbers is common
+     * and harmless. `true`, `false`, `0`, a negative, a float, an array and a
+     * word do not, and each of them used to mean something.
+     */
+    public static function idProblem(mixed $value): ?string
+    {
+        if ($value === null) {
+            // Clearing a link is a real thing to want — "this deal is no
+            // longer attached to a company". The column decides whether it is
+            // allowed, and the database refuses it if not.
+            return null;
+        }
+
+        if (is_bool($value)) {
+            return 'true and false are not record ids';
+        }
+
+        if (is_int($value)) {
+            return $value > 0 ? null : 'a record id is a positive number';
+        }
+
+        if (is_string($value)) {
+            $trimmed = trim($value);
+
+            if ($trimmed === '') {
+                return 'empty — leave the field out, or send null to clear it';
+            }
+
+            if (!ctype_digit($trimmed)) {
+                return 'not a number';
+            }
+
+            return (int) $trimmed > 0 ? null : 'a record id is a positive number';
+        }
+
+        return 'not a number';
     }
 
     /**

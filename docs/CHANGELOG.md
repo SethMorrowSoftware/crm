@@ -997,6 +997,19 @@ reachable by accident — which is exactly why they needed finding.
   stage of the board it is moving to, through the same transition as any other
   move, with the history row and the events. A pipeline that does not exist is
   refused rather than applied.
+- **A field that names another record now has to be its id — one rule, in one
+  place, instead of a fourth patch.** Three of the fixes above were the same
+  bug wearing different clothes, and it took a third review round to see it:
+  PHP turns `true` into `1` and `"abc"` into `0`, and the API filtered *which*
+  fields a caller could write without ever checking *what shape* they were. So
+  **every** `*_id` field in every resource quietly resolved to "record 1" or
+  "no record" and answered 200 — a deal attached to whichever company happens
+  to be id 1, a guest's visit filed against a stranger's party, a deal
+  relocated to the first board in the list. `ApiResource::writable()` now
+  requires a positive integer, a digit string, or `null` to clear a link, and
+  refuses anything else with a 422 naming the field and the reason. A unit
+  test asserts no writable foreign key escapes the rule, so a field added
+  later is covered the day it is added rather than the day somebody notices.
 - **A stage named by something that is not a name or an id.** `(string) true`
   is `"1"`, which the resolver reads as stage id 1 — the top of the first
   board. So a client whose stage field carried a flag rather than a name moved
