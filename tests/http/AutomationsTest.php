@@ -180,16 +180,17 @@ Harness::test('the list shows every automation, with what starts it', function (
 });
 
 Harness::test('an automation waiting on an unbuilt feature says what it waits for', function () use ($owner): void {
-    // `review.received` is a real moment a venue will want. The reputation
-    // module is what will fire it, and until then the page says so rather
-    // than offering a switch that does nothing.
+    // `ticket.purchased` is a real moment a venue will want. Online
+    // ticketing is what will fire it, and until then the page says so rather
+    // than offering a switch that does nothing. (It used to be
+    // `review.received`, which the reputation module now fires for real.)
     ah_clear();
-    $id = ah_automation('ahttp-pending', 'review.received');
+    $id = ah_automation('ahttp-pending', 'ticket.purchased');
 
     $page = $owner->get('/automations/' . $id);
 
     Assert::same(200, $page['status']);
-    Assert::contains('reputation module', (string) $page['body']);
+    Assert::contains('online ticketing', (string) $page['body']);
     Assert::contains('would do nothing at all', (string) $page['body']);
 
     ah_clear();

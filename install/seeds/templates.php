@@ -490,6 +490,132 @@ return static function (): array {
     ];
 
     /*
+     * FEEDBACK AND REVIEWS.
+     *
+     * The invitation is deliberately the shortest email in this file. It has
+     * one job — get the question tapped — and everything else in it is a
+     * reason not to. There is no "we value your feedback" paragraph, because
+     * the question IS the paragraph.
+     *
+     * The two review REPLIES are not emails at all. They are drafts for a
+     * reply the venue posts on Google or Yelp, which Castle CRM cannot post
+     * for them (that needs each platform's own API, and Google's needs a
+     * verified listing). They live here because this is where the venue's
+     * wording lives, and the reviews page offers them as a starting point.
+     * `category` says what they really are; `channel` is email because that
+     * is the closest thing the column allows.
+     */
+    $templates[] = [
+        'slug'      => 'survey-invitation',
+        'name'      => 'Feedback — the one question',
+        'category'  => 'feedback',
+        'subject'   => 'How did we do, {{first_name}}?',
+        'preheader' => 'One tap, one question. No form to fill in.',
+        'tags'      => ['first_name', 'venue_name', 'survey_link'],
+        'is_system' => false,
+        'body'      => $shell(
+            'One question',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('How likely are you to recommend {{venue_name}} to a friend? It is one '
+                . 'tap, and it goes straight to the management team.'),
+            ['label' => 'Answer in one tap', 'url' => '{{survey_link}}'],
+            'If something went wrong, this is the fastest way to tell us — a manager reads '
+                . 'every low score the same day.'
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'feedback-thanks-promoter',
+        'name'      => 'Feedback — thank a happy guest',
+        'category'  => 'feedback',
+        'subject'   => 'Thank you, {{first_name}}',
+        'preheader' => 'And one small favour, if you have a minute.',
+        'tags'      => ['first_name', 'venue_name', 'review_link'],
+        'is_system' => false,
+        /*
+         * The second ask, for the guest who scored us 9 or 10 and then closed
+         * the tab before clicking the link. {{review_link}} is the SAME
+         * tracked link the thank-you page offered — the automation reads it,
+         * it never mints a new one, so a guest the gate did not ask is not
+         * asked by this either. A run with no link leaves the tag empty and
+         * the step preview says so before anybody sends it.
+         */
+        'body'      => $shell(
+            'Thank you',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('Thank you for the score you left us — it made the team\'s day.')
+            . "\n" . $p('If you have a minute, a few words in public is the most useful thing '
+                . 'anybody can do for {{venue_name}}. Other families read them, and they decide '
+                . 'where to have a birthday.'),
+            ['label' => 'Leave a review', 'url' => '{{review_link}}'],
+            'If you would rather not, that is completely fine — thank you for telling us how '
+                . 'we did either way.'
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'feedback-recovery',
+        'name'      => 'Feedback — after we put it right',
+        'category'  => 'feedback',
+        'subject'   => 'Thank you for talking to us, {{first_name}}',
+        'preheader' => 'Something for your next visit.',
+        'tags'      => ['first_name', 'venue_name', 'owner_name'],
+        'is_system' => false,
+        /*
+         * Sent AFTER a manager has spoken to them and recorded what was
+         * agreed — never automatically on a low score. An apology that
+         * arrives before a person does is worse than no apology, which is
+         * why this hangs off `feedback.resolved` and not `survey.detractor`.
+         */
+        'body'      => $shell(
+            'Thank you for giving us the chance',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('Thank you for telling us what went wrong, and for taking the time to '
+                . 'talk it through. It is how {{venue_name}} gets better, and we would much '
+                . 'rather hear it from you than not hear it at all.')
+            . "\n" . $p('We hope to see you again, and when you come, ask for {{owner_name}}.'),
+            null,
+            'Replies to this email reach us directly.'
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'review-reply-thanks',
+        'name'      => 'Review reply — thank you (draft)',
+        'category'  => 'review-reply',
+        'subject'   => 'Draft reply to a good review',
+        'preheader' => 'A starting point for replying on Google, Yelp or Facebook.',
+        'tags'      => ['author_name', 'venue_name'],
+        'is_system' => false,
+        // Plain text, not the email shell: this is pasted into a review site's
+        // reply box, where markup would appear as markup.
+        'body'      => 'Thank you, {{author_name}} — that is lovely to read, and I have passed it '
+            . 'on to the team who were working that day. We hope to see you back at '
+            . '{{venue_name}} soon.',
+    ];
+
+    $templates[] = [
+        'slug'      => 'review-reply-apology',
+        'name'      => 'Review reply — put it right (draft)',
+        'category'  => 'review-reply',
+        'subject'   => 'Draft reply to a poor review',
+        'preheader' => 'A starting point for replying on Google, Yelp or Facebook.',
+        'tags'      => ['author_name', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        /*
+         * Three things this draft does on purpose, because a bad public reply
+         * costs more than the review did: it does not argue, it does not ask
+         * the reviewer to take the review down, and it moves the
+         * conversation off the public page by offering a phone number. Anyone
+         * reading the thread later sees a venue that answered.
+         */
+        'body'      => 'I am sorry, {{author_name}} — that is not the visit we wanted you to have, '
+            . 'and I would like to put it right. Please call me on {{venue_phone}} and ask for '
+            . 'the manager on duty. Thank you for telling us; it is how {{venue_name}} gets '
+            . 'better.',
+    ];
+
+    /*
      * THE TEXTS. Separate from the list above because a text is a different
      * medium, not a shorter email.
      *
@@ -588,6 +714,32 @@ return static function (): array {
             'body'     => 'We have missed you at {{venue_name}}, {{first_name}}. Show this text '
                 . 'for a free game on your next visit. Reply STOP to opt out.',
             'tags'     => ['first_name', 'venue_name'],
+        ],
+        [
+            /*
+             * The invitation as a text, for venues whose guests answer a text
+             * and ignore an email. It is MARKETING, so it carries the opt-out
+             * and consent applies — a survey is not something a guest needs
+             * in order to use a booking they have already made, and sending
+             * it as transactional would reach somebody who has opted out.
+             *
+             * NO FIRST NAME, which is unusual here and is arithmetic rather
+             * than style. The link is the venue's own domain plus a
+             * 32-character token — around 69 characters on a real install —
+             * and the opt-out costs 23 more. With a greeting as well, a venue
+             * whose name and domain are both long spills into a second
+             * segment and every send costs double. The venue's NAME stays,
+             * because a marketing text has to identify who it is from.
+             * Measured by the seed test with a long name and a full-length
+             * link rather than taken on trust.
+             */
+            'slug'     => 'survey-invitation-sms',
+            'name'     => 'Feedback request - text',
+            'category' => 'feedback',
+            'kind'     => 'marketing',
+            'body'     => 'How did we do at {{venue_name}}? One tap: {{survey_link}} '
+                . 'Reply STOP to opt out.',
+            'tags'     => ['venue_name', 'survey_link'],
         ],
     ];
 

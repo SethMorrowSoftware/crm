@@ -163,7 +163,7 @@ jobs:
           php tests/run.php \
             --require-db \
             --require-http \
-            --min-tests=1100 \
+            --min-tests=1400 \
             --junit=tests/junit.xml
 
       - name: Show the application log on failure

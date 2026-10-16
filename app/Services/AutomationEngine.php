@@ -62,6 +62,10 @@ final class AutomationEngine
         'remove_tag'      => ['label' => 'Remove a tag',             'needs' => ['tag']],
         'move_deal_stage' => ['label' => 'Move the deal',            'needs' => ['stage']],
         'issue_coupon'    => ['label' => 'Issue a coupon',           'needs' => ['code']],
+        // `survey` is optional: with none named the feedback module picks the
+        // one whose own trigger matches what the run is about, so "ask them
+        // how it went" in a party sequence needs no configuration at all.
+        'send_survey'     => ['label' => 'Ask them for feedback',    'needs' => []],
         'webhook'         => ['label' => 'Call a webhook',           'needs' => ['url']],
         'condition'       => ['label' => 'Branch on a condition',    'needs' => ['rules']],
         'split_test'      => ['label' => 'Split the audience',       'needs' => ['percent']],
@@ -913,6 +917,10 @@ final class AutomationEngine
             'remove_tag'      => 'remove the tag "' . (string) ($config['tag'] ?? '') . '"',
             'move_deal_stage' => 'move the deal to ' . (string) ($config['stage'] ?? 'another stage'),
             'issue_coupon'    => 'issue the coupon ' . (string) ($config['code'] ?? ''),
+            'send_survey'     => 'ask them for feedback'
+                                    . (((string) ($config['survey'] ?? '')) === ''
+                                        ? ''
+                                        : ' ("' . (string) $config['survey'] . '")'),
             'webhook'         => 'POST to ' . (string) ($config['url'] ?? 'a URL'),
             'condition'       => 'check whether ' . self::describe($config['rules'] ?? []),
             'split_test'      => 'send ' . (int) ($config['percent'] ?? 50) . '% down one path',

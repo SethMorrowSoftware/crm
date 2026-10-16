@@ -102,7 +102,58 @@ final class TaskController extends Controller
         'deal'      => ['Deal', '/deals/'],
         'quote'     => ['Quote', '/quotes/'],
         'household' => ['Household', '/households/'],
+        'booking'   => ['Booking', '/bookings/'],
+        'feedback'  => ['Guest feedback', '/reputation/feedback/'],
     ];
+
+    /**
+     * The plural table names other modules use for the same records.
+     *
+     * The keys above are SINGULAR, and the automation engine carries its
+     * subject as `entity_type` in the PLURAL, because there it names a table:
+     * a run about a party has `entity_type` "bookings". So a task raised by an
+     * automation was stored with a type this allow-list does not contain, and
+     * `entityLink()` quietly returned null — a task saying "chase the deposit
+     * for this party" with no way to reach the party. MEASURED on the
+     * seeded playbooks: every task-creating step produced one.
+     *
+     * Mapped rather than renamed on one side, because both spellings are
+     * right where they are, and a migration of stored rows would be a lot of
+     * risk for a cosmetic consistency.
+     *
+     * @var array<string,string>
+     */
+    private const PLURALS = [
+        'contacts'   => 'contact',
+        'deals'      => 'deal',
+        'quotes'     => 'quote',
+        'households' => 'household',
+        'bookings'   => 'booking',
+    ];
+
+    /**
+     * The canonical entity type for a stored value, or null if it is not one.
+     *
+     * Only types whose id means the SAME RECORD are mapped. `visits` is not
+     * here on purpose: a run about a visit carries the visit's id, and
+     * mapping it to the guest's page would point at whichever contact happens
+     * to share that number — a confidently wrong link, which is worse than
+     * the missing one it would replace.
+     */
+    public static function normalizeEntity(?string $type): ?string
+    {
+        $type = strtolower(trim((string) $type));
+
+        if ($type === '') {
+            return null;
+        }
+
+        if (isset(self::ENTITIES[$type])) {
+            return $type;
+        }
+
+        return self::PLURALS[$type] ?? null;
+    }
 
     /** When a due date is given with no time, the task is due by end of the venue's day. */
     private const DEFAULT_DUE_TIME = '23:59';
@@ -905,6 +956,11 @@ final class TaskController extends Controller
                 'SELECT id FROM {households} WHERE id = :id AND deleted_at IS NULL',
                 ['id' => $id]
             ),
+            'booking' => DB::exists(
+                'SELECT id FROM {bookings} WHERE id = :id AND deleted_at IS NULL',
+                ['id' => $id]
+            ),
+            'feedback' => DB::exists('SELECT id FROM {survey_responses} WHERE id = :id', ['id' => $id]),
             default => false,
         };
     }
@@ -1061,10 +1117,12 @@ final class TaskController extends Controller
      */
     private function entityLink(array $task): ?array
     {
-        $type = (string) ($task['entity_type'] ?? '');
+        // Through the normaliser, so a task stored with a plural type by the
+        // automation engine still finds its record. See PLURALS.
+        $type = self::normalizeEntity((string) ($task['entity_type'] ?? ''));
         $id   = (int) ($task['entity_id'] ?? 0);
 
-        if ($id <= 0 || !isset(self::ENTITIES[$type])) {
+        if ($id <= 0 || $type === null) {
             return null;
         }
 
@@ -1079,6 +1137,17 @@ final class TaskController extends Controller
             'deal' => (string) DB::value('SELECT title FROM {deals} WHERE id = :id', ['id' => $id]),
             'quote' => (string) DB::value('SELECT number FROM {quotes} WHERE id = :id', ['id' => $id]),
             'household' => (string) DB::value('SELECT name FROM {households} WHERE id = :id', ['id' => $id]),
+            'booking' => (string) DB::value(
+                'SELECT booking_number FROM {bookings} WHERE id = :id',
+                ['id' => $id]
+            ),
+            'feedback' => trim((string) DB::value(
+                "SELECT CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))
+                   FROM {survey_responses} r
+                   LEFT JOIN {contacts} c ON c.id = r.contact_id
+                  WHERE r.id = :id",
+                ['id' => $id]
+            )),
             default => '',
         };
 

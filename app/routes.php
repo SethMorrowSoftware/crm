@@ -81,6 +81,27 @@ $router->post('/f/{slug:[a-z0-9-]+}', ['FormController', 'submit'], ['csrf', 'th
 $router->get('/text-club/join', ['TextClubController', 'publicForm'], ['throttle:120,5'], 'textclub.public');
 $router->post('/text-club/join', ['TextClubController', 'publicJoin'], ['csrf', 'throttle:10,10']);
 
+// Feedback, from a link in an email or a text. No login: this is a parent on
+// their phone the morning after a party, and the token in the path is the
+// whole of the authorisation — which is why every one of these pages is
+// noindex and uncached (see PublicFeedbackController).
+//
+// `/s/{token}` is the question. The POST is CSRF-protected on the same terms
+// as the party enquiry: rendering the page mints a token into the visitor's
+// own session. Throttled gently on the GET (a guest may reload) and harder on
+// the POST, which writes.
+//
+// `/r/{token}` is a promoter clicking through to leave a public review. It
+// redirects to the venue's OWN configured link for that platform, never to
+// anything in the request, so it cannot be turned into an open redirect.
+//
+// `/reviews` is the review wall, and it is the one public page here that
+// SHOULD be indexed and framed — the venue embeds it on their website.
+$router->get('/s/{token:[a-f0-9]{32}}', ['PublicFeedbackController', 'survey'], ['throttle:60,5'], 'survey.public');
+$router->post('/s/{token:[a-f0-9]{32}}', ['PublicFeedbackController', 'submit'], ['csrf', 'throttle:20,10']);
+$router->get('/r/{token:[a-f0-9]{32}}', ['PublicFeedbackController', 'reviewClick'], ['throttle:60,5'], 'review.click');
+$router->get('/reviews', ['PublicFeedbackController', 'wall'], ['throttle:240,5'], 'reviews.wall');
+
 // ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
@@ -638,7 +659,36 @@ $router->group('/text-club', ['auth', 'can:view_marketing'], function ($router):
     $router->post('/send', ['TextClubController', 'sendOffer'], ['csrf', 'can:campaigns_send']);
 });
 
+// ---------------------------------------------------------------------------
+// Feedback and reviews
+//
+// Reading is `view_reputation`. The two writes are separate permissions that
+// already exist in the catalogue, and the split is the point: `reviews_respond`
+// is writing something the public will read, while `feedback_resolve` is
+// closing a complaint — a manager's decision about a guest who is owed
+// something. Configuring it is `settings`, because the "who gets asked for a
+// review" switch is a policy choice about the venue's public reputation.
+// ---------------------------------------------------------------------------
+
+$router->group('/reputation', ['auth', 'can:view_reputation'], function ($router): void {
+    $router->get('', ['ReputationController', 'index'], [], 'reputation');
+
+    $router->get('/feedback', ['ReputationController', 'responses'], [], 'reputation.feedback');
+    $router->get('/feedback/{id:\d+}', ['ReputationController', 'showResponse'], [], 'reputation.feedback.show');
+    $router->post('/feedback/{id:\d+}/resolve', ['ReputationController', 'resolve'], ['csrf', 'can:feedback_resolve']);
+
+    $router->get('/reviews', ['ReputationController', 'reviews'], [], 'reputation.reviews');
+    $router->post('/reviews/import', ['ReputationController', 'import'], ['csrf', 'can:reviews_respond']);
+    $router->post('/reviews/{id:\d+}/reply', ['ReputationController', 'reply'], ['csrf', 'can:reviews_respond']);
+    $router->post('/reviews/{id:\d+}/feature', ['ReputationController', 'feature'], ['csrf', 'can:reviews_respond']);
+
+    $router->get('/requests', ['ReputationController', 'requests'], [], 'reputation.requests');
+
+    $router->get('/surveys', ['ReputationController', 'surveys'], [], 'reputation.surveys');
+    $router->post('/surveys/{id:\d+}', ['ReputationController', 'saveSurvey'], ['csrf', 'can:settings']);
+    $router->post('/settings', ['ReputationController', 'saveSettings'], ['csrf', 'can:settings']);
+});
+
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
-$router->get('/reputation', ['PlaceholderController', 'reputation'], ['auth', 'can:view_reputation'], 'reputation');
 $router->get('/memberships', ['PlaceholderController', 'memberships'], ['auth', 'can:view_memberships'], 'memberships');
 $router->get('/reports', ['PlaceholderController', 'reports'], ['auth', 'can:view_reports'], 'reports');

@@ -34,13 +34,13 @@ handoffs:
 | 2 | Contacts, households, pipelines, deals, quotes, forms, tasks | ✅ |
 | 3 | Bookings: availability, packages, run sheets, waivers, check-in | ✅ |
 | 4 | Email and SMS, inbox, segments, campaigns, Text Club | ✅ |
-| 5 | The automation engine and the 112 seeded automations | done |
-| 6 | Reputation, memberships, the reporting suite | |
+| 5 | The automation engine and the 112 seeded automations | ✅ |
+| 6 | Reputation, memberships, the reporting suite | reputation ✅ |
 | 7 | CenterEdge import, Google Business Profile, webhooks, REST API | |
 | 8 | Hardening: security review, accessibility audit, load test, backup/restore | |
 
-Phases 1 to 4 are verified end to end against real MySQL 8.0, MariaDB 10.11 and MySQL
-5.7: **1,129 tests** plus a full installer walk-through. See
+Everything shipped so far is verified end to end against real MySQL 8.0, MariaDB 10.11
+and MySQL 5.7: **1,419 tests** plus a full installer walk-through. See
 [docs/TESTING.md](docs/TESTING.md).
 
 ## Install

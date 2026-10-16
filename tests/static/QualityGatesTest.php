@@ -251,6 +251,23 @@ Harness::test('every authenticated non-API route requires auth', function (): vo
         // NUMBER, CSRF-protected, and it grants no consent by itself — the
         // confirmation text does that.
         '/text-club/join',
+        // Feedback, from a link in an email. A parent answering one question
+        // the morning after a party has no account and never will, so the
+        // 32-character token in the path is the authorisation — the same
+        // arrangement as the waiver and the quote above. Both pages are
+        // noindex and uncached, the POST is CSRF-protected, and both are
+        // throttled.
+        '/s/',
+        // The review click-through. It redirects to the venue's OWN
+        // configured link for that platform and never to anything in the
+        // request, so there is nothing here an attacker could aim.
+        '/r/',
+        // The public review wall: the one page in this application that is
+        // MEANT to be found, cached and framed, because it is the venue's own
+        // marketing on their own website. It reads featured reviews and
+        // nothing else — no token, no guest data, no query the visitor
+        // controls.
+        '/reviews',
     ];
 
     $offenders = [];

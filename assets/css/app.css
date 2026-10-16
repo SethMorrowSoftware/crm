@@ -1101,6 +1101,157 @@ ul.checks li:last-child { border-bottom: 0; }
     .step-actions, .step-edit { padding-left: 0; }
 }
 
+/* ------------------------------------------------------------- Reputation */
+
+/* A definition list written as bare dt/dd pairs rather than with the wrapper
+   div `.definition-list > div` expects. Both spellings read the same, so both
+   get the same separators instead of one of them quietly losing them. */
+.definition-list > dd { padding-bottom: .6rem; border-bottom: 1px solid var(--line); margin-bottom: .6rem; }
+.definition-list > dd:last-child { border-bottom: 0; margin-bottom: 0; }
+
+/* Stars. The off state is a real element rather than a lighter colour on the
+   same glyphs, so the rating is legible at a glance and still readable by a
+   screen reader through the aria-label on the wrapper. --faint clears 4.5:1,
+   which matters because these ARE the content on the review wall. */
+.rating { color: #b8860b; letter-spacing: .05em; white-space: nowrap; }
+.rating-off { color: var(--line-strong); }
+.rating-lg { font-size: 1.3rem; }
+
+.is-overdue td { background: var(--bad-bg); }
+
+/* Chips: a filter bar of links, one of them current. */
+.chip-bar { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: var(--gap); }
+
+.chip {
+    display: inline-flex; align-items: center; gap: .35rem;
+    padding: .3rem .7rem; border-radius: 999px;
+    border: 1px solid var(--field-border); background: var(--panel);
+    font-size: .82rem; font-weight: 600; color: var(--ink-soft);
+}
+.chip:hover { background: var(--bg); text-decoration: none; color: var(--ink); }
+.chip.is-on { background: var(--brand); border-color: var(--brand); color: var(--on-accent); }
+.chip-count { font-size: .74rem; opacity: .75; font-variant-numeric: tabular-nums; }
+
+/* A review, in the inbox and on the wall. */
+.review-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .9rem; }
+
+.review-item {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: .85rem 1rem; background: var(--panel-soft);
+}
+.review-item > p { margin: .4rem 0 .6rem; }
+
+.review-meta { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; font-size: .86rem; }
+
+.review-reply {
+    margin: .5rem 0 0; padding: .6rem .85rem;
+    border-left: 3px solid var(--brand); background: var(--panel);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.review-reply p { margin: 0 0 .25rem; font-size: .88rem; }
+.review-reply footer { font-size: .78rem; }
+
+.review-actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.review-actions form { margin: 0; }
+
+.review-write { margin-top: .6rem; }
+.review-write > summary { cursor: pointer; font-size: .85rem; font-weight: 600; color: var(--brand); }
+
+/* The NPS chart: one stacked column per day or week. No library, no canvas —
+   three divs whose heights are percentages of the day's answers. */
+.nps-chart {
+    display: flex; align-items: flex-end; gap: .25rem;
+    overflow-x: auto; padding: .5rem 0 0;
+}
+
+.nps-col { display: grid; gap: .2rem; justify-items: center; min-width: 2.1rem; }
+
+.nps-bar {
+    display: flex; flex-direction: column-reverse; justify-content: flex-start;
+    width: 1.5rem; height: 7rem;
+    background: var(--bg); border-radius: var(--radius-sm); overflow: hidden;
+}
+
+.nps-seg { display: block; width: 100%; }
+.nps-promoter  { background: var(--ok); }
+.nps-passive   { background: var(--warn); }
+.nps-detractor { background: var(--bad); }
+
+.nps-score { font-size: .8rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.nps-label { font-size: .68rem; color: var(--faint); white-space: nowrap; }
+
+/* One settings block per survey. */
+.setting-block { padding: .9rem 0; border-bottom: 1px solid var(--line); }
+.setting-block:last-child { border-bottom: 0; }
+.setting-block h3 { margin: 0 0 .2rem; font-size: 1rem; }
+
+.inline-weight { display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem; color: var(--muted); }
+.inline-weight input { width: 4.5rem; }
+
+/* ------------------------------------------- The guest's feedback page */
+
+/* Tap targets first: this is answered on a phone, one-handed, by somebody
+   who is doing something else. Every button clears 44px in both directions
+   even at the 0-10 scale's eleven columns. */
+.survey-form { margin: 1.25rem 0 0; }
+.survey-scale { border: 0; margin: 0; padding: 0; }
+
+.survey-buttons {
+    display: grid; gap: .4rem;
+    grid-template-columns: repeat(auto-fit, minmax(2.75rem, 1fr));
+}
+
+/* Six across on a phone, so the eleven answers of an NPS scale fall as 0-5
+   and 6-10 rather than 0-4, 5-9 and a lone 10 on a third row — MEASURED at
+   390px, where auto-fit chose five and the "Extremely likely" label ended up
+   over empty space. */
+@media (max-width: 30rem) {
+    .survey-buttons { grid-template-columns: repeat(6, 1fr); }
+    .survey-btn { padding: .5rem .1rem; }
+}
+
+.survey-btn {
+    min-height: 2.9rem; padding: .5rem .2rem;
+    font-size: 1rem; font-weight: 700;
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--field-border); border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+.survey-btn:hover { background: var(--brand-light); border-color: var(--brand); }
+.survey-btn:focus-visible { outline: 3px solid var(--brand-ring); outline-offset: 2px; }
+
+.survey-buttons.is-stars { grid-template-columns: 1fr; }
+.survey-buttons.is-stars .survey-btn { color: #b8860b; font-size: 1.15rem; letter-spacing: .1em; }
+
+.survey-ends {
+    display: flex; justify-content: space-between; gap: 1rem;
+    margin-top: .45rem; font-size: .76rem; color: var(--muted);
+}
+
+.survey-cta { margin: 1.25rem 0; }
+.btn-lg { padding: .7rem 1.2rem; font-size: 1rem; }
+.survey-comment { margin-top: 1.25rem; }
+
+/* ------------------------------------------------- The public review wall */
+
+.review-wall-head { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; font-size: .9rem; }
+
+.review-wall-list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: 1rem; }
+@media (min-width: 48rem) { .review-wall-list { grid-template-columns: 1fr 1fr; } }
+
+.review-wall-item {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 1rem; background: var(--panel);
+}
+.review-wall-item blockquote { margin: .5rem 0; }
+.review-wall-item blockquote p { margin: 0; }
+.review-wall-item footer { font-size: .82rem; display: flex; flex-wrap: wrap; gap: .4rem; }
+
+/* The embed layout: transparent, so the widget takes the colour of the page
+   it is dropped into rather than painting a white box on a dark site. */
+body.embed { background: transparent; padding: 0; }
+body.embed .review-wall { padding: .25rem; }
+
 /* ------------------------------------------------------------------ Print */
 
 @media print {

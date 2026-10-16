@@ -111,6 +111,7 @@ $stats = [
     'club_sends'     => 0,
     'auto_steps'     => 0,
     'auto_scanned'   => 0,
+    'surveys'        => 0,
     'maintenance' => 0,
     'errors'      => 0,
 ];
@@ -130,10 +131,12 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Advance waiting automation runs
+// 2. Count what is due, for the log
 //
-// Phase 5 implements the engine. Until then the query is harmless and proves
-// the wiring, so the cron line can be set up on day one and verified.
+// The engine itself runs at step 7. This is one indexed count, printed so the
+// tick's own log line says how much work was waiting BEFORE it started —
+// which is the figure you want when a venue says "automations seem slow":
+// the difference between 4 due and 4,000 due is the whole diagnosis.
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft()) {
@@ -145,10 +148,6 @@ if ($budgetLeft()) {
         );
 
         $stats['automations'] = $due;
-
-        if ($due > 0) {
-            cron_out('  ' . $due . ' automation run(s) due — engine arrives in Phase 5.');
-        }
     } catch (Throwable $e) {
         $stats['errors']++;
         Log::error('Cron: automation sweep failed', ['error' => $e->getMessage()]);
@@ -347,7 +346,37 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Nightly maintenance — once a day, not every minute
+// 8. Ask the guests whose turn it is for feedback
+//
+// Two halves in one pass: write a row for every party or visit that has just
+// crossed its survey delay, then attempt every invitation not yet sent. The
+// row comes FIRST and is the de-duplication record, so a guest cannot be
+// asked twice — and it is also the work item, so an invitation refused for a
+// reason that will pass (quiet hours) is tried again next tick rather than
+// lost. See ReputationController's class comment.
+//
+// Bounded three ways: the lookback window (a venue switching feedback on must
+// not email twenty years of guests), the per-tick batch, and this budget.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $invited = App\Services\Feedback::dispatchDue($budgetLeft);
+
+        $stats['surveys'] = $invited;
+
+        if ($invited > 0) {
+            cron_out('  ' . $invited . ' feedback invitation(s) sent.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: feedback invitations failed', ['error' => $e->getMessage()]);
+        cron_out('  ! feedback invitations: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 9. Nightly maintenance — once a day, not every minute
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft() && cron_shouldRunDaily()) {
@@ -363,7 +392,7 @@ if ($budgetLeft() && cron_shouldRunDaily()) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Heartbeat
+// 10. Heartbeat
 // ---------------------------------------------------------------------------
 
 Settings::set('system.cron_last_run', gmdate('Y-m-d H:i:s'));
@@ -380,7 +409,7 @@ $elapsed = round(microtime(true) - CC_START, 2);
 cron_out(sprintf(
     'Done in %ss. Jobs: %d, automations due: %d, conversations woken: %d, '
         . 'campaign messages: %d, Text Club offers: %d, automations started: %d, '
-        . 'automation steps: %d, maintenance tasks: %d, errors: %d.',
+        . 'automation steps: %d, feedback asks: %d, maintenance tasks: %d, errors: %d.',
     $elapsed,
     $stats['jobs'],
     $stats['automations'],
@@ -389,6 +418,7 @@ cron_out(sprintf(
     $stats['club_sends'],
     $stats['auto_scanned'],
     $stats['auto_steps'],
+    $stats['surveys'],
     $stats['maintenance'],
     $stats['errors']
 ));

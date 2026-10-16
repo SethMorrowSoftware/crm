@@ -114,6 +114,9 @@ function test_boot(bool $fresh = false): bool
     // Mirrors the installer, which runs this seed unconditionally: the
     // password-reset path resolves a template by slug and fails without it.
     (require CC_ROOT . '/install/seeds/templates.php')();
+    // Also unconditional in the installer: survey_responses.survey_id is a
+    // non-null foreign key, so the reputation module needs a survey to exist.
+    (require CC_ROOT . '/install/seeds/surveys.php')();
 
     Settings::load(true);
 

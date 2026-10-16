@@ -529,6 +529,7 @@ final class AutomationRunner
                 'move_deal_stage' => self::moveDeal($config, $run, $ok, $failed),
                 'issue_coupon'    => self::issueCoupon($config, $run, $ok, $failed),
                 'webhook'         => self::callWebhook($config, $run, $subject, $automation, $ok, $failed),
+                'send_survey'     => $ok(self::sendSurvey($config, $run)),
 
                 // Not yet built. Recorded as SKIPPED with the reason rather
                 // than silently treated as done: a venue whose automation
@@ -716,6 +717,52 @@ final class AutomationRunner
         Event::fire('task.created', ['task_id' => $taskId, 'from_automation' => true]);
 
         return ['task_id' => $taskId];
+    }
+
+    /**
+     * Ask this guest how it went.
+     *
+     * The reputation module owns the invitation — the token, the row, the
+     * de-duplication and the send all live there, and nothing about a survey
+     * link should be assembled in two places. This step is the hand-off, so a
+     * venue can make the ask conditional (only parties over twenty, only once
+     * the balance is paid) instead of taking the module's fixed delay.
+     *
+     * Every outcome is a SKIP with its reason rather than a failure. "They
+     * have already been asked" and "they have had a message this fortnight"
+     * are the system working, and failing the run would stop the steps after
+     * this one.
+     *
+     * @param array<string,mixed> $config
+     * @param array<string,mixed> $run
+     * @return array<string,mixed>
+     */
+    private static function sendSurvey(array $config, array $run): array
+    {
+        $entityType = (string) ($run['entity_type'] ?? '');
+        $entityId   = (int) ($run['entity_id'] ?? 0);
+
+        $result = Feedback::inviteFor([
+            'survey'     => $config['survey'] ?? null,
+            'contact_id' => $run['contact_id'] === null ? null : (int) $run['contact_id'],
+            'booking_id' => $entityType === 'bookings' ? $entityId : null,
+            'visit_id'   => $entityType === 'visits' ? $entityId : null,
+        ]);
+
+        if ($result['sent']) {
+            return ['asked' => true, 'survey_response_id' => $result['response_id']];
+        }
+
+        return ['skipped' => match ($result['reason']) {
+            'no_contact'     => 'there is no guest on this run to ask',
+            'no_survey'      => 'no survey exists to send — set one up on the Reputation page',
+            'already_asked'  => 'they have already been asked about this',
+            'asked_recently' => 'they were asked for feedback within the last fortnight',
+            'no_address'     => 'there is no email address on file for them',
+            'no_number'      => 'there is no mobile number on file for them',
+            'quiet_hours'    => 'it is outside the hours this venue sends — it will go later',
+            default          => 'the invitation was not sent: ' . $result['reason'],
+        }];
     }
 
     /** @param array<string,mixed> $config */
@@ -1781,6 +1828,48 @@ final class AutomationRunner
 
         if ($balance !== null && (int) $balance > 0) {
             $tags['balance_due'] = money((int) $balance);
+        }
+
+        /*
+         * WHAT THEY SAID ABOUT US, when the run is about a survey answer.
+         *
+         * `survey.responded` carries the score and the band in its payload,
+         * which the subject exposes as `event_*`. A sequence that thanks a
+         * promoter wants to be able to say the number.
+         */
+        foreach (['score' => 'event_score', 'sentiment' => 'event_sentiment'] as $tag => $key) {
+            $value = trim((string) ($subject[$key] ?? ''));
+
+            if ($value !== '') {
+                $tags[$tag] = $value;
+            }
+        }
+
+        /*
+         * THE REVIEW LINK, for a sequence following up on a promoter who
+         * closed the tab before clicking it.
+         *
+         * Read, never created: the ask itself is made by `Feedback::record()`
+         * at the moment the guest answers, and a merge tag that could MINT
+         * one would mean a template deciding who gets asked for a review. So
+         * a run whose guest was not asked simply has no link, and
+         * `missingTags()` reports the gap rather than the template printing a
+         * dead URL.
+         */
+        $responseId = (int) ($subject['event_survey_response_id'] ?? 0);
+
+        if ($responseId > 0) {
+            $token = DB::value(
+                "SELECT token FROM {review_requests}
+                  WHERE survey_response_id = :id AND token IS NOT NULL
+                    AND status IN ('pending', 'sent', 'clicked')
+                  ORDER BY id DESC LIMIT 1",
+                ['id' => $responseId]
+            );
+
+            if ($token !== null && (string) $token !== '') {
+                $tags['review_link'] = Mailer::absoluteUrl('/r/' . (string) $token);
+            }
         }
 
         return $tags;

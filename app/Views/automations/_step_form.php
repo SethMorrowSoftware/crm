@@ -194,6 +194,18 @@ $parents = array_values(array_filter(
         </p>
     </div>
 
+    <div class="field" data-for="send_survey">
+        <label for="survey-<?= e((string) ($step['id'] ?? 'new')) ?>">Survey (optional)</label>
+        <input type="text" id="survey-<?= e((string) ($step['id'] ?? 'new')) ?>" name="config_survey"
+               value="<?= e($value('survey')) ?>" maxlength="120">
+        <p class="form-hint">
+            By name, as it appears on the Reputation page. Leave it blank and the survey whose own
+            trigger matches this sequence is used. The invitation carries a one-use link and is
+            never sent twice: if the survey is also switched on there, whichever gets there first
+            wins and this step reports that they had already been asked.
+        </p>
+    </div>
+
     <div class="field" data-for="webhook">
         <label for="url-<?= e((string) ($step['id'] ?? 'new')) ?>">URL</label>
         <input type="url" id="url-<?= e((string) ($step['id'] ?? 'new')) ?>" name="config_url"

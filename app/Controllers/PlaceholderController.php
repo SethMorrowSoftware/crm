@@ -32,15 +32,11 @@ final class PlaceholderController extends Controller
         ], 'SMS needs a registered 10DLC brand, which carries a 2–4 week carrier lead time.');
     }
 
-    public function reputation(Request $request): Response
-    {
-        return $this->placeholder('Reputation', 6, 'reputation', [
-            'Post-visit feedback with a promoter / detractor split',
-            'Happy guests routed to Google; unhappy ones routed to a manager',
-            'Review inbox with reply drafting',
-            'An embeddable review wall for the website',
-        ], 'A low score never produces a public review request — it produces a manager alert.');
-    }
+    // Reputation was a placeholder until Phase 6. It is now
+    // `ReputationController`, and its method is gone from here rather than
+    // left behind pointing at a page that exists — an unreachable "coming
+    // soon" for a module that shipped is the sort of thing that survives
+    // three releases.
 
     public function memberships(Request $request): Response
     {

@@ -612,18 +612,171 @@ return static function (): array {
                 . 'review wall for your website.',
             'tailor'  => 'Which review platforms you want to grow, who owns a complaint, and what '
                 . 'you are willing to offer to put a bad visit right.',
+            /*
+             * THE FEEDBACK MODULE OWNS THE QUESTION, not these sequences.
+             *
+             * The invitation carries a one-use token, it must be written
+             * before it is sent, and it must never go twice — so
+             * `Services\Feedback` creates and sends it, and the Reputation
+             * settings page is where a venue switches it on. These sequences
+             * hand off to it through the `send_survey` step, which is the
+             * same code path the nightly sweep uses and shares its
+             * de-duplication: with the survey also triggered, whichever gets
+             * there first wins and the other reports "already asked".
+             *
+             * That is why "ask for feedback" appears both here and on the
+             * settings page without the guest being asked twice, and it is
+             * also why a venue who wants the ask to depend on something — only
+             * parties over twenty, only once the balance is paid — sets the
+             * survey's own trigger to "never" and uses the sequence.
+             */
             'automations' => [
-                ['Post-visit feedback request', 'booking.completed', 'Twenty hours after a party, ask the one question that predicts a review.'],
-                ['Promoter — ask for the review', 'survey.responded', 'A 9 or 10 gets a thank-you and a direct link, rotating across platforms.'],
-                ['Passive — ask what was missing', 'survey.responded', 'A 7 or 8 gets an open question instead of a review ask.'],
-                ['Detractor — escalate immediately', 'survey.detractor', 'No review ask. A manager alert by email, text and in-app, plus a task with a four-hour deadline.'],
-                ['Detractor resolved — recovery offer', 'feedback.resolved', 'Once a manager has resolved it, send the agreed goodwill offer.'],
-                ['Unresolved complaint escalation', 'task.overdue', 'If a detractor task passes its deadline, escalate to the general manager.'],
-                ['New low review alert', 'review.received', 'A public review of three stars or fewer pages a manager at once.'],
-                ['Review reply reminder', 'review.received', 'Task someone to reply to any new review within two days.'],
-                ['Positive review — thank and feature', 'review.received', 'Thank a five-star reviewer and flag the review for the website wall.'],
-                ['Visit feedback for non-party guests', 'visit.recorded', 'Ask ordinary visitors for feedback too, not just party hosts.'],
-                ['Monthly reputation digest', 'cron', 'Email managers the rating trend, new reviews and unresolved complaints.'],
+                [
+                    'Post-visit feedback request',
+                    'booking.completed',
+                    'Twenty hours after a party, ask the one question that predicts a review.',
+                    [
+                        // Twenty hours, from the party being marked complete.
+                        // The module's own sweep measures the same delay from
+                        // the END of the event; this is the sequence's
+                        // version of the same intention.
+                        ['type' => 'send_survey', 'survey' => 'After a party', 'wait' => 1200],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Promoter — ask for the review',
+                    'survey.responded',
+                    'A 9 or 10 gets a thank-you and the review link again, in case they closed the tab.',
+                    [
+                        // The gate has already decided and already offered
+                        // the link on the page. This is the second ask, a day
+                        // later, for the guest who meant to and forgot.
+                        ['type' => 'condition', 'field' => 'event_sentiment', 'op' => 'is', 'value' => 'promoter'],
+                        ['type' => 'add_tag', 'branch' => 'yes', 'tag' => 'promoter'],
+                        ['type' => 'send_email', 'branch' => 'yes',
+                         'template' => 'feedback-thanks-promoter', 'wait' => 1440],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Passive — ask what was missing',
+                    'survey.responded',
+                    'A 7 or 8 gets a person asking what would have made it a ten. No review ask.',
+                    [
+                        ['type' => 'condition', 'field' => 'event_sentiment', 'op' => 'is', 'value' => 'passive'],
+                        ['type' => 'create_task', 'branch' => 'yes',
+                         'title' => 'Ask {{full_name}} what would have made it a ten',
+                         'description' => 'They scored {{score}}. The comment they left, if any, is on '
+                            . 'the feedback page.',
+                         'due_in_hours' => 48],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Detractor — escalate immediately',
+                    'survey.detractor',
+                    'No review ask. A manager is told at once, by email and in the app.',
+                    [
+                        // NO create_task HERE, deliberately: the feedback
+                        // module raises one itself, with the deadline, so a
+                        // complaint reaches somebody whether or not this
+                        // sequence is switched on. A second task would mean
+                        // two people chasing one family.
+                        ['type' => 'notify_user', 'title' => 'A guest scored us {{score}}',
+                         'message' => '{{full_name}} scored {{score}}. There is a task with a deadline '
+                            . 'on the Reputation page — ring them today, then record what you agreed.'],
+                        ['type' => 'add_tag', 'tag' => 'unhappy'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Detractor resolved — recovery offer',
+                    'feedback.resolved',
+                    'Only after a manager has spoken to them: a thank-you and something for next time.',
+                    [
+                        // Hangs off RESOLVED, not off the low score. An
+                        // automatic apology that arrives before a person does
+                        // is worse than no apology at all.
+                        ['type' => 'issue_coupon', 'code' => 'COMEBACK'],
+                        ['type' => 'send_email', 'template' => 'feedback-recovery'],
+                        ['type' => 'remove_tag', 'tag' => 'unhappy'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Unresolved complaint escalation',
+                    'task.overdue',
+                    'If a complaint passes its deadline, the general manager hears about it.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'A complaint has passed its deadline',
+                         'message' => 'A guest complaint is past the response deadline on the '
+                            . 'Reputation page. Somebody needs to ring them now.'],
+                    ],
+                    ['when' => ['hours' => 0], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'New low review alert',
+                    'review.received',
+                    'A public review of three stars or fewer pages a manager at once.',
+                    [
+                        ['type' => 'condition', 'field' => 'event_rating', 'op' => 'lte', 'value' => '3'],
+                        ['type' => 'notify_user', 'branch' => 'yes', 'title' => 'A low public review has arrived',
+                         'message' => 'A new review scored us {{event_rating}}. It is in the review '
+                            . 'inbox with a reply draft ready.'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Review reply reminder',
+                    'review.received',
+                    'Every new review gets a reply within two days, or somebody is asked why.',
+                    [
+                        ['type' => 'create_task',
+                         'title' => 'Reply to a new public review',
+                         'description' => 'The review inbox has a draft to start from. A reply is read '
+                            . 'by everybody who comes after.',
+                         'due_in_hours' => 48],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Positive review — thank and feature',
+                    'review.received',
+                    'A five-star review is put forward for the website wall.',
+                    [
+                        // A TASK rather than featuring it automatically.
+                        // Putting a guest's words on the venue's own website
+                        // is a publishing decision, and a person makes it.
+                        ['type' => 'condition', 'field' => 'event_rating', 'op' => 'gte', 'value' => '5'],
+                        ['type' => 'create_task', 'branch' => 'yes',
+                         'title' => 'Feature a five-star review on the wall?',
+                         'description' => 'Open the review inbox, read it, and feature it if you are '
+                            . 'happy for it to appear on the website.',
+                         'due_in_hours' => 72, 'priority' => 'low'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Visit feedback for non-party guests',
+                    'visit.recorded',
+                    'Ask ordinary visitors how it went too, not just party hosts.',
+                    [
+                        ['type' => 'send_survey', 'survey' => 'After any visit', 'wait' => 1200],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Monthly reputation digest',
+                    'cron',
+                    'On the 1st, a nudge to read the score, the new reviews and anything unresolved.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'This month\'s reputation',
+                         'message' => 'Open the Reputation page: the score against last month, the '
+                            . 'reviews nobody has answered, and any complaint still open.'],
+                    ],
+                    ['when' => ['expression' => '14 9 1 * *'], 'once' => 0, 'reentry' => 1],
+                ],
             ],
         ],
         [

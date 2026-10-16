@@ -67,6 +67,15 @@ Harness::test('EVERY SEEDED TEXT FITS ONE SEGMENT, AND THE MARKETING ONES CARRY 
         '{{venue_name}}'  => 'The Castle Fun Center',
         '{{venue_phone}}' => '(845) 555-0123',
         '{{child_name}}'  => 'Alexander',
+        /*
+         * A LINK IS THE EXPENSIVE MERGE TAG, and the one most likely to be
+         * underestimated: this is a real-length domain plus the full
+         * 32-character token the feedback links carry, 69 characters that are
+         * invisible in the template editor. Left unsubstituted it would
+         * measure as the 15 characters of "{{survey_link}}" and a text that
+         * costs two segments would pass this test.
+         */
+        '{{survey_link}}' => 'https://www.thecastlefuncenter.com/s/0123456789abcdef0123456789abcdef',
     ];
 
     $texts = DB::all("SELECT slug, body FROM {templates} WHERE channel = 'sms'");
@@ -88,7 +97,14 @@ Harness::test('EVERY SEEDED TEXT FITS ONE SEGMENT, AND THE MARKETING ONES CARRY 
         // A text about a booking the guest has already made is transactional
         // and needs no opt-out; anything that offers or invites does. The
         // seeded marketing ones are recognisable by their category.
-        if ((string) $text['slug'] === 'winback-sms' || (string) $text['slug'] === 'quote-nudge-sms') {
+        if (in_array((string) $text['slug'], [
+            'winback-sms',
+            'quote-nudge-sms',
+            // A feedback request is marketing too: it is not something a
+            // guest needs in order to use a booking they have already made,
+            // so consent applies and an opt-out belongs in it.
+            'survey-invitation-sms',
+        ], true)) {
             if (!App\Services\SmsPolicy::hasOptOut($body)) {
                 $noOptOut[] = (string) $text['slug'];
             }
@@ -529,6 +545,56 @@ Harness::test('a seeded automation with steps can be switched on, and one withou
           WHERE a.is_active = 1
             AND NOT EXISTS (SELECT 1 FROM {automation_steps} s WHERE s.automation_id = a.id)'
     ), 'nothing is seeded switched on with nothing to do');
+});
+
+Harness::test('THE REPUTATION PLAYBOOK HANDS THE ASK TO THE FEEDBACK MODULE', function (): void {
+    /*
+     * Two things could go wrong here and both are invisible until a guest is
+     * involved.
+     *
+     * The first is a sequence that sends its own survey invitation — it
+     * cannot, because the link carries a one-use token that has to be written
+     * before it is sent, so an email step naming a template with a
+     * {{survey_link}} in it would go out with a hole where the link should
+     * be. The `send_survey` step exists to hand that to the module.
+     *
+     * The second is the detractor sequence raising its own task beside the
+     * one the module already raises, which means two people ringing one
+     * family about one complaint.
+     */
+    $playbookId = (int) DB::value("SELECT id FROM {playbooks} WHERE slug = 'reputation-protection'");
+
+    Assert::greaterThan(0, $playbookId, 'the reputation playbook is seeded');
+
+    $steps = DB::all(
+        'SELECT a.slug, s.type, s.config
+           FROM {automation_steps} s
+           JOIN {automations} a ON a.id = s.automation_id
+          WHERE a.playbook_id = :p
+          ORDER BY a.id, s.sort_order',
+        ['p' => $playbookId]
+    );
+
+    Assert::greaterThan(10, count($steps), 'its sequences are authored, not empty');
+
+    $types = [];
+    $tasksOnDetractor = 0;
+
+    foreach ($steps as $step) {
+        $types[(string) $step['type']] = true;
+
+        if (str_contains((string) $step['slug'], 'detractor') && (string) $step['type'] === 'create_task') {
+            $tasksOnDetractor++;
+        }
+    }
+
+    Assert::hasKey('send_survey', $types, 'the ask goes through the module');
+
+    Assert::same(
+        0,
+        $tasksOnDetractor,
+        'the detractor sequence must not raise a second task beside the module\'s own'
+    );
 });
 
 Harness::test('the playbook seed is idempotent, steps included', function (): void {

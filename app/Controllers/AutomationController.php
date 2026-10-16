@@ -1091,6 +1091,7 @@ final class AutomationController extends Controller
             'notify_user'            => ['assign_to', 'title'],
             'update_field'           => [],
             'webhook'                => ['secret'],
+            'send_survey'            => ['survey'],
             'split_test'             => ['label_a', 'label_b'],
             default                  => [],
         };

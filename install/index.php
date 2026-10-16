@@ -746,6 +746,15 @@ function installer_finalise(array &$state): array
         $seedTemplates = require CC_ROOT . '/install/seeds/templates.php';
         $summary['seeds']['templates'] = $seedTemplates();
 
+        // --- Feedback surveys (always)
+        //
+        // Also not optional: `survey_responses.survey_id` is a non-null
+        // foreign key, so with no survey row the reputation module has
+        // nowhere to record an answer. Both ship SWITCHED OFF — see the
+        // seed's own comment.
+        $seedSurveys = require CC_ROOT . '/install/seeds/surveys.php';
+        $summary['seeds']['surveys'] = $seedSurveys();
+
         // --- Optional seeds
         if (!empty($state['seeds']['venue'])) {
             $seedVenue = require CC_ROOT . '/install/seeds/venue.php';

@@ -2116,5 +2116,143 @@ Harness::test(
     }
 );
 
+// ------------------------------------------------- asking them for feedback
+
+Harness::test('THE SEND-SURVEY STEP HANDS THE ASK TO THE FEEDBACK MODULE', function (): void {
+    /*
+     * The step exists so a venue can make the ask conditional. What it must
+     * NOT do is build its own invitation: the link carries a one-use token
+     * that has to be written before it is sent, and two places assembling
+     * that is two places for a guest to receive a dead link.
+     */
+    au_clear();
+    DB::query("DELETE FROM {survey_responses} WHERE contact_id IN (SELECT id FROM {contacts} WHERE source = 'autest')");
+
+    $surveyId = (int) DB::value("SELECT id FROM {surveys} WHERE type = 'nps' ORDER BY id LIMIT 1");
+
+    Assert::greaterThan(0, $surveyId, 'the installer seeds a survey');
+
+    $automationId = au_automation('autest-survey', 'visit.recorded');
+    au_step($automationId, 'send_survey');
+
+    $contactId = au_contact('Asked');
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    $invitation = DB::first(
+        'SELECT * FROM {survey_responses} WHERE contact_id = :c',
+        ['c' => $contactId]
+    );
+
+    Assert::notNull($invitation, 'an invitation was created for them');
+    Assert::notNull($invitation['public_token'], 'with a one-use token');
+    Assert::same(32, strlen((string) $invitation['public_token']));
+    Assert::null($invitation['responded_at'], 'and nothing answered yet');
+
+    au_clear();
+});
+
+Harness::test('a guest already asked is SKIPPED, not asked again', function (): void {
+    // A skip, not a failure: "they have already been asked" is the system
+    // working, and failing the run would stop the steps after it.
+    au_clear();
+    DB::query("DELETE FROM {survey_responses} WHERE contact_id IN (SELECT id FROM {contacts} WHERE source = 'autest')");
+
+    $automationId = au_automation('autest-survey-twice', 'visit.recorded', [
+        'run_once_per_contact' => 0,
+        'allow_reentry'        => 1,
+    ]);
+    au_step($automationId, 'send_survey');
+
+    $contactId = au_contact('AskedTwice');
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    DB::query('DELETE FROM {automation_runs} WHERE automation_id = :a', ['a' => $automationId]);
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    Assert::same(
+        1,
+        (int) DB::value('SELECT COUNT(*) FROM {survey_responses} WHERE contact_id = :c', ['c' => $contactId]),
+        'one invitation, however many times the sequence runs'
+    );
+
+    $run = au_run($automationId, $contactId);
+
+    Assert::same('completed', (string) $run['status'], 'and the run finished rather than failing');
+
+    au_clear();
+});
+
+Harness::test('the review link is READ for a template, never minted', function (): void {
+    /*
+     * `{{review_link}}` lets a sequence follow up on a promoter who closed
+     * the tab. A merge tag that could CREATE a review request would mean a
+     * template deciding who gets asked for a public review — so a run whose
+     * guest was never asked has no link, and the preview says the tag cannot
+     * be filled rather than printing a dead URL.
+     */
+    au_clear();
+    DB::query("DELETE FROM {review_requests} WHERE token LIKE 'autest%'");
+
+    $contactId = au_contact('NoAsk');
+    $subject   = AutomationRunner::subjectFor($contactId);
+
+    $template = au_template('autest-review-link');
+    DB::update('templates', [
+        'body'       => '<p>Hi {{first_name}}, <a href="{{review_link}}">leave a review</a>.</p>',
+        'merge_tags' => json_encode(['first_name', 'review_link']),
+    ], 'id = :id', ['id' => $template]);
+
+    // A response id with no review request behind it: the tag is absent, so
+    // the template is reported as unfillable rather than rendering a dead
+    // link into a guest's inbox.
+    $missing = AutomationRunner::missingTags(
+        'autest-review-link',
+        $subject + ['event_survey_response_id' => 999999]
+    );
+
+    Assert::inArray('review_link', $missing, 'the gap is reported before anybody sends it');
+
+    // And with a real ask behind it, the tag resolves to THAT ask's tracked
+    // link — the one the gate created, not a new one.
+    $surveyId = (int) DB::value("SELECT id FROM {surveys} ORDER BY id LIMIT 1");
+
+    $responseId = (int) DB::insert('survey_responses', [
+        'survey_id'    => $surveyId,
+        'contact_id'   => $contactId,
+        'public_token' => bin2hex(random_bytes(16)),
+        'score'        => 10,
+        'sentiment'    => 'promoter',
+        'responded_at' => now_utc(),
+        'created_at'   => now_utc(),
+    ]);
+
+    DB::insert('review_requests', [
+        'contact_id'         => $contactId,
+        'survey_response_id' => $responseId,
+        'platform'           => 'google',
+        'status'             => 'sent',
+        'token'              => 'autest' . bin2hex(random_bytes(13)),
+        'created_at'         => now_utc(),
+    ]);
+
+    Assert::same(
+        [],
+        AutomationRunner::missingTags(
+            'autest-review-link',
+            $subject + ['event_survey_response_id' => $responseId]
+        ),
+        'with a real ask behind it, the link is there'
+    );
+
+    DB::query("DELETE FROM {review_requests} WHERE token LIKE 'autest%'");
+    DB::query('DELETE FROM {survey_responses} WHERE id = :id', ['id' => $responseId]);
+    au_clear();
+});
+
 au_clear();
 $restore();

@@ -335,7 +335,13 @@ require CC_ROOT . '/app/routes.php';
 
 $response = $router->dispatch($request);
 
-$response->headers($securityHeaders);
+/*
+ * NOT overwriting. A route that deliberately set one of these headers meant
+ * it: the public review wall exists to be embedded on the venue's own site
+ * and so replaces `frame-ancestors 'self'` with its own policy. Everything
+ * else sets none of these and gets all of them.
+ */
+$response->headers($securityHeaders, false);
 
 // Persist the session and attach its cookie.
 $cookie = Session::save();

@@ -199,13 +199,23 @@ Harness::test('a scanner wins over an event of the same name', function (): void
 Harness::test('a trigger waiting on an unbuilt feature says so, and is not deliverable', function (): void {
     $catalogue = T::catalogue();
 
-    // The honest placeholders. `review.received` is a real moment a venue
-    // will want; the reputation module is what will fire it.
-    Assert::notNull($catalogue['review.received']['pending']);
-    Assert::false(T::isDeliverable('review.received'));
+    // The honest placeholders. `ticket.purchased` is a real moment a venue
+    // will want; online ticketing is what will fire it.
+    Assert::notNull($catalogue['ticket.purchased']['pending']);
+    Assert::false(T::isDeliverable('ticket.purchased'));
 
-    // And the ones that work today.
-    foreach (['contact.created', 'booking.deposit_paid', 'visit.recorded', 'cron', 'manual'] as $live) {
+    /*
+     * And the ones that work today — including the four the reputation
+     * module took off the pending list when it shipped. They are named here
+     * deliberately: a trigger moving from "waiting on a feature" to "works"
+     * is exactly the kind of thing that gets built and then never wired up,
+     * and this is the assertion that would catch a module shipping without
+     * firing what it promised.
+     */
+    foreach ([
+        'contact.created', 'booking.deposit_paid', 'visit.recorded', 'cron', 'manual',
+        'survey.responded', 'survey.detractor', 'review.received', 'feedback.resolved',
+    ] as $live) {
         Assert::null($catalogue[$live]['pending'], $live . ' works in this version');
         Assert::true(T::isDeliverable($live), $live);
     }

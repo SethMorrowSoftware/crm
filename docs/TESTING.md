@@ -19,7 +19,7 @@ php tests/run.php --filter=validator,security
 php tests/run.php --stop
 
 # Refuse to report success if a suite silently skipped (what CI uses)
-php tests/run.php --require-db --require-http --min-tests=1100
+php tests/run.php --require-db --require-http --min-tests=1400
 
 # Prove the product's actual promise: that it installs on a bare host
 php tests/install/walk-installer.php
@@ -180,6 +180,14 @@ Four more integration suites cover the operator-facing machinery:
   reserved phone range), that every demo row is tagged so it can be deleted,
   that seeded consent says in writing it is not real evidence, and that
   deleting the demo contacts leaves no orphans
+- **reputation** — the feedback gate against real rows: a promoter is handed a
+  tracked review link and an unhappy guest is handed none, with or without the
+  venue's "ask everyone" override; the complaint raises a task with a deadline
+  whether or not any automation is switched on; a second answer keeps the first
+  score and takes the new comment; the invitation sweep never reaches past its
+  lookback window, never asks about a party that did not happen, never asks the
+  same party twice, and records WHY a guest could not be asked rather than
+  reporting a low response rate
 - **upgrade** — a pending schema file is applied and recorded on the first
   request after an upload; a failing file leaves the version marker alone so
   the next request retries; and re-running a partially applied file completes
@@ -236,6 +244,14 @@ And two further HTTP suites:
   still unsubscribe, a tampered token unsubscribes nobody, the response is
   identical for an address on file and one that is not, and the page is
   `noindex`
+- **reputation** — the guest's side, from a phone with no account: the
+  question renders from a tokenised link and is branded with the VENUE rather
+  than with Castle CRM, a 10 is shown a review link and a 2 is shown none
+  (checked in the page source, not only in the rendered text), the review
+  redirect goes to the venue's own configured URL and records the click once,
+  an unknown token is the same dead end whether or not it could have existed,
+  and the review wall is the one public page here that is indexable, cacheable
+  and frameable while the rest are none of those
 - **admin** — the operator pages: the stored SMTP password is never rendered
   back into the form and a blank field keeps it; the front desk cannot reach
   email settings, backups or export; a backup taken over HTTP downloads as a

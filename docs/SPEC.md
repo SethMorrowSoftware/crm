@@ -1040,6 +1040,40 @@ first-touch and last-touch views in reporting.
 Reported: NPS trend, CSAT by attraction and by party host, detractor resolution time,
 review velocity and rating trend, request→review conversion rate.
 
+**As built (Phase 6).** Three classes: `Services\Reputation` holds the rules and
+touches nothing; `Services\Feedback` sends, records and escalates; `ReputationController`
+is the venue's screens. Five decisions worth recording, because each one could
+reasonably have gone the other way:
+
+1. **The invitation is a row first and a message second.** It is written with
+   `invited_at` NULL and stamped on a successful send, so the row is both the
+   de-duplication record and the work item — a guest cannot be asked twice, a
+   refusal that will pass (quiet hours) is retried, and one that never will (no
+   consent, no address) is recorded *with its reason* so the page can say "we
+   could not ask 12 guests" instead of reporting a low response rate.
+2. **The sweep is bounded by a lookback window** (`reputation.invite_lookback_days`,
+   14 days). Without it, switching feedback on would email every family who has
+   ever had a party here — on an install carrying imported history, tens of
+   thousands of messages about visits nobody remembers.
+3. **A detractor's task is raised by the module, not by the playbook**, so a
+   complaint reaches somebody whether or not the reputation automations are
+   switched on. The seeded sequence therefore adds notifications and
+   deliberately raises no second task.
+4. **`reputation.ask_everyone`** widens the ask to passives, off by default.
+   Selectively soliciting only happy guests is against Google's review policy,
+   so the choice is the venue's and the settings page says so in words. A
+   detractor is never asked either way: a review link in the same breath as
+   "sorry about your visit" invites the review nobody wants.
+5. **Replies are logged, not posted.** Castle CRM cannot post to Google or Yelp
+   without each platform's API (Phase 7), so the page records the reply, offers
+   a seeded draft and links straight to the review — and says plainly that
+   posting it is still done there.
+
+The `send_survey` automation step hands the ask to the module, so a venue can
+make it conditional (only parties over twenty, only once the balance is paid)
+by setting the survey's own trigger to "never" and driving it from a sequence.
+Both paths share the same de-duplication.
+
 ### 8.10 Memberships & season passes
 
 Lifecycle state machine with automated transitions:
