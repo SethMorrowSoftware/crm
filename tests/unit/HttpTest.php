@@ -129,3 +129,137 @@ Harness::test('a refused URL is never called', function (): void {
     Assert::same(0, $result['ms']);
     Assert::notNull($result['error']);
 });
+
+// ------------------------------------------------- resolving the other half
+
+Harness::test('resolveSafely refuses a HOSTNAME that points inwards', function (): void {
+    /*
+     * The half `refuse()` says it does not cover, and until this test it had
+     * no test at all.
+     *
+     * The machine's own hostname is the anchor: on Linux and in every CI
+     * container it is in `/etc/hosts` pointing at loopback, it is not a
+     * literal address, and it is not spelled "localhost" — so `refuse()`
+     * allows it and only resolution can catch it. That is exactly the shape
+     * of a URL somebody pastes.
+     */
+    $host = (string) gethostname();
+
+    if ($host === '') {
+        Assert::true(true, 'this machine has no hostname to resolve');
+
+        return;
+    }
+
+    $addresses = @gethostbynamel($host);
+
+    if (!is_array($addresses) || $addresses === []) {
+        // Said rather than skipped silently: if this ever stops resolving,
+        // the test below is not proving anything and somebody should know.
+        Assert::true(true, 'this machine does not resolve its own name; nothing to assert');
+
+        return;
+    }
+
+    $private = false;
+
+    foreach ($addresses as $address) {
+        if (filter_var(
+            (string) $address,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) === false) {
+            $private = true;
+        }
+    }
+
+    if (!$private) {
+        Assert::true(true, 'this machine’s own name is public, so it is not a probe for this');
+
+        return;
+    }
+
+    $url = 'http://' . $host . '/hook';
+
+    Assert::null(Http::refuse($url), 'the literal check lets it through, as documented');
+
+    $resolved = Http::resolveSafely($url);
+
+    Assert::notNull(
+        $resolved['reason'],
+        'and resolution catches it: ' . $host . ' answers ' . implode(', ', $addresses)
+    );
+    Assert::null($resolved['pin'], 'a refused host is never pinned');
+
+    /*
+     * MEASURED: this failed before `resolveSafely()` asked `gethostbynamel`.
+     * It asked `dns_get_record()` alone — a DNS query PHP builds itself,
+     * which sees neither `/etc/hosts` nor nsswitch, and which shared hosts
+     * frequently block. On any such host it returned "nothing to check",
+     * cURL then resolved the name through the system resolver that works,
+     * and the address was never checked at all.
+     */
+});
+
+Harness::test('resolveSafely pins what it approved, and declines to pin what it cannot see', function (): void {
+    // A literal address needs no pin: `refuse()` has already judged it, and
+    // there is no name for DNS to answer differently next time.
+    $literal = Http::resolveSafely('https://8.8.8.8/hook');
+
+    Assert::null($literal['reason']);
+    Assert::null($literal['pin'], 'nothing to pin — the address IS the host');
+
+    // A name nothing can resolve is allowed through unpinned, because cURL
+    // cannot reach anywhere either: it will fail with "could not resolve
+    // host", which is a better message than one invented here.
+    $unknown = Http::resolveSafely('https://nothing-resolves-here.invalid/hook');
+
+    Assert::null($unknown['reason'], 'not refused — it is unreachable, not dangerous');
+    Assert::null($unknown['pin']);
+
+    // Not a URL at all.
+    Assert::notNull(Http::resolveSafely('not a url')['reason']);
+    Assert::notNull(Http::resolveSafely('')['reason']);
+});
+
+Harness::test('a pin names the host, the port and one address', function (): void {
+    /*
+     * The pin is handed to `CURLOPT_RESOLVE`, whose format is
+     * `host:port:address` — so the port has to be the one the URL will
+     * actually be fetched on, or the pin applies to nothing and the request
+     * silently resolves itself again. The scheme's default is used when the
+     * URL names no port.
+     */
+    $host = (string) gethostname();
+
+    // Build the expectation from a name this box really resolves, whatever it
+    // is, rather than depending on outbound DNS in a unit suite.
+    if ($host === '' || !is_array(@gethostbynamel($host))) {
+        Assert::true(true, 'no resolvable name available here');
+
+        return;
+    }
+
+    // Only the shape is asserted; whether this particular host is allowed is
+    // the previous test's business.
+    foreach ([
+        ['https://%s/hook', '443'],
+        ['http://%s/hook', '80'],
+        ['https://%s:8443/hook', '8443'],
+    ] as [$template, $port]) {
+        $resolved = Http::resolveSafely(sprintf($template, $host));
+
+        if ($resolved['pin'] === null) {
+            continue;
+        }
+
+        $parts = explode(':', (string) $resolved['pin']);
+
+        Assert::same($host, $parts[0], 'the pin names the host');
+        Assert::same($port, $parts[1] ?? '', 'and the port it will be fetched on');
+        Assert::true(
+            filter_var($parts[2] ?? '', FILTER_VALIDATE_IP) !== false,
+            'and one real address'
+        );
+    }
+});

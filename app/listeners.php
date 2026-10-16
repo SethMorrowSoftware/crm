@@ -26,6 +26,7 @@ declare(strict_types=1);
 use App\Core\Event;
 use App\Services\AutomationRunner;
 use App\Services\MembershipLifecycle;
+use App\Services\WebhookDispatcher;
 
 /*
  * ENROLMENT. Every event in the catalogue can start an automation, so this is
@@ -78,4 +79,27 @@ Event::listen('*', static function (array $payload, string $event): void {
  */
 Event::listen('visit.recorded', static function (array $payload): void {
     MembershipLifecycle::recordVisitUsage($payload);
+});
+
+/*
+ * OUTBOUND WEBHOOKS. A wildcard, for the same reason enrolment is one: a
+ * venue can subscribe to anything in the catalogue, and an enumerated list
+ * would quietly stop delivering whichever event somebody forgot to add.
+ *
+ * IT ONLY QUEUES. Nothing is sent inside the request that fired the event:
+ * a booking saved at the front desk must not wait on somebody's Zapier
+ * endpoint, and if it did, a dead endpoint would make the save appear to
+ * hang — which is how a member of staff ends up clicking Save three times
+ * and creating three bookings. Cron sends what this queues.
+ *
+ * The engine's own events are excluded like everywhere else: an automation
+ * that fails fires `automation.failed`, and a subscription to everything
+ * would turn one failure into a delivery, every tick, for ever.
+ */
+Event::listen('*', static function (array $payload, string $event): void {
+    if (str_starts_with($event, 'automation.') || str_starts_with($event, 'webhook.')) {
+        return;
+    }
+
+    WebhookDispatcher::queue($event, $payload);
 });

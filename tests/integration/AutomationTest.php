@@ -2094,9 +2094,11 @@ Harness::test(
         Assert::greaterThan(0, (int) ($config['days'] ?? 0));
 
         // The engine's own answer, against a party six weeks out.
+        $party = gmdate('Y-m-d', time() + 42 * 86400);
+
         $when = AutomationEngine::scheduleStep(
             $step,
-            ['event_date' => gmdate('Y-m-d', time() + 42 * 86400)],
+            ['event_date' => $party],
             now_utc(),
             'America/New_York'
         );
@@ -2104,12 +2106,37 @@ Harness::test(
         Assert::false($when['skip'], 'a party six weeks out is schedulable');
         Assert::notNull($when['at']);
 
-        $days = (int) floor((strtotime((string) $when['at'] . ' UTC') - time()) / 86400);
+        /*
+         * COMPARED AS CALENDAR DAYS AGAINST THE PARTY, not as a seconds delta
+         * from now.
+         *
+         * "Fourteen days before the party" is a claim about two dates, and the
+         * step lands at a fixed hour of the local morning. So a delta measured
+         * from `time()` is 28 days only while the suite runs before that hour
+         * and 27 after it — which is a test that passes or fails by the clock
+         * on the wall, and it did exactly that (Expected 28, got 27) once the
+         * day had got on a bit. The contract is the date.
+         */
+        $expected = gmdate(
+            'Y-m-d',
+            (int) strtotime($party . ' 12:00:00 UTC') - ((int) $config['days'] * 86400)
+        );
+
+        $landed = (new DateTimeImmutable((string) $when['at'] . ' UTC'))
+            ->setTimezone(new DateTimeZone('America/New_York'))
+            ->format('Y-m-d');
 
         Assert::same(
-            42 - (int) $config['days'],
-            $days,
-            'it lands ' . (int) $config['days'] . ' days before the party, not that many days from now'
+            $expected,
+            $landed,
+            'it lands ' . (int) $config['days'] . ' local days before the party itself'
+        );
+
+        // And it is still in the future, which is the other half of the claim.
+        Assert::greaterThan(
+            time(),
+            (int) strtotime((string) $when['at'] . ' UTC'),
+            'a party six weeks out schedules its T-minus step ahead of now'
         );
 
         au_clear();

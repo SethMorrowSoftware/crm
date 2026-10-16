@@ -106,7 +106,7 @@ $grouped = $catalogue;
                                 <?php if ($token['expires_at'] === null): ?>
                                     <span class="muted">No expiry</span>
                                 <?php elseif ($token['expired']): ?>
-                                    <span class="badge badge-warning">Expired</span>
+                                    <span class="badge badge-warn">Expired</span>
                                 <?php else: ?>
                                     <?= e(local_date((string) $token['expires_at'])) ?>
                                 <?php endif; ?>

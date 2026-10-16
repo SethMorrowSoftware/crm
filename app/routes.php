@@ -150,6 +150,36 @@ $router->group('/settings', ['auth', 'can:settings'], function ($router): void {
         ['csrf', 'can:integrations_manage']
     );
 
+    // Outbound webhooks send the venue's own events to a URL somebody typed,
+    // so they sit behind the same permission as the credential that reads them
+    // back — and for the same reason.
+    $router->get('/webhooks', ['WebhookController', 'index'], ['can:integrations_manage'], 'settings.webhooks');
+    $router->post('/webhooks', ['WebhookController', 'store'], ['csrf', 'can:integrations_manage']);
+    $router->post(
+        '/webhooks/{id:\d+}/toggle',
+        ['WebhookController', 'toggle'],
+        ['csrf', 'can:integrations_manage']
+    );
+    $router->post(
+        '/webhooks/{id:\d+}/delete',
+        ['WebhookController', 'destroy'],
+        ['csrf', 'can:integrations_manage']
+    );
+    // Both of these reach out over the network on a POST a browser made, so
+    // they are throttled: a Test button is a request this app makes to any URL
+    // in the world, and holding it down should not become a way to use this
+    // server to hammer somebody else's.
+    $router->post(
+        '/webhooks/{id:\d+}/test',
+        ['WebhookController', 'test'],
+        ['csrf', 'can:integrations_manage', 'throttle:20,10']
+    );
+    $router->post(
+        '/webhooks/deliveries/{id:\d+}/replay',
+        ['WebhookController', 'replay'],
+        ['csrf', 'can:integrations_manage', 'throttle:60,10']
+    );
+
     // Leaving Safe Mode is its own permission: it is the moment the app starts
     // messaging real guests, so it should not ride along with general settings.
     $router->post('/safe-mode', ['SettingsController', 'toggleSafeMode'], ['csrf', 'can:sending_override']);

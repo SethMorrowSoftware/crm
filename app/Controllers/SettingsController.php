@@ -35,7 +35,32 @@ final class SettingsController extends Controller
             'mailDriverLabel' => $this->mailDriverLabel(),
             'backupLabel'     => $this->backupLabel(),
             'apiTokenLabel'   => $this->apiTokenLabel(),
+            'webhookLabel'    => $this->webhookLabel(),
         ]);
+    }
+
+    /**
+     * The tile answers "is anything being told about what happens here, and is
+     * it working?"
+     *
+     * A subscription that has switched itself off after an outage is the whole
+     * reason this sentence names a state rather than just a count: it is the
+     * failure a venue otherwise discovers months later, when somebody asks why
+     * the spreadsheet stopped filling in.
+     */
+    private function webhookLabel(): string
+    {
+        $total = (int) DB::value('SELECT COUNT(*) FROM {webhooks}');
+
+        if ($total === 0) {
+            return 'Nothing outside this application is being told anything.';
+        }
+
+        $off = (int) DB::value('SELECT COUNT(*) FROM {webhooks} WHERE is_active = 0');
+        $on  = $total - $off;
+
+        return $on . ' sending'
+            . ($off > 0 ? ', ' . $off . ' switched off' : '') . '.';
     }
 
     /**

@@ -570,7 +570,7 @@ address.
 
 ---
 
-## Phase 3 — bookings, availability, waivers and the public page
+## [1.0.0-phase3] — unreleased
 
 The diary. A booking record with a derived money ladder and a printable run
 sheet; a pure availability engine with its own I/O half; a calendar in month,
@@ -796,9 +796,85 @@ suites later.
 
 ---
 
+## [1.0.0-phase7] — unreleased
+
+Phases 5, 6 and 7: the automation engine, the reporting suite, and the two
+machine interfaces — a REST API to read and write from outside, and outbound
+webhooks to be told when something happens inside.
+
+### Automations
+
+- **The automation engine and 111 seeded automations**, across eight
+  playbooks. A trigger is any event the application fires; a step waits,
+  branches on a condition, messages a guest, tags them, moves a deal or calls
+  a URL. Every seeded sequence a venue can switch on is authored, not a stub.
+- **A trigger that can never fire is a build failure.** The test suite walks
+  every seeded automation and refuses one whose trigger nothing fires, one
+  with no steps behind a live trigger, and one scheduled to message a guest
+  with nobody to message — the three shapes of an automation that looks
+  finished and does nothing.
+
+### Reporting
+
+- **Twenty-three reports in six families**, each listed by the question it
+  answers rather than its name, with CSV export and saved reports. A saved
+  report keeps its period by NAME, so "last 30 days" still means the last 30
+  days next month.
+- **Venue-local days.** Every timestamp is stored UTC and every report groups
+  by the venue's own calendar day, so a 9pm Saturday booking is Saturday's.
+- **Money is scrubbed, not hidden**, for a role without `view_revenue` — in
+  the page and in the export, which is a separate endpoint and the easy one to
+  forget.
+
+### Machine interfaces
+
+- **A REST API at `/api/v1`**, bearer-token authenticated, 13 resources.
+  A token never grants more than the person who owns it and its abilities only
+  narrow; a record outside your scope is a 404, not a 403, because a 403
+  confirms the record exists.
+- **Outbound webhooks.** Subscribe to any event or to a namespace wildcard;
+  each call is signed with an HMAC-SHA256 of the raw body, timestamped against
+  replay, and carries a stable delivery id to deduplicate on. Six attempts
+  over about nine hours, a delivery log with the reason in words, manual
+  replay, and a subscription that switches itself off after twenty consecutive
+  failures rather than retrying a dead endpoint for ever.
+- **A webhook carries ids, not records** — no name, no email, no amount. A
+  receiver that needs the record reads it back through the API with a token
+  that can be scoped and revoked. A URL typed into a form should not become a
+  standing export of guest records to somewhere nobody audits.
+- **A URL pointing inside the network is refused when you save it**, including
+  a hostname that resolves inwards, re-checked at delivery time with the
+  approved address pinned for the connection.
+
+### Fixed
+
+- **An upgrade no longer depends on somebody remembering to edit `VERSION`.**
+  It did, and `VERSION` had not moved in three phases — so three schema files
+  were never applied by an upgrade, and the reporting, API-token and webhook
+  pages would each have met a venue with a bare 500. The upgrade now also
+  triggers on the schema directory's own contents.
+- **A contact added by staff now fires `contact.created`.** It only fired for
+  guests who arrived by themselves — a form, the booking page, a text, an
+  email, the API — so a "welcome a new guest" sequence ran for everybody
+  except the people the front desk typed in. Nothing failed; the sequence
+  simply never started.
+- **No page scrolls sideways on a phone.** An invisible screen-reader label
+  inside a wide table was escaping its scroll container and dragging the whole
+  layout with it, and a one-line ellipsised tagline was setting a floor under
+  the dashboard's width. Measured on all 30 pages at 390px.
+- **A token and a signing secret are shown in a monospace font.** The rule
+  that said so had never applied, so 64 hex characters somebody has to check
+  by eye were rendered in a font where `l`, `1` and `I` are the same picture.
+- **Pressing Test on a webhook no longer queues five more attempts** at an
+  endpoint it has just reported broken.
+
+---
+
 ## Unreleased — next
 
-Phase 5 is the automation engine and the 111 seeded automations. See
-`docs/SPEC.md` §13 for the full plan, and §14 for the questions that still
-need the venue's answers — the CenterEdge reporting credentials and the real
-party prices being the two that block the most.
+Phase 8: the security review of everything above against `docs/AUDIT.md`, a
+measured accessibility audit, a 50,000-contact load test and a real
+backup-and-restore drill. CSV import for contacts and visit history is the
+last unbuilt feature. See `docs/SPEC.md` §13 for the full plan, and §14 for
+the questions that still need the venue's answers — the CenterEdge reporting
+credentials and the real party prices being the two that block the most.

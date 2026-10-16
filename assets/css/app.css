@@ -349,11 +349,55 @@ body.bare { display: grid; place-items: center; min-height: 100vh; padding: 1rem
 
 .breadcrumbs { font-size: .85rem; color: var(--faint); margin-bottom: .75rem; }
 
+/*
+ * A row of filter links that reads as a set of tabs.
+ *
+ * The selected one is marked by a SOLID BACKGROUND and bolder text, not by
+ * colour alone — `.is-active` has to be legible to somebody who cannot tell
+ * this blue from this grey, and on the Text Club list it is the only thing
+ * saying which slice of the list is on screen.
+ */
+.tab-bar {
+    display: flex; flex-wrap: wrap; gap: .25rem;
+    padding: .2rem; border-radius: var(--radius-sm);
+    background: var(--bg); border: 1px solid var(--line);
+}
+.tab {
+    padding: .3rem .7rem; border-radius: calc(var(--radius-sm) - .1rem);
+    font-size: .82rem; font-weight: 600; color: var(--muted);
+    white-space: nowrap; text-decoration: none;
+}
+.tab:hover { background: var(--panel-soft); color: var(--text); text-decoration: none; }
+.tab.is-active { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+.tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+
 .grid-2 { display: grid; gap: var(--gap); align-items: start; }
 @media (min-width: 60rem) { .grid-2 { grid-template-columns: 1.15fr .85fr; } }
 
 .stack { display: flex; flex-direction: column; gap: var(--gap); }
 .stack-lg { display: flex; flex-direction: column; gap: var(--gap); }
+
+/*
+ * A COLUMN MAY BE NARROWER THAN ITS WIDEST UNBREAKABLE LINE.
+ *
+ * A grid or flex item's automatic minimum size is its content's min-content
+ * width, and `white-space: nowrap` has no soft wrap opportunities — so its
+ * min-content width is the WHOLE line. One such line anywhere inside a column
+ * therefore sets a floor under the column, the column sets one under the grid,
+ * and the page scrolls sideways. `overflow: hidden` and `text-overflow:
+ * ellipsis` do not change that: they need a width to ellipsize against, and
+ * the floor is why they never get one.
+ *
+ * MEASURED on the dashboard at 390px: scrollWidth 487, traced by hiding
+ * elements one at a time to `.playbook-tagline` — a one-line, ellipsised
+ * tagline inside a card inside `.grid-2`. `min-width: 0` on the item removes
+ * the floor, the card takes the track's width, and the ellipsis finally has
+ * something to work with.
+ *
+ * It is set on the containers' children rather than on that one tagline
+ * because the next nowrap line somebody adds will be somewhere else.
+ */
+.grid-2 > *, .stack > *, .stack-lg > * { min-width: 0; }
 
 .empty { color: var(--faint); font-style: italic; padding: .5rem 0; }
 
@@ -585,7 +629,17 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
 
 /* ----------------------------------------------------------------- Tables */
 
-.table-wrap { overflow-x: auto; margin: 0 -1.25rem; padding: 0 1.25rem; }
+/*
+ * `position: relative` for the reason spelled out on `.table-scroll` below:
+ * without it a `.sr-only` caption or action label inside a table wider than
+ * the phone escapes this scroll container and drags the whole page sideways.
+ * MEASURED on `/settings/users` at 390px — scrollWidth 424 — AFTER the same
+ * fix had been made to `.table-scroll` and this second wrapper was missed.
+ */
+.table-wrap {
+    overflow-x: auto; position: relative;
+    margin: 0 -1.25rem; padding: 0 1.25rem;
+}
 
 .table { width: 100%; border-collapse: collapse; font-size: .87rem; }
 
@@ -605,6 +659,42 @@ body[data-density="comfortable"] .table td { padding: .8rem .6rem; }
 .td-sub { display: block; font-size: .78rem; color: var(--muted); }
 .td-right { text-align: right; }
 .row-muted td { opacity: .6; }
+
+/*
+ * A cell holding something long and unbreakable — a URL, a token prefix.
+ *
+ * `anywhere` rather than `break-all`: it breaks only when the line genuinely
+ * will not fit, so a URL that does fit is left whole and readable.
+ */
+.cell-wrap { word-break: break-word; overflow-wrap: anywhere; max-width: 22rem; }
+
+/*
+ * A cell of buttons. They wrap on a narrow screen rather than stretching the
+ * table past the viewport, because `.table-scroll` scrolls horizontally and a
+ * row whose actions are off to the right is a row whose actions are invisible.
+ */
+.cell-actions { display: flex; flex-wrap: wrap; gap: .35rem; justify-content: flex-end; }
+
+.card-actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.placeholder-actions { margin: 1rem 0 0; }
+
+/*
+ * One condition in a segment's rule builder.
+ *
+ * A bordered block rather than a run of loose fields: a segment with six
+ * conditions is otherwise eighteen controls in a column with nothing saying
+ * which three belong together. The fields lay out in a row where there is
+ * room and stack on a phone.
+ */
+.segment-rule {
+    border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: .75rem; margin: 0 0 .6rem;
+    display: flex; flex-wrap: wrap; gap: .6rem; align-items: flex-end;
+}
+.segment-rule .field { flex: 1 1 11rem; margin: 0; }
+
+/* The plain-English rendering of a segment's rules, in a table cell. */
+.segment-rules { font-size: .84rem; color: var(--muted); max-width: 28rem; }
 
 .change-list { list-style: none; margin: .4rem 0 0; padding: 0; font-size: .78rem; }
 .change-list li { padding: .1rem 0; }
@@ -759,16 +849,21 @@ ul.checks li:last-child { border-bottom: 0; }
 .error-detail { text-align: left; margin: 1.5rem 0; font-size: .8rem; }
 .error-detail pre {
     background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
-    padding: .75rem; overflow-x: auto; max-height: 20rem;
+    padding: .75rem; overflow-x: auto; position: relative; max-height: 20rem;
 }
 .error-actions { margin-top: 1rem; }
 
 /* ----------------------------------------------------------------- Code */
 
+/*
+ * ONE DEFINITION. There were two, 500 lines apart, differing only in padding
+ * and whether they set a margin — so what a code block actually looked like
+ * was whichever cascaded last, and editing the first one changed nothing.
+ */
 .code-block {
     background: var(--bg); border: 1px solid var(--line);
-    border-radius: var(--radius-sm); padding: .75rem;
-    overflow-x: auto; margin: .5rem 0; font-size: .82rem;
+    border-radius: var(--radius-sm); padding: .8rem;
+    overflow-x: auto; position: relative; margin: .5rem 0; font-size: .82rem;
 }
 .code-inline {
     background: var(--bg); border: 1px solid var(--line);
@@ -1094,6 +1189,16 @@ ul.checks li:last-child { border-bottom: 0; }
 
 .list-plain { margin: .35rem 0 0; padding-left: 1.1rem; display: grid; gap: .3rem; }
 
+/*
+ * An automation's dry-run result.
+ *
+ * Capped and scrollable: a preview of a long sequence is twenty lines, and
+ * without this the button that produced it is pushed off the screen, so the
+ * obvious next move — change something and run it again — is the one that
+ * cannot be seen.
+ */
+.preview-result { margin-top: .75rem; max-height: 22rem; overflow-y: auto; }
+
 .rule { border: 0; border-top: 1px solid var(--line); margin: 1rem 0; }
 
 @media (max-width: 38rem) {
@@ -1161,7 +1266,7 @@ ul.checks li:last-child { border-bottom: 0; }
    three divs whose heights are percentages of the day's answers. */
 .nps-chart {
     display: flex; align-items: flex-end; gap: .25rem;
-    overflow-x: auto; padding: .5rem 0 0;
+    overflow-x: auto; position: relative; padding: .5rem 0 0;
 }
 
 .nps-col { display: grid; gap: .2rem; justify-items: center; min-width: 2.1rem; }
@@ -1256,9 +1361,21 @@ body.embed .review-wall { padding: .25rem; }
 
 /* The one-shot reveal. Monospaced and selectable in one gesture: a token is
    64 hex characters and the only thing anybody does with it is copy it. */
-.token-reveal {
+/*
+ * A credential shown once, to be read and copied by eye.
+ *
+ * `.field input.token-reveal`, NOT `.token-reveal` — which is what this was,
+ * and it never applied. `.field input[type=text]` sets `font: inherit`, a
+ * shorthand that resets family along with everything else, and it outranks a
+ * single class. So every API token and every signing secret this application
+ * has ever shown was rendered in the proportional UI font, where `l`, `1` and
+ * `I` are the same picture and so are `0` and `O`. For 64 hex characters that
+ * somebody is checking against another screen, that is the one thing the
+ * styling had to get right. MEASURED in a browser, not read off the file.
+ */
+.field input.token-reveal {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: .85rem; letter-spacing: .01em;
+    font-size: .85rem; letter-spacing: .02em;
 }
 
 .ability-groups {
@@ -1271,11 +1388,6 @@ body.embed .review-wall { padding: .25rem; }
 }
 .ability-group .check { display: flex; gap: .4rem; align-items: flex-start; font-size: .88rem; }
 
-.code-block {
-    padding: .8rem; border-radius: var(--radius-sm);
-    background: var(--bg); border: 1px solid var(--line);
-    overflow-x: auto; font-size: .82rem;
-}
 .code-block code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 /* ---------------------------------------------------------------- Reports */
@@ -1327,7 +1439,7 @@ body.embed .review-wall { padding: .25rem; }
    beside it, which reads as a rendering fault rather than as a short month. */
 .report-chart {
     display: flex; align-items: flex-end; gap: .2rem;
-    overflow-x: auto; padding: .5rem 0 0;
+    overflow-x: auto; position: relative; padding: .5rem 0 0;
 }
 
 /* The baseline. Without a track behind each bar, this is what a day with
@@ -1374,6 +1486,20 @@ body.embed .review-wall { padding: .25rem; }
    there is no scrollbar until you touch it. */
 .table-scroll {
     overflow-x: auto;
+    /*
+     * A CONTAINING BLOCK, and it is load-bearing.
+     *
+     * `.sr-only` is `position: absolute`, and a `<caption class="sr-only">`
+     * or an `<span class="sr-only">Actions</span>` inside a table that is
+     * wider than the phone is laid out at its static position — out past the
+     * right edge. Without a positioned ancestor here, the nearest one is the
+     * page, so that 1px span joins the PAGE's scrollable overflow and the
+     * whole layout scrolls sideways: MEASURED at 390px, scrollWidth 482
+     * against a 390 viewport, with every row button pushed off screen at
+     * x=623 and up. The table itself was contained correctly the whole time;
+     * it was the invisible label that escaped.
+     */
+    position: relative;
     -webkit-overflow-scrolling: touch;
     background:
         linear-gradient(to right, var(--panel) 30%, transparent) left / 2rem 100% no-repeat,

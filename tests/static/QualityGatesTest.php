@@ -1453,3 +1453,475 @@ Harness::test('every DB::insert and DB::update names columns the schema has', fu
             . implode("\n   ", array_unique($offenders))
     );
 });
+
+// ---------------------------------------------------- Styles a view asks for
+
+/**
+ * Every class name the stylesheets define.
+ *
+ * A selector, not a declaration: this reads `.badge-ok` out of
+ * `.badge-ok { ... }` and out of `.tab.is-active`, which is what a view has to
+ * be able to name.
+ *
+ * @return array<string,true>
+ */
+function defined_css_classes(): array
+{
+    $known = [];
+
+    foreach (glob(CC_ROOT . '/assets/css/*.css') ?: [] as $file) {
+        preg_match_all('/\.(-?[A-Za-z_][A-Za-z0-9_-]*)/', (string) file_get_contents($file), $matches);
+
+        foreach ($matches[1] as $class) {
+            $known[$class] = true;
+        }
+    }
+
+    return $known;
+}
+
+/**
+ * The marker that stands in for every piece of PHP inside a view's markup.
+ *
+ * A NUL: it cannot appear in a real class attribute, and unlike a `"` it does
+ * not end one — so a part-dynamic class attribute still parses as an attribute
+ * and its literal half is still checked. Only the token carrying the marker is
+ * skipped, which is the difference between checking `preview-result` and
+ * throwing it away because something dynamic stood beside it.
+ */
+const CC_INTERPOLATED = "\x00";
+
+/**
+ * The literal class names a view asks for.
+ *
+ * **TOKENISED, not pattern-matched**, and both halves of that matter:
+ *
+ * The markup is taken from `T_INLINE_HTML` tokens only, so a `class="..."`
+ * that lives inside a PHP string — `icons.php` builds its SVG with
+ * `sprintf('<svg class="icon%s" ...')` — is not read as markup at all. It is
+ * not markup; it is a format string, and `icon%s` is not a class name anybody
+ * wrote.
+ *
+ * Everything between the markup is replaced by a marker, so an attribute
+ * assembled at render time out of data is recognisable as interpolated however
+ * it is written — across lines, around a ternary, with quotes of its own. The
+ * first version of this used one regex over the raw file and reported eleven
+ * fragments of PHP as missing classes, which is how a gate gets switched off
+ * rather than fixed.
+ *
+ * @return list<array{class:string,file:string}>
+ */
+function view_css_classes(): array
+{
+    $found = [];
+
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator(CC_ROOT . '/app/Views', FilesystemIterator::SKIP_DOTS)
+    );
+
+    foreach ($iterator as $file) {
+        if (!$file->isFile() || $file->getExtension() !== 'php') {
+            continue;
+        }
+
+        $markup = '';
+
+        foreach (token_get_all((string) file_get_contents($file->getPathname())) as $token) {
+            if (is_array($token) && $token[0] === T_INLINE_HTML) {
+                $markup .= $token[1];
+
+                continue;
+            }
+
+            // Everything else is code. One marker per run of it is enough:
+            // consecutive markers cannot make an interpolated attribute look
+            // literal, only more obviously not.
+            if (!str_ends_with($markup, CC_INTERPOLATED)) {
+                $markup .= CC_INTERPOLATED;
+            }
+        }
+
+        if (!preg_match_all('/\sclass="([^"]*)"/', $markup, $matches)) {
+            continue;
+        }
+
+        foreach ($matches[1] as $attribute) {
+            /*
+             * WHITESPACE ONLY. `trim()`'s default list includes `\0`, so a
+             * bare `trim()` here strips the interpolation marker off the end
+             * of `cal-<NUL>` and hands on `cal-` as though somebody had
+             * written it — which is precisely the false alarm the marker
+             * exists to prevent, and it did exactly that first time round.
+             */
+            foreach (preg_split('/\s+/', trim($attribute, " \t\n\r")) ?: [] as $class) {
+                /*
+                 * A name with a marker in it was built from data — `dot-`
+                 * followed by a tone, say — so there is no fixed name to check
+                 * and guessing at one produces a false alarm.
+                 */
+                if ($class === '' || str_contains($class, CC_INTERPOLATED)) {
+                    continue;
+                }
+
+                $found[] = ['class' => $class, 'file' => relative_path($file->getPathname())];
+            }
+        }
+    }
+
+    return $found;
+}
+
+Harness::test('every class a view names is one the stylesheet defines', function (): void {
+    /*
+     * MEASURED, three times over, while building the webhooks page: the API
+     * tokens page said `badge-warning`, the saved-reports list said the same,
+     * and the Text Club filter bar said `tab-bar` / `tab` / `is-active`. None
+     * of those exist in the stylesheet. Nothing failed, nothing 500'd, no test
+     * noticed — the markup simply rendered unstyled, so an "Expired" badge was
+     * grey text and a row of tabs was a row of bare links.
+     *
+     * That is the failure mode this gate exists for: a typo in a class name is
+     * invisible to every other check in the suite, and visible to a user
+     * immediately.
+     */
+    $known     = defined_css_classes();
+    $offenders = [];
+
+    Assert::true(count($known) > 100, 'the stylesheet was read');
+
+    foreach (view_css_classes() as $use) {
+        if (isset($known[$use['class']])) {
+            continue;
+        }
+
+        $offenders[$use['file'] . ': ' . $use['class']] = true;
+    }
+
+    $offenders = array_keys($offenders);
+    sort($offenders);
+
+    Assert::same(
+        [],
+        $offenders,
+        "a view names a class the stylesheet does not define:\n   "
+            . implode("\n   ", $offenders)
+    );
+});
+
+Harness::test('the class gate reads real selectors and ignores interpolation', function (): void {
+    // The gate above is only worth having if it is reading what it claims to.
+    $known = defined_css_classes();
+
+    Assert::true(isset($known['badge-ok']), 'a plain class is found');
+    Assert::true(isset($known['is-active']), 'a class in a compound selector is found');
+    Assert::false(isset($known['badge-warning']), 'and a name nothing defines is not');
+
+    $uses    = view_css_classes();
+    $classes = array_column($uses, 'class');
+
+    Assert::true(in_array('table-scroll', $classes, true), 'a literal attribute is collected');
+
+    // The two shapes that defeated the first version of this gate.
+    Assert::false(in_array('cal-', $classes, true), 'an interpolated attribute is skipped whole');
+    Assert::false(in_array('icon%s', $classes, true), 'a class inside a PHP string is not markup');
+
+    foreach ($classes as $class) {
+        Assert::true(
+            (bool) preg_match('/^-?[A-Za-z_][A-Za-z0-9_-]*$/', $class),
+            'every collected name is a plausible class, not a fragment of PHP: ' . $class
+        );
+    }
+});
+
+// ------------------------------------- an audit row is not a notification
+
+/**
+ * Every function body in a file, keyed by name.
+ *
+ * Token-based, with real brace matching, because the crude alternative —
+ * splitting on `function ` — merges a body with its neighbour and then cannot
+ * tell which of the two contained what. That turns the gate below into a check
+ * that silently passes.
+ *
+ * @return array<string,string>
+ */
+function php_function_bodies(string $source): array
+{
+    $tokens  = token_get_all($source);
+    $bodies  = [];
+    $count   = count($tokens);
+
+    for ($i = 0; $i < $count; $i++) {
+        if (!is_array($tokens[$i]) || $tokens[$i][0] !== T_FUNCTION) {
+            continue;
+        }
+
+        // The name, if it has one. A closure does not, and its body belongs
+        // to whatever function encloses it.
+        $name = null;
+
+        for ($j = $i + 1; $j < $count; $j++) {
+            if (is_array($tokens[$j]) && $tokens[$j][0] === T_STRING) {
+                $name = $tokens[$j][1];
+
+                break;
+            }
+
+            if ($tokens[$j] === '(') {
+                break;
+            }
+        }
+
+        if ($name === null) {
+            continue;
+        }
+
+        // Walk to the opening brace, then to its match.
+        $depth = 0;
+        $body  = '';
+
+        for ($j = $i + 1; $j < $count; $j++) {
+            $text = is_array($tokens[$j]) ? $tokens[$j][1] : $tokens[$j];
+
+            if ($text === '{') {
+                $depth++;
+            } elseif ($text === '}') {
+                $depth--;
+
+                if ($depth === 0) {
+                    break;
+                }
+            } elseif ($text === ';' && $depth === 0) {
+                // An abstract or interface method: no body at all.
+                break;
+            }
+
+            if ($depth > 0) {
+                $body .= $text;
+            }
+        }
+
+        // A name can repeat across classes in one file; keep both.
+        $bodies[$name . '#' . $i] = $body;
+    }
+
+    return $bodies;
+}
+
+Harness::test('a write that audits a real event also fires it', function (): void {
+    /*
+     * MEASURED, and it cost a whole feature quietly.
+     *
+     * `ContactController::store()` — the front desk typing a guest in, which
+     * is the commonest way a contact is created — recorded
+     * `Audit::record('contact.created', …)` and fired nothing. The event WAS
+     * fired from the five places a guest arrives on their own (a form, the
+     * public booking page, an inbound text, an inbound email, the API), so
+     * every other gate in this suite passed: the event is catalogued, it is
+     * fired somewhere, nothing is unreachable.
+     *
+     * The effect was that a venue's "welcome a new guest" sequence ran for
+     * everybody except the people the desk added, and a webhook subscribed to
+     * `contact.*` never heard about them. Nothing failed. The sequence simply
+     * never started.
+     *
+     * The rule: an audit row RECORDS what happened; an event TELLS something
+     * about it. A function that writes the first and not the second has
+     * decided, usually by accident, that nothing should react.
+     *
+     * (If a path ever genuinely should audit without telling anybody, the
+     * honest fix is to audit it under a name that is not an event's.)
+     */
+    $offenders = [];
+
+    foreach (project_php_files() as $file) {
+        foreach (php_function_bodies((string) file_get_contents($file)) as $key => $body) {
+            if (!preg_match_all("/Audit::record\(\s*'([a-z_]+\.[a-z_]+)'/", $body, $matches)) {
+                continue;
+            }
+
+            foreach (array_unique($matches[1]) as $action) {
+                // Only an action that names a trigger an operator can attach
+                // an automation to. `settings.mail_updated` is an audit name
+                // and nothing else.
+                if (!Event::isDeliverable($action)) {
+                    continue;
+                }
+
+                if (str_contains($body, "Event::fire('" . $action . "'")) {
+                    continue;
+                }
+
+                /*
+                 * A dynamic fire covers it: `Event::fire('booking.' . $to, …)`
+                 * and `Event::fire($event, …)` both reach actions this parser
+                 * cannot name, and both sit beside exactly such an audit row.
+                 */
+                if (preg_match("/Event::fire\(\s*(?:'[a-z_]+\.'\s*\.|\\\$)/", $body)) {
+                    continue;
+                }
+
+                $offenders[] = relative_path($file) . ': ' . explode('#', (string) $key)[0]
+                    . '() audits ' . $action . ' and fires nothing';
+            }
+        }
+    }
+
+    $offenders = array_values(array_unique($offenders));
+    sort($offenders);
+
+    Assert::same(
+        [],
+        $offenders,
+        "an audit row is not a notification:\n   " . implode("\n   ", $offenders)
+    );
+});
+
+Harness::test('the audit-versus-event gate reads function bodies correctly', function (): void {
+    // The gate is only worth having if the body extraction is sound, and a
+    // crude split on `function ` is not — it merges neighbours.
+    $bodies = php_function_bodies(
+        '<?php class A { public function one(): void { $x = 1; }'
+        . ' public function two(): void { $y = 2; if ($y) { $y++; } } }'
+    );
+
+    $joined = [];
+
+    foreach ($bodies as $key => $body) {
+        $joined[explode('#', (string) $key)[0]] = $body;
+    }
+
+    Assert::same(['one', 'two'], array_keys($joined));
+    Assert::true(str_contains($joined['one'], '$x = 1'), 'the first body is its own');
+    Assert::false(str_contains($joined['one'], '$y = 2'), 'and does not swallow the next one');
+    Assert::true(str_contains($joined['two'], '$y++'), 'a nested brace does not end a body early');
+
+    // A real file, so the gate is reading what it claims to.
+    $real = php_function_bodies((string) file_get_contents(CC_ROOT . '/app/Controllers/ContactController.php'));
+    $store = null;
+
+    foreach ($real as $key => $body) {
+        if (explode('#', (string) $key)[0] === 'store') {
+            $store = $body;
+        }
+    }
+
+    Assert::notNull($store, 'ContactController::store was found');
+    Assert::true(str_contains((string) $store, "Event::fire('contact.created'"), 'and it fires the event');
+});
+
+Harness::test('a horizontal scroll container is also a containing block', function (): void {
+    /*
+     * MEASURED in a browser at 390px, on five pages at once.
+     *
+     * `.sr-only` is `position: absolute`. A `<caption class="sr-only">` or an
+     * `<span class="sr-only">Actions</span>` inside a table that is wider than
+     * the phone is laid out at its static position — past the right edge. If
+     * the scroll container is not itself positioned, the nearest positioned
+     * ancestor is the page, so that 1px span joins the PAGE's scrollable
+     * overflow: the table scrolls correctly AND the whole layout scrolls
+     * sideways behind it, with every row button pushed off screen.
+     *
+     * Found on `/settings/webhooks` (scrollWidth 482 against 390), then on
+     * `/settings/users` after fixing only the first of the two table wrappers
+     * — which is why this is a rule about every such container rather than a
+     * fix to the two that were caught.
+     *
+     * `position: relative` costs nothing on a container that has no absolute
+     * descendants, and makes the next one correct by default.
+     */
+    $offenders = [];
+
+    foreach (glob(CC_ROOT . '/assets/css/*.css') ?: [] as $file) {
+        $css = (string) file_get_contents($file);
+
+        // Each top-level rule block: its selector, and its declarations.
+        if (!preg_match_all('/([^{}]+)\{([^{}]*)\}/', $css, $rules, PREG_SET_ORDER)) {
+            continue;
+        }
+
+        foreach ($rules as $rule) {
+            $selector     = trim(preg_replace('/\s+/', ' ', $rule[1]) ?? '');
+            $declarations = $rule[2];
+
+            // A nested block's selector picks up the enclosing at-rule's text;
+            // harmless, since we only care whether the two properties are in
+            // the same block.
+            if (!preg_match('/overflow(-x)?\s*:\s*(auto|scroll)/', $declarations)) {
+                continue;
+            }
+
+            if (preg_match('/position\s*:\s*(relative|absolute|fixed|sticky)/', $declarations)) {
+                continue;
+            }
+
+            $offenders[] = basename($file) . ': ' . $selector;
+        }
+    }
+
+    $offenders = array_values(array_unique($offenders));
+    sort($offenders);
+
+    Assert::same(
+        [],
+        $offenders,
+        "a scroll container with no position lets an absolutely-positioned child "
+            . "escape it and widen the page:\n   " . implode("\n   ", $offenders)
+    );
+});
+
+Harness::test('no class is defined by two separate rule blocks', function (): void {
+    /*
+     * MEASURED: `.code-block` was defined twice, 500 lines apart, differing in
+     * padding and in whether it set a margin. What a code block looked like
+     * was therefore whichever block cascaded last — and an edit to the first
+     * one changed nothing at all, silently.
+     *
+     * Only SIMPLE, single-class selectors are checked. A variant
+     * (`.badge-ok`), a descendant (`.card .table`) and a state
+     * (`.tab.is-active`) are all legitimately separate rules; two bare
+     * `.thing { }` blocks are the thing that fools a reader.
+     *
+     * Blocks inside an at-rule are excluded: a media query redefining a class
+     * is the whole point of a media query.
+     */
+    $offenders = [];
+
+    foreach (glob(CC_ROOT . '/assets/css/*.css') ?: [] as $file) {
+        $css = (string) file_get_contents($file);
+
+        // Strip at-rule bodies, so a media query's overrides are not counted.
+        $flat = (string) preg_replace('/@[a-z-]+[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/i', '', $css);
+
+        if (!preg_match_all('/([^{}]+)\{[^{}]*\}/', $flat, $rules, PREG_SET_ORDER)) {
+            continue;
+        }
+
+        $seen = [];
+
+        foreach ($rules as $rule) {
+            $selector = trim(preg_replace('/\s+/', ' ', $rule[1]) ?? '');
+
+            // One simple class, nothing else.
+            if (!preg_match('/^\.[A-Za-z_][A-Za-z0-9_-]*$/', $selector)) {
+                continue;
+            }
+
+            if (isset($seen[$selector])) {
+                $offenders[] = basename($file) . ': ' . $selector;
+            }
+
+            $seen[$selector] = true;
+        }
+    }
+
+    $offenders = array_values(array_unique($offenders));
+    sort($offenders);
+
+    Assert::same(
+        [],
+        $offenders,
+        "a class defined twice means an edit to one of them changes nothing:\n   "
+            . implode("\n   ", $offenders)
+    );
+});

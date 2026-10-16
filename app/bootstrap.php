@@ -64,19 +64,35 @@ require CC_ROOT . '/app/helpers.php';
  * Bring the database up to date when the code has been replaced.
  *
  * An upgrade on shared hosting is an unzip over the top of the old files;
- * nothing runs afterwards. Comparing the shipped VERSION against the marker
- * the last upgrade stored costs one string comparison per request, and skips
- * everything else until there is actually a new release in place.
+ * nothing runs afterwards. So this is the only thing standing between a new
+ * release and a venue meeting a 500 on a page whose table does not exist yet.
+ *
+ * **TWO TRIGGERS, AND THE SECOND ONE IS THERE BECAUSE THE FIRST FAILED.**
+ * This used to compare the shipped `VERSION` against the marker alone. That
+ * is one string comparison per request, which is pleasingly cheap and also
+ * trusts a human to remember something: `VERSION` sat at `1.0.0-phase1` for
+ * three phases, so this function returned on its first line and three schema
+ * files were never applied by any upgrade. Found by opening the page: a bare
+ * 500, and `Unknown column 'd.status'` in the log.
+ *
+ * So the schema directory is asked too. `Upgrade::schemaMarker()` is a hash
+ * of the shipped file NAMES — one `glob()` of a directory the OS has cached,
+ * next to a string comparison — and it changes exactly when there is a new
+ * file to apply, whatever anybody remembered to edit.
  */
 function cc_apply_pending_upgrade(): void
 {
     $shipped = trim((string) @file_get_contents(CC_ROOT . '/VERSION'));
+    $schema  = Upgrade::schemaMarker();
 
-    if ($shipped === '' || $shipped === (string) Settings::get('system.version', '')) {
+    $versionMoved = $shipped !== '' && $shipped !== (string) Settings::get('system.version', '');
+    $schemaMoved  = $schema !== (string) Settings::get('system.schema_files', '');
+
+    if (!$versionMoved && !$schemaMoved) {
         return;
     }
 
-    Upgrade::run($shipped);
+    Upgrade::run($shipped === '' ? (string) Settings::get('system.version', '0.0.0') : $shipped, $schema);
 }
 
 // -----------------------------------------------------------------------

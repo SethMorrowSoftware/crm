@@ -1,15 +1,11 @@
 # Castle CRM — machine interfaces
 
-What is callable from outside a browser today, and what is planned.
+What is callable from outside a browser.
 
-This document distinguishes the two honestly, because a reference that
-describes endpoints which do not exist is worse than no reference: somebody
-builds against it, and finds out at integration time.
-
-- **§1–§5 exist now** and are covered by the test suite.
-- **§5's "Webhooks" is the one part still planned.** The schema for it
-  (`webhooks`, `webhook_deliveries`) ships and nothing is routed yet; treat
-  that shape as a proposal, not a contract.
+Everything described here is built and covered by the test suite. A reference
+that describes endpoints which do not exist is worse than no reference —
+somebody builds against it and finds out at integration time — so where this
+document and `app/routes.php` disagree, the file is right (§8).
 
 ---
 
@@ -366,18 +362,157 @@ exists, which is how an id space gets walked.
 
 Reads are throttled at 600/minute per IP, writes at 300, deletes at 120.
 
-### Webhooks — planned
+### Webhooks
 
-Outbound, one row per event subscription (`webhooks`), with deliveries and
-their responses recorded (`webhook_deliveries`). Signed with an HMAC-SHA256 of
-the raw body in `X-Castle-Signature`, timestamped against replay, retried with
-exponential backoff, with a delivery log and manual replay.
-
-**Not built yet.** The tables ship; no routes do.
+The other direction — Castle CRM calling you when something happens — is
+§6 below.
 
 ---
 
-## 6. Alongside the API: the existing exports
+## 6. Outbound webhooks
+
+The API is how something outside asks Castle CRM a question. A webhook is how
+Castle CRM tells it something happened, the moment it happens, so nothing has
+to poll for changes.
+
+Subscriptions live at **Settings → Webhooks** (`/settings/webhooks`, permission
+`integrations_manage`). A subscription is an event pattern and a URL.
+
+### 6.1 What a call contains
+
+```http
+POST /your/endpoint HTTP/1.1
+Content-Type: application/json
+X-Castle-Event: booking.created
+X-Castle-Delivery: whd_4f1c8a9b2e7d0516
+X-Castle-Timestamp: 1763300000
+X-Castle-Signature: v1=6c1f…
+
+{
+  "id": "whd_4f1c8a9b2e7d0516",
+  "event": "booking.created",
+  "occurred_at": "2026-11-16T14:53:20+00:00",
+  "data": { "booking_id": 4711, "status": "confirmed" },
+  "version": "v1"
+}
+```
+
+**It carries ids, not records, and that is a decision rather than an
+oversight.** A webhook target is a URL typed into a form, fetched over the
+public internet, and logged at the far end by software this venue does not
+control. If a name, an email or an amount could reach it, every subscription
+would be a standing export of guest records to somewhere nobody audits — and
+it would get there not by anybody deciding so, but because some future event
+payload happened to include one.
+
+So `data` is filtered to an **allow-list**: `id`, anything ending `_id`, and
+the small set of branch labels `status`, `type`, `channel`, `event`, `source`,
+`reason`. Anything else — including anything added later — is dropped. A
+receiver that needs the record reads it back through `/api/v1` (§5) with a
+token that can be scoped to one resource and revoked on its own.
+
+### 6.2 Verifying a call
+
+```
+signed  = "v1." + timestamp + "." + raw_request_body
+expected = "v1=" + hmac_sha256(signed, your_signing_secret)
+```
+
+Compare `expected` against `X-Castle-Signature` with a constant-time
+comparison (`hash_equals` in PHP, `hmac.compare_digest` in Python,
+`crypto.timingSafeEqual` in Node).
+
+Four things to get right, each of which is a real failure if you do not:
+
+- **Verify the bytes you received**, not a re-encoded copy. JSON key order and
+  unicode escaping are not stable between languages, so a receiver that parses
+  and re-serialises before checking computes a different string and *every*
+  signature fails.
+- **Check the timestamp** and reject anything more than about five minutes
+  old. The timestamp is inside the signed string, so a captured call cannot be
+  replayed tomorrow with a fresh one — but only your clock can close the
+  window on a replay sent a second later.
+- **Deduplicate on `X-Castle-Delivery`.** It is stable across every retry and
+  across a manual replay. A receiver that is not idempotent will double-count
+  an event the first time a retry happens, which is the first time your
+  endpoint has a bad minute.
+- **Use a constant-time comparison.** A comparison that returns on the first
+  wrong byte leaks, over enough requests, how much of a guess was right.
+
+A worked example in PHP:
+
+```php
+$body      = file_get_contents('php://input');
+$timestamp = (int) ($_SERVER['HTTP_X_CASTLE_TIMESTAMP'] ?? 0);
+$signature = $_SERVER['HTTP_X_CASTLE_SIGNATURE'] ?? '';
+
+if (abs(time() - $timestamp) > 300) {
+    http_response_code(400);
+    exit;
+}
+
+$expected = 'v1=' . hash_hmac('sha256', 'v1.' . $timestamp . '.' . $body, $secret);
+
+if (!hash_equals($expected, $signature)) {
+    http_response_code(401);
+    exit;
+}
+```
+
+The signing secret is shown **once**, when the subscription is created. It
+cannot be hashed at rest the way an API token is, because every delivery has
+to be signed with it — so "no page ever prints it a second time" is the whole
+of its protection. Lost it? Delete the subscription and make another.
+
+### 6.3 What to answer, and what happens if you do not
+
+Answer `2xx` as soon as you have **stored** the call, and do the work
+afterwards. The sender waits a few seconds at most.
+
+| Your answer | What happens |
+|---|---|
+| `2xx` | Delivered. The subscription's failure count resets. |
+| `408`, `429`, any `5xx`, or no answer at all | Retried: six attempts in all, after 1, 5, 30, 120 and 360 minutes — about nine hours. |
+| Any other `4xx` | **Not retried.** You read the request and rejected it, so sending the identical body five more times would be rejected five more times. |
+
+After **20 consecutive failed deliveries** the subscription switches itself off
+and records why, rather than retrying a dead endpoint for ever. Switching it
+back on clears the count.
+
+Every attempt is logged with the response code, the reason in words, and how
+long it took, on the same page. A finished delivery can be replayed by hand;
+a replay is a new attempt carrying the **same** delivery id.
+
+### 6.4 Which events
+
+Everything in `App\Core\Event::CATALOG` that is deliverable, plus two kinds
+of wildcard:
+
+- `*` — everything;
+- `booking.*` — everything in that namespace, **including events added
+  later**, which is usually what an integration wants. The dot is required:
+  `booking.*` does not match a future `bookings.created`.
+
+The picker on the page is generated from the catalogue, so it cannot offer an
+event nothing fires — and a subscription to one is refused at save time rather
+than sitting there never delivering.
+
+### 6.5 The target URL
+
+Refused when you save it, not quietly at four in the morning:
+
+- anything but `http`/`https`;
+- a literal address inside the network — loopback, link-local (`169.254.*`,
+  which is where cloud metadata services live), and the RFC 1918 ranges;
+- **a hostname that resolves to any of those**, checked at save time and again
+  at delivery time, with the approved address pinned for the connection so a
+  name whose answer changes in between cannot be used to reach inwards.
+
+Redirects are not followed, for the same reason.
+
+---
+
+## 7. Alongside the API: the existing exports
 
 Two routes already move data out in bulk, and for an integration that only
 needs a periodic copy they are simpler than paging the API.
@@ -406,7 +541,7 @@ formula on a staff machine.
 
 ---
 
-## 7. Reading the authoritative list
+## 8. Reading the authoritative list
 
 `app/routes.php` is the route table, and it is written to be read: every URL
 the application answers, with the permission that guards it and the rate limit

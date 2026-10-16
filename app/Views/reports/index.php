@@ -101,7 +101,7 @@ $familyIcons = [
                                  out three weeks later. */ ?>
                         <span class="saved-report-dead">
                             <strong><?= e((string) $row['name']) ?></strong>
-                            <span class="badge badge-warning">report no longer exists</span>
+                            <span class="badge badge-warn">report no longer exists</span>
                         </span>
                     <?php else: ?>
                         <a href="<?= e(url('/reports/saved/' . (int) $row['id'])) ?>">

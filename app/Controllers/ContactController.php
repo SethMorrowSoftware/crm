@@ -329,6 +329,27 @@ final class ContactController extends Controller
 
         Audit::record('contact.created', 'contacts', $id, null, $row);
 
+        /*
+         * FIRED HERE TOO, and it was not — which is the whole point of writing
+         * it down.
+         *
+         * `contact.created` was fired from the five places a guest arrives on
+         * their own (a form, the public booking page, an inbound text, an
+         * inbound email, the API) and NOT from the one place a member of staff
+         * types one in, which is the commonest way a contact is created at a
+         * front desk. An audit row is not an event: it records what happened,
+         * it does not tell anything.
+         *
+         * So a venue's "welcome a new guest" automation ran for everybody
+         * except the people the desk added, and a webhook subscription to
+         * `contact.*` never heard about them either. Nothing failed; the
+         * sequence simply never started, which is the hardest kind of bug to
+         * notice from the outside.
+         *
+         * `source` says which door they came in by, matching the other five.
+         */
+        Event::fire('contact.created', ['contact_id' => $id, 'source' => 'staff']);
+
         return $this->success($request, 'Contact saved.', '/contacts/' . $id);
     }
 

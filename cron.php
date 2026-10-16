@@ -113,6 +113,7 @@ $stats = [
     'auto_scanned'   => 0,
     'surveys'        => 0,
     'memberships'    => 0,
+    'webhooks'       => 0,
     'maintenance' => 0,
     'errors'      => 0,
 ];
@@ -412,7 +413,37 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 10. Nightly maintenance — once a day, not every minute
+// 10. Send the webhook deliveries that are due
+//
+// EVERY TICK, not nightly. A webhook that told an integration about a booking
+// six hours after it happened is worse than one that never fired: the
+// integration acts on it, and acts late.
+//
+// Queueing happens in the request that fired the event; this is the only
+// place anything is actually sent, so a dead endpoint costs a cron tick
+// rather than a member of staff waiting at the front desk.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $hooks = App\Services\WebhookDispatcher::send($budgetLeft);
+
+        $stats['webhooks'] = $hooks['delivered'];
+
+        if ($hooks['attempted'] > 0) {
+            cron_out('  Webhooks: ' . $hooks['attempted'] . ' attempted, '
+                . $hooks['delivered'] . ' delivered, ' . $hooks['failed'] . ' to retry, '
+                . $hooks['gave_up'] . ' given up on.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: webhook delivery failed', ['error' => $e->getMessage()]);
+        cron_out('  ! webhooks: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 11. Nightly maintenance — once a day, not every minute
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft() && cron_shouldRunDaily()) {
@@ -428,7 +459,7 @@ if ($budgetLeft() && cron_shouldRunDaily()) {
 }
 
 // ---------------------------------------------------------------------------
-// 11. Heartbeat
+// 12. Heartbeat
 // ---------------------------------------------------------------------------
 
 Settings::set('system.cron_last_run', gmdate('Y-m-d H:i:s'));
@@ -458,6 +489,7 @@ cron_out(sprintf(
     $stats['surveys'],
     $stats['memberships'],
     $stats['maintenance'],
+    $stats['webhooks'],
     $stats['errors']
 ));
 
@@ -653,6 +685,21 @@ function cron_dailyMaintenance(): int
         $done++;
     } catch (Throwable $e) {
         Log::warning('Maintenance: reset purge failed', ['error' => $e->getMessage()]);
+    }
+
+    // --- API tokens that expired long ago, and old webhook deliveries
+    //
+    // Neither is a security measure — both are refused on use — but a
+    // settings page that lists a museum of dead keys is one nobody reads,
+    // and a delivery log that never shrinks buries this week's failure.
+    try {
+        App\Core\ApiToken::purgeExpired();
+        App\Services\WebhookDispatcher::prune(
+            (int) Settings::get('system.webhook_keep_days', App\Services\Webhooks::KEEP_DAYS)
+        );
+        $done++;
+    } catch (Throwable $e) {
+        Log::warning('Maintenance: token and delivery purge failed', ['error' => $e->getMessage()]);
     }
 
     // --- Completed jobs, kept a week for inspection
