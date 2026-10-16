@@ -48,6 +48,19 @@ $router->post('/reset-password', ['AuthController', 'resetPassword'], ['guest', 
 $router->get('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], ['throttle:60,5'], 'unsubscribe');
 $router->post('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], ['throttle:60,5']);
 
+// Inbound texts, posted by the SMS provider. CSRF-exempt for the same reason
+// as unsubscribe — there is no session and never will be — but NOT
+// unauthenticated: the controller verifies the provider's own signature and
+// REFUSES a request it cannot verify, including when nothing is configured to
+// verify against. An unsigned endpoint here would let anybody forge a JOIN
+// from a stranger's number (making the venue text them, with its own records
+// saying they consented) or a STOP from a customer's (cutting them off from
+// their booking reminders).
+//
+// Throttled generously: a busy Saturday is a lot of real inbound texts, and
+// the signature check is what keeps the cost of a forged flood at nothing.
+$router->post('/webhooks/sms', ['SmsWebhookController', 'receive'], ['throttle:600,5'], 'webhooks.sms');
+
 // A hosted web form. No login: this is the party enquiry a parent fills in
 // from the venue's website.
 //
@@ -59,6 +72,14 @@ $router->post('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], 
 // loosely because a page view is cheap and a real guest may reload.
 $router->get('/f/{slug:[a-z0-9-]+}', ['FormController', 'show'], ['throttle:120,5'], 'forms.public');
 $router->post('/f/{slug:[a-z0-9-]+}', ['FormController', 'submit'], ['csrf', 'throttle:15,10']);
+
+// The Text Club sign-up, on the same terms. Throttled harder than the party
+// enquiry because every submission SENDS A TEXT, so an unthrottled form is a
+// way to make the venue pay to message a number somebody else chose. The
+// controller also caps attempts per NUMBER, which is the limit that actually
+// matters: a throttle on the address is shared by a whole phone network.
+$router->get('/text-club/join', ['TextClubController', 'publicForm'], ['throttle:120,5'], 'textclub.public');
+$router->post('/text-club/join', ['TextClubController', 'publicJoin'], ['csrf', 'throttle:10,10']);
 
 // ---------------------------------------------------------------------------
 // Dashboard
@@ -565,6 +586,24 @@ $router->group('/campaigns', ['auth', 'can:view_marketing'], function ($router):
     $router->post('/{id:\d+}/send', ['CampaignController', 'send'], ['csrf', 'can:campaigns_send']);
     $router->post('/{id:\d+}/pause', ['CampaignController', 'pause'], ['csrf', 'can:campaigns_send']);
     $router->post('/{id:\d+}/resume', ['CampaignController', 'resume'], ['csrf', 'can:campaigns_send']);
+});
+
+// ---------------------------------------------------------------------------
+// Text Club
+//
+// The same three-way split as campaigns, because it is the same kind of
+// power: `view_marketing` to see the list and how it is growing,
+// `campaigns_manage` to write the offer calendar and the opt-in wording, and
+// `campaigns_send` to put an offer in front of actual guests.
+//
+// NOTE the public join routes above are deliberately NOT in this group: they
+// are how a guest who has never heard of this software gets on the list.
+// ---------------------------------------------------------------------------
+
+$router->group('/text-club', ['auth', 'can:view_marketing'], function ($router): void {
+    $router->get('', ['TextClubController', 'index'], [], 'textclub');
+    $router->post('/settings', ['TextClubController', 'saveSettings'], ['csrf', 'can:campaigns_manage']);
+    $router->post('/send', ['TextClubController', 'sendOffer'], ['csrf', 'can:campaigns_send']);
 });
 
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');

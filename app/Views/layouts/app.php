@@ -52,6 +52,7 @@ $nav = [
             ['Marketing', '/marketing', 'view_marketing', 'megaphone'],
             ['Campaigns', '/campaigns', 'view_marketing', 'megaphone'],
             ['Segments', '/segments', 'view_marketing', 'target'],
+            ['Text Club', '/text-club', 'view_marketing', 'message'],
             ['Playbooks', '/playbooks', 'view_automations', 'book'],
             ['Reputation', '/reputation', 'view_reputation', 'star'],
         ],

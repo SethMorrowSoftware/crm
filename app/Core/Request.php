@@ -181,6 +181,22 @@ final class Request
         return $this->post[$key] ?? $default;
     }
 
+    /**
+     * Every posted field, and ONLY the posted fields.
+     *
+     * Unlike `all()`, which merges the query string, the JSON body and the
+     * route parameters. A provider that signs its webhook signs exactly the
+     * form fields it posted, so reproducing that signature needs this set
+     * and not a superset — one extra route parameter in the mix and the
+     * signature never matches again.
+     *
+     * @return array<string,mixed>
+     */
+    public function postAll(): array
+    {
+        return $this->post;
+    }
+
     /** A trimmed string, guaranteed scalar. Arrays become ''. */
     public function str(string $key, string $default = ''): string
     {

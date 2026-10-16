@@ -19,7 +19,7 @@ php tests/run.php --filter=validator,security
 php tests/run.php --stop
 
 # Refuse to report success if a suite silently skipped (what CI uses)
-php tests/run.php --require-db --require-http --min-tests=780
+php tests/run.php --require-db --require-http --min-tests=1100
 
 # Prove the product's actual promise: that it installs on a bare host
 php tests/install/walk-installer.php
@@ -300,7 +300,7 @@ Two conventions worth keeping:
 A test that exists because of a real bug should say so in a comment. Several
 here do, and that note is what stops someone "simplifying" the fix away.
 
-### Three habits that came out of real misses
+### Five habits that came out of real misses
 
 1. **A list test that never sets a filter does not test the filter.** Two
    search bugs shipped behind tests that loaded the page with no query, so the
@@ -311,6 +311,33 @@ here do, and that note is what stops someone "simplifying" the fix away.
 3. **Every refusal test needs its positive control beside it.** A controller
    that wrote nothing at all, or a page that answered 404 to everything, would
    satisfy half the refusal tests here perfectly.
+4. **A test that changes a global setting must change it back.** Settings are
+   shared and the suites run in one process against one database, so a leak
+   surfaces as a failure in a DIFFERENT file: `CampaignsTest` turned Safe Mode
+   off and left it off, which broke an assertion in `QuotesTest` two suites
+   later about an email being redirected. Capture each key's prior value, set
+   what the suite needs, and restore at the end of the file — using
+   `Settings::forget()` where the prior value was null. `tests/http/
+   CampaignsTest.php` and `tests/http/TextClubTest.php` both show the shape.
+   Note also that `--filter` is applied per TEST, so every suite file's
+   top-level code runs on every run: a restore that sits inside a test does
+   not happen when that test is filtered out.
+5. **Give each test its own fixture tag, not just each suite.** `CampaignsTest`
+   tagged every contact `source = 'camphttp'` and built each segment on that
+   tag, so the "nobody is reachable" campaign matched the reachable guests
+   seeded two tests earlier and duly sent to them. Every audience figure in
+   the file was really counting the whole file. A per-test tag fixed four
+   failures at once.
+
+### Settings are read through a cache
+
+`Settings` loads once per process. The writes a browser-level test makes
+happen in the SERVER'S process, so a bare `Settings::get()` in the test reads
+a copy taken before the request that changed it. That silently "proved" a
+saved offer calendar had never been written when it had been written
+perfectly well. Force a reload (`Settings::load(true)`) before asserting on
+anything an HTTP request wrote — `tch_setting()` in
+`tests/http/TextClubTest.php` wraps it with the reason attached.
 
 ### Say what you are not testing
 
@@ -328,3 +355,32 @@ substitution, a filtered run, a restore — but the result is not: three of the
 public booking page's guards had no test that could fail until the sweep said
 so, and one of them (the daily allowance refusing a direct POST) was the whole
 bound on what a stranger can do to the diary.
+
+Phase 4's sweeps found four more, and the worst of them was guarding the most
+important property in the phase. `tests/http/TextClubTest.php` claimed to
+prove that an unconfigured inbound webhook refuses everything — the thing
+standing between a stranger and a forged JOIN from somebody else's number.
+It sent a request signed with *some other* secret, which the HMAC comparison
+refuses whether or not the guard exists, so the test passed with the guard
+deleted. The real attack is a request signed with the EMPTY secret, and only
+that version of the test fails when the guard goes.
+
+**Two kinds of survivor are expected and should be recorded rather than
+chased:**
+
+- **Equivalent mutants**, where a second guard downstream produces the same
+  outcome. Removing the "a YES with no invite outstanding" early return still
+  subscribes nobody, because the "no invite was ever sent" check below it
+  refuses too. Keep the guard — it states the rule where a reader looks for
+  it — and note in the sweep script why it survives.
+- **One layer of a two-layer gate.** Every mutating route carries both a
+  route-level `can:` middleware and an in-action `authorize()`, so removing
+  either alone is invisible by design. The case that must be caught is
+  removing BOTH, and each sweep includes it.
+
+A survivor that is neither of those is a test that is not testing what it
+says. Three Phase 4 survivors looked equivalent and were not: each still
+refused correctly but changed what the venue or the guest was TOLD — a
+never-invited row being informed that an invitation had expired, an empty
+coupon-code field being told it should be "3 to 40 letters". Pin the wording
+and they die.

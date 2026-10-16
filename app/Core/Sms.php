@@ -73,7 +73,7 @@ final class Sms
      *     to:string, body:string, contact_id?:int|null, kind?:string,
      *     conversation_id?:int|null, user_id?:int|null, template_id?:int|null,
      *     campaign_id?:int|null, automation_run_id?:int|null,
-     *     ignore_quiet_hours?:bool
+     *     ignore_quiet_hours?:bool, ignore_suppression?:bool
      * } $message
      *
      * @return array{
@@ -135,7 +135,21 @@ final class Sms
         // --- Suppression ----------------------------------------------------
         //
         // For EVERY kind. A guest who texted STOP gave an instruction.
-        if (self::isSuppressed($to)) {
+        //
+        // WITH ONE EXCEPTION, and it is the confirmation of that very STOP.
+        // Opting out suppresses the number, so the message that tells the
+        // guest their opt-out worked is the first thing the suppression
+        // blocks — which leaves a guest who has just texted STOP hearing
+        // nothing at all, the single most likely moment for somebody to
+        // conclude the venue is ignoring them and complain to their carrier.
+        // Carriers expect that confirmation. So it may be asked for
+        // explicitly, and the request is honoured only for a TRANSACTIONAL
+        // message: this must never become a way to put marketing in front of
+        // somebody who said stop, which is the whole point of the list.
+        $overrideSuppression = ($message['ignore_suppression'] ?? false) === true
+            && $kind === self::TRANSACTIONAL;
+
+        if (self::isSuppressed($to) && !$overrideSuppression) {
             return self::refuse('suppressed', 'That number has opted out of text messages.');
         }
 
@@ -437,12 +451,51 @@ final class Sms
     }
 
     /** Honour a START: lift the suppression and record fresh consent. */
+    /**
+     * Lift a "do not text this number" instruction, granting nothing.
+     *
+     * Deliberately narrower than `optIn()`, and the Text Club rejoin is why
+     * the two are separate. Somebody who texted STOP last summer and texts
+     * JOIN today has ASKED to be texted, so the suppression has to go — this
+     * method refuses every kind of message, confirmations included, so
+     * leaving it in place means that guest can never rejoin however often
+     * they ask. But a JOIN is not consent to marketing: that waits for the
+     * confirmation, which is the entire point of a double opt-in. Granting
+     * consent here would turn one word into a full opt-in for exactly the
+     * people who had already said no once.
+     *
+     * Returns whether a suppression was actually there to remove.
+     */
+    public static function clearSuppression(string $number, string $source = 'inbound JOIN'): bool
+    {
+        $number = normalize_phone($number) ?? $number;
+
+        try {
+            $had = DB::exists(
+                'SELECT id FROM {suppressions} WHERE channel = :c AND address = :a',
+                ['c' => 'sms', 'a' => $number]
+            );
+
+            DB::delete('suppressions', 'channel = :c AND address = :a', ['c' => 'sms', 'a' => $number]);
+
+            if ($had) {
+                Log::info('Cleared an SMS suppression', ['source' => $source]);
+            }
+
+            return $had;
+        } catch (Throwable $e) {
+            Log::error('Could not clear an SMS suppression', ['error' => $e->getMessage()]);
+
+            return false;
+        }
+    }
+
     public static function optIn(string $number, string $source = 'inbound START'): string
     {
         $number = normalize_phone($number) ?? $number;
 
         try {
-            DB::delete('suppressions', 'channel = :c AND address = :a', ['c' => 'sms', 'a' => $number]);
+            self::clearSuppression($number, $source);
 
             $contact = DB::first(
                 'SELECT id FROM {contacts} WHERE phone_normalized = :p AND deleted_at IS NULL ORDER BY id LIMIT 1',

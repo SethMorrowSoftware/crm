@@ -673,9 +673,132 @@ page was drawn; the lock is reviewed, not measured.
 
 ---
 
+## [1.0.0-phase4] — unreleased
+
+Phase 4 is communications: one inbox for every channel, email and SMS sending
+with the compliance rules in the send path rather than beside it, segments,
+campaigns, and the Text Club.
+
+### The shared inbox
+
+- **Every conversation in one queue** (`#/inbox`), email and text together,
+  with snoozing, canned replies and a first-response clock. A reply to a
+  CLOSED thread reopens it: a closed conversation with an unanswered question
+  in it is the one failure a queue exists to prevent.
+- **Inbound texts arrive through a signed webhook** (`POST /webhooks/sms`),
+  which is also what makes the Text Club possible — see below.
+
+### Email and SMS
+
+- **The rules live in the send path.** `Mailer::send()` and `Sms::send()`
+  refuse, in order, for an invalid address, an empty or over-long body, paused
+  sending, a missing opt-out line on a bulk text, a suppression, a missing
+  contact, do-not-contact, missing consent, a number the guest did not opt in
+  on, the weekly frequency cap, and an unregistered 10DLC sender — then defer
+  for quiet hours, then redirect under Safe Mode. Every caller gets the same
+  answer because there is only one implementation.
+- **Segment counting is where the money is.** A text is 160 characters in
+  GSM-7 and 70 in UCS-2, so one curly apostrophe pasted from a word processor
+  can take a 300-character offer from two segments to five. The cost estimate
+  is computed from the real body, and the page says so before anybody sends.
+
+### Campaigns
+
+- **The page tells the truth before the send**: how many will be reached, how
+  many will not and why, what it will cost, and what is currently blocking it.
+  "400 in the segment, 180 will get this, 220 have not opted in" is the most
+  useful sentence on it — a venue that only ever saw 400 would read 180
+  arrivals as broken sending.
+- **A spend over $20 needs the word SEND typed**, not a second click. A click
+  is what somebody does by reflex.
+- **The audience is frozen when sending starts**, one row per person with a
+  reason for every skip, so the venue can answer "why didn't Dana get it"
+  months later. Cron walks it 50 at a time inside the campaign's own send
+  window; nothing is sent in the web request, because forty thousand
+  recipients is not a web request.
+
+### The Text Club
+
+- **Double opt-in, properly.** A guest texts JOIN (or uses the sign-up page)
+  and is subscribed to nothing until they reply YES. Three cases subscribe
+  NOBODY and each is tested: a YES with no invite outstanding, a YES to an
+  invite older than a week, and a YES after a STOP. The first matters most —
+  "yes" is the most ordinary word in a text message, and a guest answering
+  "yes" to *are you still coming Saturday?* has not joined a marketing list.
+- **A JOIN clears the do-not-text instruction; only a YES grants consent.**
+  These come apart on the rejoin: somebody who texted STOP last summer and
+  texts JOIN today has asked to be texted, so the suppression that would
+  otherwise block even the confirmation has to go — while consent still waits
+  for the YES. Conflating them either blocks every rejoin for ever or treats
+  one word as full consent.
+- **Consent is stored with its evidence**, including the exact disclosure
+  wording as it stood that day. What a venue has to be able to produce is the
+  wording from the day somebody agreed, not whatever the setting says now.
+- **A twelve-month offer calendar**, because an arcade's quiet months are not
+  its busy ones. All twelve shipped offers fit a single GSM-7 text, measured.
+- **The validator blocks the save.** An offer with no opt-out line, or an
+  invite missing its rates disclosure, is refused when it is written — not
+  discovered on the first of the month after it has gone to the whole list.
+
+### Two defects found by driving rather than by testing
+
+Both were invisible to a passing test suite and both broke the feature
+outright:
+
+- **No inbound webhook existed.** `InboxController::receive()` composes the
+  reply — the STOP confirmation, the Text Club invite — and returns it for a
+  caller to deliver, and there was no caller. A guest could text JOIN, be
+  recorded as pending, and never receive the confirmation they were meant to
+  answer. The double opt-in dead-ended there, silently. `POST /webhooks/sms`
+  is that caller: it verifies the provider's own signature (Twilio's
+  HMAC-SHA1, Telnyx's Ed25519, or a shared secret) and REFUSES what it cannot
+  verify, including when nothing is configured to verify against — an
+  endpoint that is open until somebody sets a secret works perfectly in
+  testing and is wide open in production.
+- **A STOP confirmation could never be delivered.** Opting out suppresses the
+  number, and the suppression then blocks every message to it — starting with
+  the one that tells the guest their opt-out worked. Carriers expect that
+  confirmation, and its absence is the most likely moment for somebody to
+  conclude they are being ignored. `Sms::send()` now takes an
+  `ignore_suppression` option that is honoured ONLY for a transactional
+  message, so it can never become a way to put an offer in front of somebody
+  who said stop.
+
+Also fixed: the mailer recorded a message's cost only on the usage ledger and
+not on the message row, so every email campaign reported costing $0.00 however
+the venue had priced email — which reads either as broken sending or as free
+postage.
+
+### Testing
+
+The suite grew from 831 to **1,129 tests**. Everything in this phase was
+mutation-checked, and the sweeps are the reason several tests exist at all:
+
+- The Text Club's rules: 30 mutations, 29 caught. The survivor is an
+  equivalent mutant kept as the record of it.
+- Its pages and the webhook: 28 mutations, 25 caught, 2 of them the two gate
+  layers removed singly — which is unobservable by design, so the case that
+  has to be caught is both at once, and it is.
+- Campaigns: 18 mutations, 16 caught, the same two gate layers aside.
+
+Four Text Club tests were measurably not testing what they claimed until the
+sweep said so. The worst was the one guarding the webhook's most important
+property: it checked that an unconfigured endpoint refuses a request signed
+with *some other* secret, which the arithmetic refuses anyway. The real attack
+is a request signed with the EMPTY secret, and only that version of the test
+fails when the guard is removed.
+
+One habit to add to the three from Phase 3: **a test that changes a global
+setting must change it back.** Settings are shared and the suites run against
+one database, so a leak surfaces as a failure in a different file — this one
+turned Safe Mode off in the campaigns suite and broke a quotes assertion two
+suites later.
+
+---
+
 ## Unreleased — next
 
-Phase 4 is communications: the shared inbox, email and SMS sending, segments,
-campaigns and Text Club. See `docs/SPEC.md` §13 for the full plan, and §14 for
-the questions that still need the venue's answers — the CenterEdge reporting
-credentials and the real party prices being the two that block the most.
+Phase 5 is the automation engine and the 111 seeded automations. See
+`docs/SPEC.md` §13 for the full plan, and §14 for the questions that still
+need the venue's answers — the CenterEdge reporting credentials and the real
+party prices being the two that block the most.

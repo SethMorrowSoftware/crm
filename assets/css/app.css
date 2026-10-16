@@ -877,6 +877,73 @@ ul.checks li:last-child { border-bottom: 0; }
     .inbox-msg.is-inbound { margin-right: 0; }
 }
 
+/* ------------------------------------------------------------- Text Club */
+
+/* The honeypot. Positioned off-screen rather than `display: none`, because
+   the simpler bots check for that and skip the field — which is exactly the
+   behaviour this is trying to catch. It is also `aria-hidden` with
+   `tabindex="-1"` in the markup, so a screen reader never announces it and
+   a keyboard user cannot land in it: a labelled field somebody is asked to
+   fill in is a trap for the wrong person. */
+.honeypot {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+/* The disclosure a guest agrees to. Deliberately not small print: this is
+   the wording their consent rests on, and the whole reason the venue may
+   text them. */
+.club-consent {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-sunk);
+    padding: .85rem 1rem;
+    margin-bottom: var(--gap);
+    font-size: .82rem;
+    color: var(--muted);
+}
+
+.club-consent p { margin: 0 0 .5rem; }
+.club-consent p:last-child { margin-bottom: 0; }
+.club-consent strong { color: var(--ink); }
+
+.club-wording {
+    font-style: italic;
+    padding-left: .75rem;
+    border-left: 2px solid var(--line);
+}
+
+/* An offer as it will land on a phone, shown at a phone's width so the line
+   breaks are the real ones. */
+.club-preview {
+    max-width: 22rem;
+    padding: .7rem .85rem;
+    border-radius: 1rem;
+    background: var(--accent-soft, var(--bg-sunk));
+    border: 1px solid var(--line);
+    font-size: .88rem;
+    line-height: 1.45;
+}
+
+.club-month { border-top: 1px solid var(--line); padding: .6rem 0; }
+.club-month:first-of-type { border-top: 0; }
+.club-month > summary { cursor: pointer; font-weight: 600; font-size: .88rem; }
+.club-month[open] > summary { margin-bottom: .75rem; }
+.club-month .field:last-child { margin-bottom: 0; }
+
+.club-calendar { list-style: none; margin: 0; padding: 0; font-size: .85rem; }
+.club-calendar li {
+    display: flex;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: .4rem 0;
+    border-bottom: 1px solid var(--line);
+}
+.club-calendar li:last-child { border-bottom: 0; }
+
 /* --------------------------------------------------------- Public booking */
 
 /* The only `bare` page that needs two columns' worth of room: a package

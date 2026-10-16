@@ -108,6 +108,7 @@ $stats = [
     'rollups'     => 0,
     'woken'       => 0,
     'campaign_sends' => 0,
+    'club_sends'     => 0,
     'maintenance' => 0,
     'errors'      => 0,
 ];
@@ -219,7 +220,58 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Nightly maintenance — once a day, not every minute
+// 5. Walk this month's Text Club offer forward by one chunk
+//
+// The same shape as a campaign, and for the same reason: the list runs to
+// tens of thousands and a monthly offer is not a web request. The difference
+// is that nothing freezes an audience here — the list IS the audience, and it
+// is re-read each tick so somebody who confirmed this morning is included and
+// somebody who texted STOP an hour ago is not.
+//
+// What stops it sending twice is the per-subscriber frequency cap:
+// `last_offer_sent_at` is stamped only on a message that really went, and the
+// query only returns subscribers whose stamp is older than the floor. So this
+// runs every minute of every day and does nothing at all for the other 29.
+// There is no "has this month's offer been sent" flag to get out of step with
+// what was actually delivered.
+//
+// Quiet hours are enforced inside Sms::send() like everywhere else, so an
+// offer that becomes due at eleven at night waits for the morning rather than
+// waking the list.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        // Cheap enough to check every tick: one indexed row, and it returns
+        // false outright in a month with no offer written.
+        if (App\Controllers\TextClubController::offerPending()) {
+            $clubSent = 0;
+
+            while ($budgetLeft()) {
+                $attempted = App\Controllers\TextClubController::sendOfferChunk();
+
+                if ($attempted === 0) {
+                    break;
+                }
+
+                $clubSent += $attempted;
+            }
+
+            $stats['club_sends'] = $clubSent;
+
+            if ($clubSent > 0) {
+                cron_out('  ' . $clubSent . ' Text Club offer(s) attempted.');
+            }
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: Text Club send failed', ['error' => $e->getMessage()]);
+        cron_out('  ! Text Club send: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 6. Nightly maintenance — once a day, not every minute
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft() && cron_shouldRunDaily()) {
@@ -235,7 +287,7 @@ if ($budgetLeft() && cron_shouldRunDaily()) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Heartbeat
+// 7. Heartbeat
 // ---------------------------------------------------------------------------
 
 Settings::set('system.cron_last_run', gmdate('Y-m-d H:i:s'));
@@ -251,12 +303,13 @@ $elapsed = round(microtime(true) - CC_START, 2);
 
 cron_out(sprintf(
     'Done in %ss. Jobs: %d, automations due: %d, conversations woken: %d, '
-        . 'campaign messages: %d, maintenance tasks: %d, errors: %d.',
+        . 'campaign messages: %d, Text Club offers: %d, maintenance tasks: %d, errors: %d.',
     $elapsed,
     $stats['jobs'],
     $stats['automations'],
     $stats['woken'],
     $stats['campaign_sends'],
+    $stats['club_sends'],
     $stats['maintenance'],
     $stats['errors']
 ));

@@ -33,14 +33,15 @@ handoffs:
 | 1 | Foundation: installer, 99-table schema, auth, RBAC, settings, cron, UI shell | ✅ |
 | 2 | Contacts, households, pipelines, deals, quotes, forms, tasks | ✅ |
 | 3 | Bookings: availability, packages, run sheets, waivers, check-in | ✅ |
-| 4 | Email and SMS, inbox, segments, campaigns, Text Club | next |
-| 5 | The automation engine and the 111 seeded automations | |
+| 4 | Email and SMS, inbox, segments, campaigns, Text Club | ✅ |
+| 5 | The automation engine and the 111 seeded automations | next |
 | 6 | Reputation, memberships, the reporting suite | |
 | 7 | CenterEdge import, Google Business Profile, webhooks, REST API | |
 | 8 | Hardening: security review, accessibility audit, load test, backup/restore | |
 
-Phases 1 to 3 are verified end to end against real MySQL 8.0, MariaDB 10.11 and MySQL
-5.7: **831 tests** plus a full installer walk-through. See [docs/TESTING.md](docs/TESTING.md).
+Phases 1 to 4 are verified end to end against real MySQL 8.0, MariaDB 10.11 and MySQL
+5.7: **1,129 tests** plus a full installer walk-through. See
+[docs/TESTING.md](docs/TESTING.md).
 
 ## Install
 

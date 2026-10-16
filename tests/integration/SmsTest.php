@@ -1122,6 +1122,72 @@ Harness::test('a STOP from a number the venue has never seen still works', funct
     }
 });
 
+Harness::test(
+    'THE SUPPRESSION OVERRIDE EXISTS FOR ONE MESSAGE AND IS REFUSED TO MARKETING',
+    function (): void {
+        /*
+         * Opting out suppresses the number, and the suppression then blocks
+         * every message to it — including the one that tells the guest their
+         * opt-out worked. That is the single most likely moment for somebody
+         * to conclude they are being ignored and complain to their carrier,
+         * and carriers expect that confirmation. So `ignore_suppression` can
+         * be asked for.
+         *
+         * It must never become a way to put an OFFER in front of somebody who
+         * said stop, which is the entire purpose of the suppression list. So
+         * it is honoured only for a transactional message, and this is the
+         * test that holds that line: MEASURED by mutation, dropping the kind
+         * check broke nothing else in the suite.
+         */
+        $number = '+18455557777';
+
+        try {
+            DB::insert('suppressions', [
+                'channel'    => 'sms',
+                'address'    => $number,
+                'reason'     => 'unsubscribe',
+                'source'     => 'sms suite',
+                'created_at' => now_utc(),
+            ]);
+
+            // Marketing, asking to ignore it. Refused.
+            $marketing = with_sms_settings(sms_live(), static fn (): array => Sms::send([
+                'to'                 => $number,
+                'body'               => SMS_BULK,
+                'kind'               => Sms::MARKETING,
+                'ignore_suppression' => true,
+            ]));
+
+            Assert::same('suppressed', $marketing['reason'], 'A MARKETING MESSAGE MAY NOT OVERRIDE IT');
+            Assert::false($marketing['sent']);
+
+            // Transactional, asking to ignore it. Allowed — this is the
+            // opt-out confirmation.
+            $transactional = with_sms_settings(sms_live(), static fn (): array => Sms::send([
+                'to'                 => $number,
+                'body'               => 'You have been unsubscribed and will get no more texts from us.',
+                'kind'               => Sms::TRANSACTIONAL,
+                'ignore_suppression' => true,
+            ]));
+
+            Assert::true($transactional['sent'], 'the opt-out confirmation must reach them');
+
+            // And without asking, a transactional message is still refused:
+            // the override is opt-in, not the default.
+            $ordinary = with_sms_settings(sms_live(), static fn (): array => Sms::send([
+                'to'   => $number,
+                'body' => 'An ordinary reminder.',
+                'kind' => Sms::TRANSACTIONAL,
+            ]));
+
+            Assert::same('suppressed', $ordinary['reason'], 'the override has to be asked for');
+        } finally {
+            DB::delete('suppressions', 'channel = :c AND address = :a', ['c' => 'sms', 'a' => $number]);
+            DB::query('DELETE FROM {messages} WHERE to_address = :p', ['p' => $number]);
+        }
+    }
+);
+
 Harness::test('START lifts the suppression but DOES NOT clear do_not_contact', function (): void {
     // do_not_contact is a broader instruction, given by a different route. A
     // text saying START is permission to text again; it is not permission to

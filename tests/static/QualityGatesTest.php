@@ -179,6 +179,19 @@ Harness::test('every mutating route is CSRF-protected', function (): void {
         // submits this on their behalf, so no session token can exist. The
         // signed token in the path is the authorisation.
         'POST /u/{token:[A-Za-z0-9_-]+}',
+
+        // Inbound texts, posted by the SMS provider. There is no session and
+        // never will be. The authorisation is the PROVIDER'S OWN SIGNATURE,
+        // checked in `SmsWebhookController::verify()` — Twilio's HMAC-SHA1
+        // scheme, Telnyx's Ed25519, or a shared secret for anything else —
+        // and a request that cannot be verified is refused, INCLUDING when
+        // nothing is configured to verify against. That last part is what
+        // makes this exemption defensible: the endpoint is closed by default
+        // rather than open until somebody remembers to secure it. An
+        // unsigned endpoint here would let anybody forge a JOIN from a
+        // stranger's number — making the venue text them, with its own
+        // records saying they consented — or a STOP from a customer's.
+        'POST /webhooks/sms',
     ];
 
     $offenders = [];
@@ -228,6 +241,15 @@ Harness::test('every authenticated non-API route requires auth', function (): vo
     $public = [
         '/login', '/logout', '/forgot-password', '/reset-password',
         '/health.json', '/f/', '/w/', '/u/', '/q/',
+        // Provider webhooks carry a provider SIGNATURE instead of a session;
+        // see the CSRF exemption above for why that is enough, and why the
+        // endpoint is closed rather than open when nothing is configured.
+        '/webhooks/',
+        // The Text Club sign-up, which is how a guest who has never heard of
+        // this software gets on the list. Honeypotted, throttled, capped per
+        // NUMBER, CSRF-protected, and it grants no consent by itself — the
+        // confirmation text does that.
+        '/text-club/join',
     ];
 
     $offenders = [];

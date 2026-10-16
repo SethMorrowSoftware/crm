@@ -559,6 +559,34 @@ final class InboxController extends Controller
 
         $contactId = self::resolveSender($channel, $from);
 
+        /*
+         * THE TEXT CLUB IS SETTLED AFTER THE SENDER IS KNOWN, and that is a
+         * deliberate difference from the STOP above.
+         *
+         * A STOP must not wait on a lookup — it is honoured against the
+         * NUMBER, whether or not any contact matches, because a suppression
+         * that depended on finding somebody would fail for exactly the people
+         * most likely to complain. A JOIN is the opposite: it CREATES a
+         * relationship, and the consent it eventually grants has to be
+         * recorded against a contact with evidence attached, so it needs the
+         * sender resolved first.
+         *
+         * A STOP is passed on as well, so the list row is settled too: the
+         * suppression stops the sending, and this stops the venue's own
+         * subscriber figures counting somebody who has left.
+         */
+        if ($channel === 'sms' && in_array($keyword, ['join', 'confirm', 'stop'], true)) {
+            $club = TextClubController::handle($keyword, $from, $contactId);
+
+            // The Text Club's reply wins only where the send path had none.
+            // A STOP's confirmation is worded by `Sms::optOut()` and must not
+            // be replaced by anything: it is the message that tells a guest
+            // their opt-out worked.
+            if ($reply === null && $club['reply'] !== null) {
+                $reply = $club['reply'];
+            }
+        }
+
         // A STOP still gets recorded on the thread: the venue should be able
         // to see that it happened and when, rather than inferring it from a
         // suppression table.
