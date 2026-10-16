@@ -211,13 +211,52 @@ $router->group('/households', ['auth', 'can:view_contacts'], function ($router):
 });
 
 // ---------------------------------------------------------------------------
+// Sales pipelines and deals (replaces the /deals placeholder)
+//
+// Reading is view_deals, and it is SCOPED: the controller runs every read
+// through Acl::scopeCondition(), so a Party Host holding view_deals at 'own'
+// sees their own leads and a manager holding it at 'all' sees the venue's.
+// Editing is deals_manage, deleting is deals_delete, and taking over somebody
+// else's deal needs deals_reassign — checked in the controller, which is where
+// it can compare the submitted owner against the deal's current one.
+// ---------------------------------------------------------------------------
+
+$router->group('/deals', ['auth', 'can:view_deals'], function ($router): void {
+    $router->get('', ['DealController', 'index'], [], 'deals');
+    // The same deals without the grid: a phone, a screen reader, or sorting by
+    // value down a column.
+    $router->get('/table', ['DealController', 'table'], [], 'deals.table');
+
+    $router->get('/new', ['DealController', 'create'], ['can:deals_manage'], 'deals.create');
+    $router->post('', ['DealController', 'store'], ['csrf', 'can:deals_manage']);
+
+    $router->get('/{id:\d+}', ['DealController', 'show'], [], 'deals.show');
+    $router->get('/{id:\d+}/edit', ['DealController', 'edit'], ['can:deals_manage'], 'deals.edit');
+    $router->post('/{id:\d+}', ['DealController', 'update'], ['csrf', 'can:deals_manage']);
+
+    // Moving a deal is its own route because it writes a stage-history row and
+    // may close the deal, and because the board and the table both post to it.
+    $router->post('/{id:\d+}/stage', ['DealController', 'move'], ['csrf', 'can:deals_manage']);
+
+    $router->post('/{id:\d+}/delete', ['DealController', 'destroy'], ['csrf', 'can:deals_delete']);
+});
+
+$router->group('/pipelines', ['auth', 'can:view_deals'], function ($router): void {
+    $router->get('', ['PipelineController', 'index'], [], 'pipelines');
+    $router->get('/new', ['PipelineController', 'create'], ['can:deals_manage'], 'pipelines.create');
+    $router->post('', ['PipelineController', 'store'], ['csrf', 'can:deals_manage']);
+    $router->get('/{id:\d+}', ['PipelineController', 'edit'], ['can:deals_manage'], 'pipelines.edit');
+    $router->post('/{id:\d+}', ['PipelineController', 'update'], ['csrf', 'can:deals_manage']);
+    $router->post('/{id:\d+}/stages', ['PipelineController', 'saveStages'], ['csrf', 'can:deals_manage']);
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2+ module routes are added as each module lands. The placeholders
 // below give the navigation somewhere real to point in Phase 1, and each
 // renders an honest "coming in Phase N" state rather than a broken link.
 // ---------------------------------------------------------------------------
 
 $router->get('/inbox', ['PlaceholderController', 'inbox'], ['auth', 'can:view_inbox'], 'inbox');
-$router->get('/deals', ['PlaceholderController', 'deals'], ['auth', 'can:view_deals'], 'deals');
 $router->get('/bookings', ['PlaceholderController', 'bookings'], ['auth', 'can:view_bookings'], 'bookings');
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
 $router->get('/reputation', ['PlaceholderController', 'reputation'], ['auth', 'can:view_reputation'], 'reputation');
