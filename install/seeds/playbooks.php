@@ -9,7 +9,7 @@ declare(strict_types=1);
  * Activation is always a deliberate human act, and Safe Mode still applies on
  * top of that — a fresh install cannot message a guest even by accident.
  *
- * @return array{playbooks:int,automations:int}
+ * @return array{playbooks:int,automations:int,steps:int}
  */
 
 use App\Core\DB;
@@ -39,29 +39,289 @@ return static function (): array {
                 . 'keyed to each child\'s birthday.',
             'tailor'  => 'Your package prices and what each includes, your deposit and release '
                 . 'policy, the voice of your messages, and who owns a new inquiry.',
+            /*
+             * THE STEPS ARE AUTHORED HERE, and the fourth element of each
+             * entry is the sequence. Everything in this playbook can be
+             * switched on as it stands: every template it names is one the
+             * installer seeds, and every delay is tied to the party's own
+             * date rather than to a fixed wait, so a reminder lands fourteen
+             * days before THAT party.
+             *
+             * Still inactive, and Safe Mode still applies on top. What
+             * shipping the steps changes is that an operator can read what a
+             * sequence will send, preview it against a real guest, and switch
+             * it on — rather than opening an automation that says "no steps".
+             */
             'automations' => [
-                ['Instant inquiry response', 'form.submitted', 'Email and text the parent within two minutes, create a task for the owner, and start the response timer.'],
-                ['Assign new party lead', 'deal.created', 'Round-robin a new birthday lead to an available host and notify them.'],
-                ['Quote nurture — 9 touches', 'quote.sent', 'A twelve-day sequence of reminders, a call task and a final incentive. Exits the moment the deal is won.'],
-                ['Quote viewed — strike while warm', 'quote.viewed', 'Alert the owner that the family just opened the quote, with a task to call now.'],
-                ['Quote accepted — move to held', 'quote.accepted', 'Move the deal to Date Held, create the booking, and send the deposit request.'],
-                ['Deposit chase', 'booking.held', 'Day 1 email, day 3 text, day 5 release warning, day 7 release the date and notify the host.'],
-                ['Deposit received — confirm', 'booking.deposit_paid', 'Send the confirmation with directions, parking and what to bring.'],
-                ['Pre-party readiness — T-14 waivers', 'booking.upcoming', 'Send the waiver link to the host parent fourteen days out.'],
-                ['Pre-party readiness — T-7 headcount', 'booking.upcoming', 'Ask the parent to confirm the final headcount a week out.'],
-                ['Pre-party readiness — T-3 details', 'booking.upcoming', 'Send the full party plan, timings, allergy check and cake arrangements.'],
-                ['Pre-party reminder — T-1 text', 'booking.upcoming', 'A short text the day before with the arrival time and room.'],
-                ['Waiver chase', 'booking.waiver_outstanding', 'Remind the host parent about missing waivers, then create a task for the front desk.'],
-                ['Day-of host brief', 'booking.upcoming', 'Email the assigned host their run sheet on the morning of the party.'],
-                ['Party completed — thank you', 'booking.completed', 'Thank the parent and tee up the feedback request.'],
-                ['Annual rebook — child birthday', 'child.birthday_soon', 'Forty-five days before a child\'s birthday, email the guardian with last year\'s package pre-filled.'],
-                ['Sibling birthday cross-sell', 'child.birthday_soon', 'When a household has another child with a birthday coming, offer the same package.'],
-                ['Cancelled party — win it back', 'booking.cancelled', 'Acknowledge the cancellation, then offer a new date after a week.'],
-                ['No-show follow-up', 'booking.no_show', 'Create a task to call, and hold the deposit decision with a manager.'],
-                ['Lost lead — 90 day re-approach', 'deal.lost', 'Three months after a lost birthday lead, try once more with a seasonal offer.'],
-                ['Guest-of-honour age milestone', 'booking.completed', 'Tag the household with the child\'s new age so next year\'s offer fits.'],
-                ['Party room upsell', 'booking.confirmed', 'Offer add-ons the family did not take, two weeks out.'],
-                ['Large party VIP handling', 'booking.confirmed', 'For parties above a guest threshold, assign a manager and create a planning call task.'],
+                [
+                    'Instant inquiry response',
+                    'form.submitted',
+                    'Email and text the parent within two minutes, and create a task for the owner with a two-hour deadline.',
+                    [
+                        ['type' => 'send_email', 'template' => 'party-inquiry-received', 'kind' => 'transactional'],
+                        ['type' => 'send_sms', 'template' => 'party-inquiry-sms', 'kind' => 'transactional'],
+                        ['type' => 'create_task', 'title' => 'Call {{first_name}} about the party enquiry',
+                         'description' => 'They enquired through the website. Ring them while it is warm.',
+                         'due_in_hours' => 2, 'priority' => 'high'],
+                    ],
+                    ['goal' => 'quote.accepted'],
+                ],
+                [
+                    'Assign new party lead',
+                    'deal.created',
+                    'Notify the owner about a new birthday lead and create the claim task.',
+                    [
+                        ['type' => 'notify_user', 'message' => 'New party lead: {{full_name}}. Claim it and call them.',
+                         'title' => 'New party lead'],
+                        ['type' => 'create_task', 'title' => 'Claim and call the lead: {{full_name}}',
+                         'due_in_hours' => 4],
+                    ],
+                ],
+                [
+                    'Quote nurture — 9 touches',
+                    'quote.sent',
+                    'A twelve-day sequence of reminders, a call task and a final nudge. Exits the moment they book.',
+                    [
+                        ['type' => 'send_email', 'template' => 'party-quote', 'kind' => 'transactional'],
+                        ['type' => 'send_sms', 'template' => 'quote-nudge-sms', 'wait' => 2880],
+                        ['type' => 'create_task', 'title' => 'Call {{full_name}} — quote sent three days ago',
+                         'wait' => 1440, 'due_in_hours' => 8],
+                        ['type' => 'send_email', 'template' => 'party-quote', 'wait' => 4320],
+                        ['type' => 'send_sms', 'template' => 'quote-nudge-sms', 'wait' => 4320],
+                        // Day twelve: 0, 2, 3, 6, 9, 12. The description says
+                        // twelve days and the arithmetic has to agree with it.
+                        ['type' => 'create_task', 'title' => 'Last try on {{full_name}} before the date goes',
+                         'wait' => 4320, 'due_in_hours' => 24],
+                    ],
+                    [
+                        // The whole point of a nurture: it stops the moment
+                        // the family books, so nobody is chased for something
+                        // they have already done.
+                        'exit' => ['match' => 'any', 'rules' => [
+                            ['field' => 'has_booking', 'op' => 'is_true', 'value' => '1'],
+                            ['field' => 'quotes_status', 'op' => 'is', 'value' => 'accepted'],
+                        ]],
+                        'goal' => 'quote.accepted',
+                    ],
+                ],
+                [
+                    'Quote viewed — strike while warm',
+                    'quote.viewed',
+                    'Alert the owner that the family just opened the quote, with a task to call now.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'A quote was just opened',
+                         'message' => '{{full_name}} is reading their quote right now. This is the moment to call.'],
+                        ['type' => 'create_task', 'title' => 'Call {{full_name}} — reading the quote now',
+                         'due_in_hours' => 1, 'priority' => 'high'],
+                    ],
+                    ['once' => 0, 'reentry' => 1, 'goal' => 'quote.accepted'],
+                ],
+                [
+                    'Quote accepted — hold the date',
+                    'quote.accepted',
+                    'Move the deal to Date Held, send the deposit request, and task the host with creating the booking.',
+                    [
+                        ['type' => 'move_deal_stage', 'stage' => 'Date Held'],
+                        ['type' => 'send_email', 'template' => 'deposit-request', 'kind' => 'transactional'],
+                        ['type' => 'create_task', 'title' => 'Create the booking for {{full_name}}',
+                         'description' => 'The quote is accepted and the deposit request has gone out.',
+                         'due_in_hours' => 4, 'priority' => 'high'],
+                    ],
+                ],
+                [
+                    'Deposit chase',
+                    'booking.held',
+                    'Day 1 email, day 3 text, day 5 email, then day 7 release the date and tell the host.',
+                    [
+                        ['type' => 'send_email', 'template' => 'deposit-request', 'kind' => 'transactional',
+                         'wait' => 1440],
+                        ['type' => 'send_sms', 'template' => 'deposit-reminder-sms', 'kind' => 'transactional',
+                         'wait' => 2880],
+                        ['type' => 'send_email', 'template' => 'deposit-request', 'kind' => 'transactional',
+                         'wait' => 2880],
+                        ['type' => 'create_task', 'title' => 'Release the held date for {{full_name}}',
+                         'description' => 'Seven days with no deposit. Release it or give them one more day.',
+                         'wait' => 2880, 'due_in_hours' => 4, 'priority' => 'high'],
+                        ['type' => 'notify_user', 'title' => 'A held date is up for release',
+                         'message' => 'No deposit from {{full_name}} after a week. The release task is on the list.'],
+                    ],
+                    [
+                        // Paid is paid: the stamp on the booking is what the
+                        // money ladder sets, so the chase stops without
+                        // waiting for anybody to switch it off.
+                        'exit' => ['match' => 'any', 'rules' => [
+                            ['field' => 'bookings_deposit_paid_at', 'op' => 'is_set', 'value' => '1'],
+                            ['field' => 'bookings_status', 'op' => 'in', 'value' => 'cancelled,no_show'],
+                        ]],
+                        'goal' => 'booking.deposit_paid',
+                    ],
+                ],
+                [
+                    'Deposit received — confirm',
+                    'booking.deposit_paid',
+                    'Send the confirmation with directions, parking and what to bring.',
+                    [
+                        ['type' => 'send_email', 'template' => 'booking-confirmation', 'kind' => 'transactional'],
+                    ],
+                ],
+                [
+                    'Pre-party readiness — T-14 waivers',
+                    'booking.upcoming',
+                    'Send the waiver link to the host parent fourteen days out.',
+                    [
+                        ['type' => 'send_email', 'template' => 'waiver-reminder', 'kind' => 'transactional',
+                         'before' => ['field' => 'event_date', 'days' => 14, 'at' => '10:00']],
+                    ],
+                    ['when' => ['days' => 14]],
+                ],
+                [
+                    'Pre-party readiness — T-7 headcount',
+                    'booking.upcoming',
+                    'Ask the parent to confirm the final headcount a week out.',
+                    [
+                        ['type' => 'send_sms', 'template' => 'headcount-sms', 'kind' => 'transactional',
+                         'before' => ['field' => 'event_date', 'days' => 7, 'at' => '11:00']],
+                    ],
+                    ['when' => ['days' => 7]],
+                ],
+                [
+                    'Pre-party readiness — T-3 details',
+                    'booking.upcoming',
+                    'Send the party plan three days out and task the host with checking allergies and the cake.',
+                    [
+                        ['type' => 'send_email', 'template' => 'booking-confirmation', 'kind' => 'transactional',
+                         'before' => ['field' => 'event_date', 'days' => 3, 'at' => '10:00']],
+                        ['type' => 'create_task', 'title' => 'Check allergies and cake for {{full_name}}',
+                         'due_in_hours' => 24],
+                    ],
+                    ['when' => ['days' => 3]],
+                ],
+                [
+                    'Pre-party reminder — T-1 text',
+                    'booking.upcoming',
+                    'A short text the day before with the arrival time.',
+                    [
+                        ['type' => 'send_sms', 'template' => 'party-tomorrow-sms', 'kind' => 'transactional',
+                         'before' => ['field' => 'event_date', 'days' => 1, 'at' => '16:00']],
+                    ],
+                    ['when' => ['days' => 1]],
+                ],
+                [
+                    'Waiver chase',
+                    'booking.waiver_outstanding',
+                    'Text the host parent about missing waivers, then task the front desk a day later.',
+                    [
+                        ['type' => 'send_sms', 'template' => 'waiver-chase-sms', 'kind' => 'transactional'],
+                        ['type' => 'create_task', 'title' => 'Waivers still missing for {{full_name}}',
+                         'description' => 'Catch them at the desk on arrival if they are still unsigned.',
+                         'wait' => 1440, 'due_in_hours' => 24],
+                    ],
+                    ['when' => ['days' => 3]],
+                ],
+                [
+                    'Day-of host brief',
+                    'booking.upcoming',
+                    'Tell the host their party is today, on the morning of it.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'A party today',
+                         'message' => 'Party today for {{full_name}}. The run sheet is on the booking.',
+                         'before' => ['field' => 'event_date', 'days' => 0, 'at' => '08:00']],
+                    ],
+                    ['when' => ['days' => 0]],
+                ],
+                [
+                    'Party completed — thank you',
+                    'booking.completed',
+                    'Thank the parent the same evening and task the host with asking for a review.',
+                    [
+                        ['type' => 'send_email', 'template' => 'party-thank-you', 'wait' => 180],
+                        ['type' => 'create_task', 'title' => 'Ask {{full_name}} for a review',
+                         'wait' => 1440, 'due_in_hours' => 48],
+                    ],
+                ],
+                [
+                    'Annual rebook — child birthday',
+                    'child.birthday_soon',
+                    'Forty-five days before a child\'s birthday, email the guardian about booking again.',
+                    [
+                        ['type' => 'send_email', 'template' => 'birthday-club-invite'],
+                        ['type' => 'create_task', 'title' => 'Follow up the rebook offer to {{full_name}}',
+                         'wait' => 10080, 'due_in_hours' => 48],
+                    ],
+                    ['when' => ['days' => 45], 'once' => 0, 'reentry' => 1, 'goal' => 'booking.created'],
+                ],
+                [
+                    'Sibling birthday cross-sell',
+                    'child.birthday_soon',
+                    'Sixty days out, offer the same package for the next child in the household.',
+                    [
+                        ['type' => 'send_email', 'template' => 'birthday-club-invite'],
+                    ],
+                    ['when' => ['days' => 60], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Cancelled party — win it back',
+                    'booking.cancelled',
+                    'Task the host to call, then offer a new date after a week.',
+                    [
+                        ['type' => 'create_task', 'title' => 'Call {{full_name}} about the cancelled party',
+                         'due_in_hours' => 24],
+                        ['type' => 'send_email', 'template' => 'lapsed-guest-winback', 'wait' => 10080],
+                    ],
+                    ['goal' => 'booking.created'],
+                ],
+                [
+                    'No-show follow-up',
+                    'booking.no_show',
+                    'Task the host to call, and put the deposit decision in front of a manager.',
+                    [
+                        ['type' => 'create_task', 'title' => 'Call {{full_name}} — they did not arrive',
+                         'due_in_hours' => 8, 'priority' => 'high'],
+                        ['type' => 'notify_user', 'title' => 'A no-show needs a decision',
+                         'message' => '{{full_name}} did not arrive. Decide what happens to the deposit.'],
+                    ],
+                ],
+                [
+                    'Lost lead — 90 day re-approach',
+                    'deal.lost',
+                    'Three months after a lost birthday lead, try once more.',
+                    [
+                        ['type' => 'send_email', 'template' => 'lapsed-guest-winback', 'wait' => 129600],
+                    ],
+                    ['goal' => 'deal.won', 'goal_hours' => 1440],
+                ],
+                [
+                    'Past party host — tag the family',
+                    'booking.completed',
+                    'Tag the family as a past party host, so next year\'s offer and the segments find them.',
+                    [
+                        ['type' => 'add_tag', 'tag' => 'party host'],
+                    ],
+                ],
+                [
+                    'Party room upsell',
+                    'booking.confirmed',
+                    'Two weeks out, task the host to offer the add-ons the family did not take.',
+                    [
+                        ['type' => 'create_task', 'title' => 'Offer add-ons to {{full_name}}',
+                         'description' => 'Pizza, party bags, extra time. Check what they did not take.',
+                         'before' => ['field' => 'event_date', 'days' => 14, 'at' => '09:00'],
+                         'due_in_hours' => 48],
+                    ],
+                ],
+                [
+                    'Large party VIP handling',
+                    'booking.confirmed',
+                    'For a party above twenty children, assign a manager and book a planning call.',
+                    [
+                        ['type' => 'condition', 'field' => 'bookings_guest_count', 'op' => 'gte', 'value' => '20'],
+                        ['type' => 'notify_user', 'branch' => 'yes', 'title' => 'A large party is booked',
+                         'message' => '{{full_name}} has booked for {{bookings_guest_count}}. Assign a manager.'],
+                        ['type' => 'create_task', 'branch' => 'yes',
+                         'title' => 'Planning call for the large party: {{full_name}}',
+                         'due_in_hours' => 48, 'priority' => 'high'],
+                    ],
+                ],
             ],
         ],
         [
@@ -254,8 +514,100 @@ return static function (): array {
         ],
     ];
 
+    /**
+     * Write one automation's steps.
+     *
+     * The seed describes a step the way somebody would say it out loud —
+     * `['type' => 'send_email', 'template' => 'party-quote', 'wait' => 2880]`
+     * — and this turns that into the columns the engine reads. Written here
+     * rather than in each entry because two of those columns are easy to get
+     * wrong and the mistake is silent: a delay tied to a date goes in
+     * `delay_until_config` as `field`/`days`/`at`, and a condition's rules go
+     * in as a GROUP with `match` and `op`, not as a bare list with
+     * `operator`. Either mistake saves cleanly and then behaves as though the
+     * step were not there.
+     *
+     * `branch` attaches a step to the condition or split before it, which is
+     * what makes a linear list able to describe a fork.
+     *
+     * @param list<array<string,mixed>> $steps
+     */
+    $writeSteps = static function (int $automationId, array $steps) use ($now): int {
+        $written = 0;
+        $parent  = null;
+        $order   = 0;
+
+        foreach ($steps as $spec) {
+            $type = (string) ($spec['type'] ?? '');
+
+            if ($type === '') {
+                continue;
+            }
+
+            $branch = (string) ($spec['branch'] ?? 'main');
+            $config = [];
+
+            // Everything that is not a step property is config for the step.
+            foreach ($spec as $key => $value) {
+                if (!in_array($key, ['type', 'branch', 'wait', 'before', 'after'], true)) {
+                    $config[$key] = $value;
+                }
+            }
+
+            if ($type === 'condition' && isset($spec['field'])) {
+                $config = [
+                    'rules' => [
+                        'match' => 'all',
+                        'rules' => [[
+                            'field' => (string) $spec['field'],
+                            'op'    => (string) ($spec['op'] ?? 'is'),
+                            'value' => $spec['value'] ?? '',
+                        ]],
+                    ],
+                ];
+            }
+
+            $delayType   = null;
+            $delayConfig = null;
+
+            foreach (['before' => 'days_before_field', 'after' => 'days_after_field'] as $key => $kind) {
+                if (!is_array($spec[$key] ?? null)) {
+                    continue;
+                }
+
+                $delayType   = $kind;
+                $delayConfig = json_encode($spec[$key], JSON_UNESCAPED_SLASHES);
+            }
+
+            $stepId = DB::insert('automation_steps', [
+                'automation_id'      => $automationId,
+                'parent_step_id'     => $branch === 'main' ? null : $parent,
+                'branch'             => $branch === 'main' ? 'main' : $branch,
+                'sort_order'         => $order++,
+                'type'               => $type,
+                'config'             => $config === [] ? null : json_encode($config, JSON_UNESCAPED_SLASHES),
+                'delay_minutes'      => (int) ($spec['wait'] ?? 0),
+                'delay_until_type'   => $delayType,
+                'delay_until_config' => $delayConfig,
+                'is_enabled'         => 1,
+                'created_at'         => $now,
+            ]);
+
+            // A fork remembers itself, so the steps written after it with a
+            // branch land inside it.
+            if (in_array($type, ['condition', 'split_test'], true)) {
+                $parent = $stepId;
+            }
+
+            $written++;
+        }
+
+        return $written;
+    };
+
     $playbookCount = 0;
     $automationCount = 0;
+    $stepCount = 0;
 
     foreach ($playbooks as $playbook) {
         $existing = DB::first('SELECT id FROM {playbooks} WHERE slug = :slug', ['slug' => $playbook['slug']]);
@@ -282,10 +634,29 @@ return static function (): array {
             $playbookCount++;
         }
 
-        foreach ($playbook['automations'] as $index => [$name, $trigger, $description]) {
-            $slug = $playbook['slug'] . '-' . str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT);
+        foreach ($playbook['automations'] as $index => $spec) {
+            [$name, $trigger, $description] = $spec;
 
-            if (DB::exists('SELECT id FROM {automations} WHERE slug = :slug', ['slug' => $slug])) {
+            $steps   = is_array($spec[3] ?? null) ? $spec[3] : [];
+            $options = is_array($spec[4] ?? null) ? $spec[4] : [];
+            $slug    = $playbook['slug'] . '-' . str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT);
+
+            $already = DB::first('SELECT id FROM {automations} WHERE slug = :slug', ['slug' => $slug]);
+
+            if ($already !== null) {
+                /*
+                 * Already here, so it is left exactly as it is — STEPS
+                 * INCLUDED.
+                 *
+                 * The tempting alternative is to top up an automation that
+                 * has none, which would help an install that predates these
+                 * sequences shipping. It would also refill one a venue
+                 * emptied on purpose, on a re-seed, possibly while it is
+                 * switched on — and then the venue's own sequence starts
+                 * sending again with nothing to say why. This file's existing
+                 * rule is the right one: never clobber what somebody may have
+                 * edited.
+                 */
                 continue;
             }
 
@@ -295,16 +666,29 @@ return static function (): array {
                 'slug'                 => $slug,
                 'description'          => $description,
                 'trigger_type'         => $trigger,
-                'trigger_config'       => null,
                 // Inactive. Nothing seeded here can send anything until a
                 // person reviews it and switches it on.
                 'is_active'            => 0,
-                'run_once_per_contact' => 1,
+                'run_once_per_contact' => (int) ($options['once'] ?? 1),
+                'allow_reentry'        => (int) ($options['reentry'] ?? 0),
                 'quiet_hours_respect'  => 1,
                 'priority'             => 100,
+                // The window a scanner is asked about ("fourteen days
+                // before"), and the conditions that stop a sequence the
+                // moment it stops being true for somebody.
+                'trigger_config'       => isset($options['when'])
+                    ? json_encode($options['when'], JSON_UNESCAPED_SLASHES)
+                    : null,
+                'exit_conditions'      => isset($options['exit'])
+                    ? json_encode($options['exit'], JSON_UNESCAPED_SLASHES)
+                    : null,
+                'goal_event'           => $options['goal'] ?? null,
+                'goal_window_hours'    => isset($options['goal']) ? (int) ($options['goal_hours'] ?? 720) : null,
                 'created_at'           => $now,
                 'updated_at'           => $now,
             ]);
+
+            $stepCount += $writeSteps($automationId, $steps);
 
             DB::insert('playbook_assets', [
                 'playbook_id' => $playbookId,
@@ -357,5 +741,6 @@ return static function (): array {
     return [
         'playbooks'   => $playbookCount,
         'automations' => $automationCount,
+        'steps'       => $stepCount,
     ];
 };

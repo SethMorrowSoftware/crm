@@ -34,6 +34,7 @@ declare(strict_types=1);
 use App\Core\DB;
 use App\Core\Event;
 use App\Core\Settings;
+use App\Services\AutomationEngine;
 use App\Services\AutomationRunner;
 use Tests\Assert;
 use Tests\Harness;
@@ -1943,6 +1944,177 @@ Harness::test('a webhook step with no URL fails rather than pretending', functio
 
     au_clear();
 });
+
+// ================================= the sequences the installer ships
+
+Harness::test(
+    'A SEEDED PLAYBOOK SEQUENCE RUNS, END TO END, WITH NOTHING ADDED',
+    function (): void {
+        /*
+         * The product promise, as a test: a playbook "arrives ready". So this
+         * takes the first seeded automation exactly as the installer wrote
+         * it — its own trigger, its own steps, its own templates — switches it
+         * on, and fires the real event.
+         *
+         * Everything else in this file builds its own fixtures, which proves
+         * the engine works and proves nothing about what a venue actually
+         * receives on install. The failure this catches is a sequence that
+         * names a template nobody shipped, or a step the engine refuses:
+         * both fail days after somebody switched it on, nowhere near the
+         * screen where they did it.
+         */
+        au_clear();
+
+        $seeded = DB::first(
+            "SELECT * FROM {automations} WHERE slug = 'birthday-celebration-sales-01'"
+        );
+
+        if ($seeded === null) {
+            Assert::true(true, 'the playbook seed has not run in this database');
+
+            return;
+        }
+
+        $automationId = (int) $seeded['id'];
+        $playbookId   = (int) ($seeded['playbook_id'] ?? 0);
+
+        $steps = DB::all(
+            'SELECT * FROM {automation_steps} WHERE automation_id = :a ORDER BY sort_order',
+            ['a' => $automationId]
+        );
+
+        Assert::greaterThan(2, count($steps), 'it ships with its sequence');
+
+        $contactId = au_contact('Enquirer');
+        $email     = (string) DB::value('SELECT email FROM {contacts} WHERE id = :id', ['id' => $contactId]);
+
+        try {
+            DB::update('automations', ['is_active' => 1], 'id = :id', ['id' => $automationId]);
+
+            if ($playbookId > 0) {
+                DB::update('playbooks', ['is_active' => 1], 'id = :id', ['id' => $playbookId]);
+            }
+
+            // The event its trigger names, with the payload FormController
+            // really fires.
+            Event::fire('form.submitted', [
+                'form_id'    => 0,
+                'form_slug'  => 'party-inquiry',
+                'contact_id' => $contactId,
+            ]);
+
+            AutomationRunner::tick();
+
+            $run = au_run($automationId, $contactId);
+
+            Assert::notNull($run, 'the enquiry enrolled');
+            Assert::same(1, au_sent($email), 'the instant reply went out');
+
+            $log = au_log((int) $run['id']);
+
+            Assert::greaterThan(2, count($log), 'every step is accounted for');
+
+            // The text is SKIPPED, not failed: this contact has no phone
+            // number, and a sequence must carry on past a channel it cannot
+            // reach rather than stopping there.
+            $sms = array_values(array_filter(
+                $log,
+                static fn (array $row): bool => (string) $row['type'] === 'send_sms'
+            ));
+
+            Assert::count(1, $sms);
+            Assert::same('skipped', (string) $sms[0]['status'], 'no phone number, so the text is skipped');
+
+            // And the task the venue has to act on exists, with the guest's
+            // name merged into it.
+            $task = DB::first(
+                "SELECT * FROM {tasks} WHERE entity_type IN ('contacts', 'contact') AND entity_id = :c
+                  ORDER BY id DESC",
+                ['c' => $contactId]
+            );
+
+            Assert::notNull($task, 'the call task was created');
+            Assert::contains('Enquirer', (string) $task['title'], 'with the guest named in it');
+
+            Assert::same('completed', (string) au_run($automationId, $contactId)['status']);
+        } finally {
+            DB::update('automations', ['is_active' => 0], 'id = :id', ['id' => $automationId]);
+
+            if ($playbookId > 0) {
+                DB::update('playbooks', ['is_active' => 0], 'id = :id', ['id' => $playbookId]);
+            }
+
+            DB::query(
+                'DELETE FROM {automation_step_log} WHERE run_id IN (
+                    SELECT id FROM {automation_runs} WHERE automation_id = :a)',
+                ['a' => $automationId]
+            );
+            DB::query('DELETE FROM {automation_runs} WHERE automation_id = :a', ['a' => $automationId]);
+            DB::query(
+                'UPDATE {automations} SET run_count = 0, last_run_at = NULL WHERE id = :a',
+                ['a' => $automationId]
+            );
+            DB::query("DELETE FROM {tasks} WHERE title LIKE '%Enquirer%'");
+
+            au_clear();
+        }
+    }
+);
+
+Harness::test(
+    'and a seeded step tied to the party’s own date is scheduled from it',
+    function (): void {
+        /*
+         * "Fourteen days before the party" has to mean THAT party, not
+         * fourteen days from enrolment — which is what a fixed wait would
+         * give, and which lands on a different day for every booking. The
+         * seeded T-14 waiver step is the one to check, because it is the one
+         * a venue notices when it is wrong: the waiver chase arrives after
+         * the party.
+         */
+        au_clear();
+
+        $step = DB::first(
+            "SELECT s.*, a.slug FROM {automation_steps} s
+               JOIN {automations} a ON a.id = s.automation_id
+              WHERE a.slug LIKE 'birthday-celebration-sales-%'
+                AND s.delay_until_type = 'days_before_field'
+              ORDER BY s.id LIMIT 1"
+        );
+
+        if ($step === null) {
+            Assert::true(true, 'no date-relative step is seeded in this database');
+
+            return;
+        }
+
+        $config = json_decode((string) $step['delay_until_config'], true);
+
+        Assert::same('event_date', $config['field'] ?? null, 'counted from the party’s own date');
+        Assert::greaterThan(0, (int) ($config['days'] ?? 0));
+
+        // The engine's own answer, against a party six weeks out.
+        $when = AutomationEngine::scheduleStep(
+            $step,
+            ['event_date' => gmdate('Y-m-d', time() + 42 * 86400)],
+            now_utc(),
+            'America/New_York'
+        );
+
+        Assert::false($when['skip'], 'a party six weeks out is schedulable');
+        Assert::notNull($when['at']);
+
+        $days = (int) floor((strtotime((string) $when['at'] . ' UTC') - time()) / 86400);
+
+        Assert::same(
+            42 - (int) $config['days'],
+            $days,
+            'it lands ' . (int) $config['days'] . ' days before the party, not that many days from now'
+        );
+
+        au_clear();
+    }
+);
 
 au_clear();
 $restore();

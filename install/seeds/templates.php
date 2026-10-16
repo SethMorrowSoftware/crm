@@ -372,8 +372,118 @@ return static function (): array {
         ],
     ];
 
+    /*
+     * THE TEXTS. Separate from the list above because a text is a different
+     * medium, not a shorter email.
+     *
+     * Every one is written to fit a SINGLE GSM-7 segment once its merge tags
+     * are filled with realistic values — a text costs per segment, and one
+     * curly apostrophe pasted in from a word processor re-encodes the whole
+     * message to UCS-2 and halves the allowance. So these use straight
+     * quotes, no emoji and no em dashes, and `integration/seeds` measures
+     * every one of them rather than trusting that.
+     *
+     * The MARKETING ones carry their opt-out, because the law and the
+     * carriers both require it and because a text with no way out is the
+     * fastest way to a complaint. The ones about a booking the guest has
+     * already made are transactional and do not: "your party is tomorrow at
+     * 2pm, reply STOP to opt out" reads as though the party were a
+     * subscription.
+     */
+    $texts = [
+        [
+            'slug'     => 'party-inquiry-sms',
+            'name'     => 'Party inquiry - text reply',
+            'category' => 'parties',
+            'kind'     => 'transactional',
+            'body'     => 'Hi {{first_name}}, thanks for your party enquiry at {{venue_name}}. '
+                . 'We have emailed you some options. Questions? Call {{venue_phone}}.',
+            'tags'     => ['first_name', 'venue_name', 'venue_phone'],
+        ],
+        [
+            'slug'     => 'quote-nudge-sms',
+            'name'     => 'Quote nudge - text',
+            'category' => 'parties',
+            'kind'     => 'marketing',
+            'body'     => 'Hi {{first_name}}, still thinking about the party? Your date is open '
+                . 'but goes fast. Call {{venue_phone}} and we will hold it. Reply STOP to opt out.',
+            'tags'     => ['first_name', 'venue_phone'],
+        ],
+        [
+            'slug'     => 'deposit-reminder-sms',
+            'name'     => 'Deposit reminder - text',
+            'category' => 'parties',
+            'kind'     => 'transactional',
+            'body'     => 'Hi {{first_name}}, your date at {{venue_name}} is held until the '
+                . 'deposit is in. Check your email for the link, or call {{venue_phone}}.',
+            'tags'     => ['first_name', 'venue_name', 'venue_phone'],
+        ],
+        [
+            'slug'     => 'waiver-chase-sms',
+            'name'     => 'Waiver chase - text',
+            'category' => 'parties',
+            'kind'     => 'transactional',
+            'body'     => 'Hi {{first_name}}, a few waivers are still unsigned for your party. '
+                . 'The link is in your email - two minutes and you are set.',
+            'tags'     => ['first_name'],
+        ],
+        [
+            'slug'     => 'headcount-sms',
+            'name'     => 'Headcount check - text',
+            'category' => 'parties',
+            'kind'     => 'transactional',
+            'body'     => 'Hi {{first_name}}, how many children are we expecting at the party? '
+                . 'Reply with a number and we will set the room up for it.',
+            'tags'     => ['first_name'],
+        ],
+        [
+            'slug'     => 'party-tomorrow-sms',
+            'name'     => 'Party tomorrow - text',
+            'category' => 'parties',
+            'kind'     => 'transactional',
+            'body'     => 'Hi {{first_name}}, the party is tomorrow. Arrive 15 minutes early and '
+                . 'we will have everything ready. Call {{venue_phone}} if anything changes.',
+            'tags'     => ['first_name', 'venue_phone'],
+        ],
+        [
+            'slug'     => 'winback-sms',
+            'name'     => 'Win-back - text',
+            'category' => 'retention',
+            'kind'     => 'marketing',
+            'body'     => 'We have missed you at {{venue_name}}, {{first_name}}. Show this text '
+                . 'for a free game on your next visit. Reply STOP to opt out.',
+            'tags'     => ['first_name', 'venue_name'],
+        ],
+    ];
+
     $created = 0;
     $skipped = 0;
+
+    foreach ($texts as $text) {
+        if (DB::exists('SELECT id FROM {templates} WHERE slug = :slug', ['slug' => $text['slug']])) {
+            $skipped++;
+            continue;
+        }
+
+        DB::insert('templates', [
+            'name'       => $text['name'],
+            'slug'       => $text['slug'],
+            'channel'    => 'sms',
+            'category'   => $text['category'],
+            // A text has no subject line. Stored null rather than as an empty
+            // string so nothing renders "Subject:" above a text message.
+            'subject'    => null,
+            'body'       => $text['body'],
+            'preheader'  => null,
+            'merge_tags' => json_encode($text['tags'], JSON_THROW_ON_ERROR),
+            'is_system'  => 0,
+            'is_active'  => 1,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $created++;
+    }
 
     foreach ($templates as $template) {
         // Re-seedable: never clobber a template the venue has edited.
