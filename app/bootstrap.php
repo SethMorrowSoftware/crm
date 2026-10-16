@@ -202,6 +202,20 @@ View::init(CC_ROOT . '/app/Views');
 // 404, send that response, and only then run the actual scheduled work.
 // -----------------------------------------------------------------------
 
+/*
+ * WHAT LISTENS TO WHAT, registered BEFORE the CLI early return below.
+ *
+ * It has to be both entry points, and cron is the more important of the two:
+ * most automations fire from the time-based triggers and the nightly jobs, so
+ * listeners registered only on the web path would mean an engine that works
+ * when somebody is clicking and does nothing overnight. Registering one is
+ * only storing a closure, so this costs nothing on a request that fires no
+ * events.
+ */
+if ($isInstalled) {
+    require CC_ROOT . '/app/listeners.php';
+}
+
 if (PHP_SAPI === 'cli' || defined('CC_WEB_CRON')) {
     if ($isInstalled) {
         DB::connect();

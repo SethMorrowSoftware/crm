@@ -329,6 +329,59 @@ here do, and that note is what stops someone "simplifying" the fix away.
    the file was really counting the whole file. A per-test tag fixed four
    failures at once.
 
+### The development database is MariaDB; CI also tests MySQL
+
+**"The suite is green" means green on the engine you ran it against.** This
+repository's development database is MariaDB 10.11, which is one of the four
+database jobs in CI — and CI stayed red for three consecutive runs on all
+three MySQL jobs while every local run passed, because the failure was a
+MySQL/MariaDB difference.
+
+It was a test asserting that a segment's rules came back from the
+`segments.rules` JSON column byte-for-byte as they went in. MariaDB's `JSON`
+is an alias for `LONGTEXT` and stores the string verbatim; **MySQL 8's `JSON`
+is a real type that normalises on storage**, sorting an object's keys by
+length and then by name. So `{"field":…,"op":…}` reads back as
+`{"op":…,"field":…}` and `Assert::same`, which compares array key order,
+failed. Key order carries no meaning in JSON and the engine reads every rule
+by key, so the test was asserting the storage engine's behaviour rather than
+the application's.
+
+Two things worth knowing from that:
+
+- **Setting MySQL's `sql_mode` on MariaDB does not reproduce it.** That was
+  the first thing tried, and the suite stayed green: this is a type
+  difference, not a strictness one. MariaDB also does not implement MySQL's
+  `DISTINCT` + `ORDER BY` restriction (error 3065) under any mode.
+- **Run the real engine before claiming green.** Docker makes this cheap and
+  it is the same image CI uses:
+
+      docker run -d --name ccmysql8 -e MYSQL_ROOT_PASSWORD=ci-root-password \
+        -e MYSQL_DATABASE=castle_crm_test -p 3307:3306 mysql:8.0
+
+      CC_TEST_DB_HOST=127.0.0.1 CC_TEST_DB_PORT=3307 \
+      CC_TEST_DB_NAME=castle_crm_test CC_TEST_DB_USER=root \
+      CC_TEST_DB_PASS=ci-root-password \
+        php tests/run.php --require-db --require-http
+
+  Worth doing before any push that touches a JSON column, a `GROUP BY`, a
+  `DISTINCT`, or anything near a date or a decimal.
+
+### A green test can sit on top of a 500
+
+Every test in `tests/http/WaiversTest.php` posted to the publish route and
+then read the DATABASE to check the outcome. None of them looked at the
+response status. The route had been answering **500 on every publish** — after
+doing the work, so the database assertions all passed — because
+`Audit::diff()` cast an array to a string and the debug error handler turns
+that warning into an exception. It fired 657 times in one local application
+log while the suite reported 25 passed.
+
+So: **when a POST is meant to succeed, assert on the response as well as on
+the row it wrote.** A redirect is the shape of success here; a 500 that has
+already committed its transaction looks exactly like success from the
+database's side.
+
 ### Settings are read through a cache
 
 `Settings` loads once per process. The writes a browser-level test makes

@@ -109,6 +109,7 @@ $stats = [
     'woken'       => 0,
     'campaign_sends' => 0,
     'club_sends'     => 0,
+    'auto_steps'     => 0,
     'maintenance' => 0,
     'errors'      => 0,
 ];
@@ -271,7 +272,50 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Nightly maintenance — once a day, not every minute
+// 6. Advance automation runs that are due
+//
+// A nine-touch nurture is nine passes over nine days, not one pass that
+// sleeps. Each tick picks up the runs whose next step has come due and walks
+// each one as far as it goes without waiting — so a step with a real delay
+// schedules itself and the run is put down again until then.
+//
+// Every message a step sends goes through Mailer::send() / Sms::send() with
+// the contact attached, so consent, the suppression list, do-not-contact, the
+// weekly frequency cap and quiet hours apply exactly as they do to a reply
+// typed in the inbox. There is no automation-only path to a guest's phone.
+//
+// Bounded by AutomationRunner::BATCH rather than drained, so one busy
+// automation cannot starve the rest of this tick.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $steps = 0;
+
+        while ($budgetLeft()) {
+            $advanced = App\Services\AutomationRunner::tick();
+
+            if ($advanced === 0) {
+                break;
+            }
+
+            $steps += $advanced;
+        }
+
+        $stats['auto_steps'] = $steps;
+
+        if ($steps > 0) {
+            cron_out('  ' . $steps . ' automation step(s) executed.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: automation tick failed', ['error' => $e->getMessage()]);
+        cron_out('  ! automation tick: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Nightly maintenance — once a day, not every minute
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft() && cron_shouldRunDaily()) {
@@ -287,7 +331,7 @@ if ($budgetLeft() && cron_shouldRunDaily()) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Heartbeat
+// 8. Heartbeat
 // ---------------------------------------------------------------------------
 
 Settings::set('system.cron_last_run', gmdate('Y-m-d H:i:s'));
@@ -303,13 +347,15 @@ $elapsed = round(microtime(true) - CC_START, 2);
 
 cron_out(sprintf(
     'Done in %ss. Jobs: %d, automations due: %d, conversations woken: %d, '
-        . 'campaign messages: %d, Text Club offers: %d, maintenance tasks: %d, errors: %d.',
+        . 'campaign messages: %d, Text Club offers: %d, automation steps: %d, '
+        . 'maintenance tasks: %d, errors: %d.',
     $elapsed,
     $stats['jobs'],
     $stats['automations'],
     $stats['woken'],
     $stats['campaign_sends'],
     $stats['club_sends'],
+    $stats['auto_steps'],
     $stats['maintenance'],
     $stats['errors']
 ));

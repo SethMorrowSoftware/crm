@@ -844,77 +844,157 @@ Harness::test('the schema parser finds the tables and columns it is asked about'
  */
 function schema_writes(string $contents): array
 {
+    /*
+     * Tokenised with PHP's own lexer rather than scanned character by
+     * character.
+     *
+     * The hand-written scanner this replaces tracked bracket depth and
+     * skipped string literals, but NOT comments — so a comment containing a
+     * quote character desynchronised it and it ran on past the end of the
+     * array, collecting every `'key' =>` in the rest of the file as a column
+     * of whatever table it had last seen. MEASURED: one comment containing
+     * the words "your party on Saturday" made this gate report five
+     * non-existent columns on `automation_runs`, every one of them a `match`
+     * arm in a method eighty lines further down.
+     *
+     * The lexer knows what a comment is, what a string is and where one
+     * ends, so the only thing left to do here is count brackets.
+     *
+     * @return list<array{table:string, columns:list<string>}>
+     */
+    $tokens = @token_get_all("<?php " . $contents);
     $writes = [];
-    $offset = 0;
+    $count  = count($tokens);
 
-    while (true) {
-        if (preg_match(
-            '/DB::(?:insert|update)\(\s*\'([a-z_]+)\'\s*,\s*\[/',
-            $contents,
-            $match,
-            PREG_OFFSET_CAPTURE,
-            $offset
-        ) !== 1) {
-            return $writes;
+    /** The next significant token at or after $i, skipping whitespace and comments. */
+    $next = static function (array $tokens, int $i, int $count): array {
+        for (; $i < $count; $i++) {
+            $token = $tokens[$i];
+
+            if (is_array($token)
+                && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            return [$i, $token];
         }
 
-        $table  = (string) $match[1][0];
-        $cursor = (int) $match[0][1] + strlen((string) $match[0][0]);
-        $offset = $cursor;
+        return [$count, null];
+    };
 
+    for ($i = 0; $i < $count; $i++) {
+        $token = $tokens[$i];
+
+        // Looking for: DB :: insert|update ( 'table' , [
+        if (!is_array($token) || $token[0] !== T_STRING || $token[1] !== 'DB') {
+            continue;
+        }
+
+        [$j, $t] = $next($tokens, $i + 1, $count);
+
+        if (!is_array($t) || $t[0] !== T_DOUBLE_COLON) {
+            continue;
+        }
+
+        [$j, $t] = $next($tokens, $j + 1, $count);
+
+        if (!is_array($t) || $t[0] !== T_STRING || !in_array($t[1], ['insert', 'update'], true)) {
+            continue;
+        }
+
+        [$j, $t] = $next($tokens, $j + 1, $count);
+
+        if ($t !== '(') {
+            continue;
+        }
+
+        [$j, $t] = $next($tokens, $j + 1, $count);
+
+        if (!is_array($t) || $t[0] !== T_CONSTANT_ENCAPSED_STRING) {
+            continue;
+        }
+
+        $table = trim($t[1], "'\"");
+
+        if (preg_match('/^[a-z_]+$/', $table) !== 1) {
+            continue;
+        }
+
+        [$j, $t] = $next($tokens, $j + 1, $count);
+
+        if ($t !== ',') {
+            continue;
+        }
+
+        [$j, $t] = $next($tokens, $j + 1, $count);
+
+        // A write whose columns come from a variable names none here, which
+        // is not evidence of anything — `fail()` builds its array first.
+        if ($t !== '[' && !(is_array($t) && $t[0] === T_ARRAY)) {
+            continue;
+        }
+
+        if (is_array($t) && $t[0] === T_ARRAY) {
+            [$j, $t] = $next($tokens, $j + 1, $count);
+
+            if ($t !== '(') {
+                continue;
+            }
+        }
+
+        $open    = $t === '[' ? '[' : '(';
+        $close   = $open === '[' ? ']' : ')';
         $depth   = 1;
         $columns = [];
-        $length  = strlen($contents);
 
-        while ($cursor < $length && $depth > 0) {
-            $char = $contents[$cursor];
+        for ($k = $j + 1; $k < $count && $depth > 0; $k++) {
+            $inner = $tokens[$k];
 
-            if ($char === '\'' || $char === '"') {
-                // Skip the whole string, honouring escapes, then look at what
-                // follows it: a top-level 'key' => is a column.
-                $quote = $char;
-                $start = $cursor + 1;
-                $cursor++;
-
-                while ($cursor < $length) {
-                    if ($contents[$cursor] === '\\') {
-                        $cursor += 2;
-
-                        continue;
-                    }
-
-                    if ($contents[$cursor] === $quote) {
-                        break;
-                    }
-
-                    $cursor++;
-                }
-
-                $text = substr($contents, $start, $cursor - $start);
-                $cursor++;
-
-                if ($depth === 1
-                    && $quote === '\''
-                    && preg_match('/^[a-z_]+$/', $text) === 1
-                    && preg_match('/^\s*=>/', substr($contents, $cursor, 8)) === 1
-                ) {
-                    $columns[] = $text;
-                }
+            if ($inner === $open || $inner === '(') {
+                $depth++;
 
                 continue;
             }
 
-            if ($char === '[') {
-                $depth++;
-            } elseif ($char === ']') {
+            if ($inner === $close || $inner === ')') {
                 $depth--;
+
+                continue;
             }
 
-            $cursor++;
+            if ($inner === '[' || $inner === ']') {
+                $depth += $inner === '[' ? 1 : -1;
+
+                continue;
+            }
+
+            // A single-quoted key at the TOP level of this array, followed
+            // by =>, is a column name.
+            if ($depth !== 1
+                || !is_array($inner)
+                || $inner[0] !== T_CONSTANT_ENCAPSED_STRING
+                || $inner[1][0] !== "'") {
+                continue;
+            }
+
+            $text = trim($inner[1], "'");
+
+            if (preg_match('/^[a-z_]+$/', $text) !== 1) {
+                continue;
+            }
+
+            [, $after] = $next($tokens, $k + 1, $count);
+
+            if (is_array($after) && $after[0] === T_DOUBLE_ARROW) {
+                $columns[] = $text;
+            }
         }
 
         $writes[] = ['table' => $table, 'columns' => $columns];
+        $i        = $j;
     }
+
+    return $writes;
 }
 
 Harness::test('the write parser reads the array it is given and stops there', function (): void {
@@ -933,6 +1013,72 @@ Harness::test('the write parser reads the array it is given and stops there', fu
     Assert::same('bookings', $writes[0]['table']);
     Assert::same(['booking_number', 'internal_notes'], $writes[0]['columns']);
 });
+
+Harness::test(
+    'A COMMENT CANNOT DESYNCHRONISE THE WRITE PARSER',
+    function (): void {
+        /*
+         * MEASURED: the hand-written scanner this parser replaced tracked
+         * bracket depth and skipped string literals but NOT comments, so a
+         * comment containing an apostrophe or a quote ran it on past the end
+         * of the array — collecting every `'key' =>` in the rest of the file
+         * as a column of whatever table it had last seen. One comment
+         * containing the words "your party on Saturday" made the gate below
+         * report five non-existent columns on `automation_runs`, each of them
+         * a `match` arm eighty lines further down.
+         *
+         * Every shape of comment, and an apostrophe in a double-quoted
+         * string, because those are the two ways the old scanner lost track.
+         */
+        $sample = <<<'PHP'
+            DB::insert('bookings', [
+                'booking_number' => $number,
+                // A comment with "double quotes" and an apostrophe's worth of trouble.
+                'event_date' => $date,
+                # A hash comment with a stray [ bracket and a ' quote.
+                /* A block comment with "quotes" and ] brackets. */
+                'guest_count' => $guests,
+                'internal_notes' => "a double-quoted string with an apostrophe's quote",
+            ]);
+
+            $other = ['wait' => 1, 'exit' => 2, 'condition' => 3];
+
+            return match ($type) {
+                'wait' => 'a',
+                'exit' => 'b',
+            };
+            PHP;
+
+        $writes = schema_writes($sample);
+
+        Assert::count(1, $writes, 'one write, and it ends where the array ends');
+        Assert::same(
+            ['booking_number', 'event_date', 'guest_count', 'internal_notes'],
+            $writes[0]['columns'],
+            'the comments contribute nothing and nothing after the array is collected'
+        );
+    }
+);
+
+Harness::test(
+    'the write parser still catches a column that does not exist',
+    function (): void {
+        // The positive control. A parser that returned nothing at all would
+        // satisfy every assertion above and make the gate below useless.
+        $tables = schema_columns();
+
+        Assert::hasKey('bookings', $tables, 'precondition: the schema is readable');
+
+        $writes = schema_writes("DB::update('bookings', ['no_such_column' => 1], 'id = :id', ['id' => 1]);");
+
+        Assert::count(1, $writes);
+        Assert::same(['no_such_column'], $writes[0]['columns']);
+        Assert::false(
+            in_array('no_such_column', $tables['bookings'], true),
+            'and the gate would report it'
+        );
+    }
+);
 
 Harness::test('every DB::insert and DB::update names columns the schema has', function (): void {
     // MEASURED, twice, while building the bookings module: a write to
