@@ -19,7 +19,7 @@ php tests/run.php --filter=validator,security
 php tests/run.php --stop
 
 # Refuse to report success if a suite silently skipped (what CI uses)
-php tests/run.php --require-db --require-http --min-tests=600
+php tests/run.php --require-db --require-http --min-tests=740
 
 # Prove the product's actual promise: that it installs on a bare host
 php tests/install/walk-installer.php

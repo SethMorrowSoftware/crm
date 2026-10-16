@@ -349,13 +349,69 @@ $router->group('/tasks', ['auth', 'can:view_tasks'], function ($router): void {
 });
 
 // ---------------------------------------------------------------------------
+// Bookings (replaces the /bookings placeholder)
+//
+// Reading is `view_bookings`. Writing is `bookings_manage`, with two actions
+// split out of it:
+//
+//   * cancelling has its own permission (`bookings_cancel`), because it is the
+//     one action that gives a room back and may owe a family a refund. Front
+//     Desk deliberately does not hold it;
+//   * recording money has its own (`payments_record`), so whoever answers the
+//     phone is not automatically whoever settles the books.
+//
+// Nothing here uses a gate LOWER than `bookings_manage`. Ticking a checklist
+// item was written that way at first, copying the task module's rule that an
+// assignee may close their own work, and it does not transfer: Front Desk and
+// Party Host both already hold `bookings_manage`, so the looser gate bought
+// nobody anything while letting the seeded Read Only role write to a booking.
+//
+// `/bookings/availability` is a JSON read behind `view_bookings`: it reports
+// where the venue has gaps, which is commercial information.
+// ---------------------------------------------------------------------------
+
+$router->group('/bookings', ['auth', 'can:view_bookings'], function ($router): void {
+    $router->get('', ['BookingController', 'index'], [], 'bookings');
+    $router->get('/new', ['BookingController', 'create'], ['can:bookings_manage'], 'bookings.create');
+    $router->post('', ['BookingController', 'store'], ['csrf', 'can:bookings_manage']);
+    $router->get('/availability', ['BookingController', 'availability'], [], 'bookings.availability');
+    $router->get('/{id:\d+}', ['BookingController', 'show'], [], 'bookings.show');
+    $router->get('/{id:\d+}/run-sheet', ['BookingController', 'runSheet'], [], 'bookings.runsheet');
+    $router->get('/{id:\d+}/edit', ['BookingController', 'edit'], ['can:bookings_manage'], 'bookings.edit');
+    $router->post('/{id:\d+}', ['BookingController', 'update'], ['csrf', 'can:bookings_manage']);
+    $router->post('/{id:\d+}/status', ['BookingController', 'status'], ['csrf', 'can:bookings_manage']);
+    $router->post('/{id:\d+}/cancel', ['BookingController', 'cancel'], ['csrf', 'can:bookings_cancel']);
+    $router->post('/{id:\d+}/host', ['BookingController', 'assignHost'], ['csrf', 'can:bookings_manage']);
+
+    $router->post('/{id:\d+}/payments', ['BookingController', 'storePayment'], ['csrf', 'can:payments_record']);
+    $router->post(
+        '/{id:\d+}/payments/delete',
+        ['BookingController', 'destroyPayment'],
+        ['csrf', 'can:payments_record']
+    );
+
+    $router->post('/{id:\d+}/tasks', ['BookingController', 'storeTask'], ['csrf', 'can:bookings_manage']);
+    $router->post(
+        '/{id:\d+}/tasks/toggle',
+        ['BookingController', 'toggleTask'],
+        ['csrf', 'can:bookings_manage']
+    );
+
+    $router->post('/{id:\d+}/guests', ['BookingController', 'storeGuest'], ['csrf', 'can:bookings_manage']);
+    $router->post(
+        '/{id:\d+}/guests/delete',
+        ['BookingController', 'destroyGuest'],
+        ['csrf', 'can:bookings_manage']
+    );
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2+ module routes are added as each module lands. The placeholders
 // below give the navigation somewhere real to point in Phase 1, and each
 // renders an honest "coming in Phase N" state rather than a broken link.
 // ---------------------------------------------------------------------------
 
 $router->get('/inbox', ['PlaceholderController', 'inbox'], ['auth', 'can:view_inbox'], 'inbox');
-$router->get('/bookings', ['PlaceholderController', 'bookings'], ['auth', 'can:view_bookings'], 'bookings');
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
 $router->get('/reputation', ['PlaceholderController', 'reputation'], ['auth', 'can:view_reputation'], 'reputation');
 $router->get('/memberships', ['PlaceholderController', 'memberships'], ['auth', 'can:view_memberships'], 'memberships');

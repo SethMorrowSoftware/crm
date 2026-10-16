@@ -310,6 +310,36 @@ final class QuoteCalculator
         return $thousandths <= self::MAX_RATE ? $thousandths : null;
     }
 
+    /**
+     * The rate a stored booking was ACTUALLY taxed at, in thousandths.
+     *
+     * `cc_bookings` has no column for the rate, and this application does not
+     * add one, so the figure shown beside the tax is derived from the two
+     * figures either side of it. That is better than reading the current
+     * setting back: a venue that changes the rate in March must not have
+     * February's bookings start displaying the new one beside money that was
+     * worked out at the old.
+     *
+     * It is the EFFECTIVE rate, which is the honest thing to show — a booking
+     * whose tax was typed in by hand to match a POS receipt reports whatever
+     * that works out to, rather than the rate it was never charged at.
+     *
+     * One consequence, and it is a property of the money rather than a defect
+     * here: tax is held in whole cents, so on a small sum the effective rate
+     * is not quite the nominal one. $10.00 at 8.125% is 81 cents, and 81 cents
+     * on $10.00 is 8.1%. The gap is bounded by half a cent over the taxable
+     * sum and is already under a thousandth of a percent at the venue's own
+     * party prices.
+     */
+    public static function effectiveRate(int $taxCents, int $taxableCents): int
+    {
+        if ($taxableCents <= 0 || $taxCents <= 0) {
+            return 0;
+        }
+
+        return self::clamp(self::divideRound($taxCents * self::MAX_RATE, $taxableCents), 0, self::MAX_RATE);
+    }
+
     /** A rate in thousandths of a percent, as a human string: 8125 → "8.125". */
     public static function rateLabel(int $thousandths): string
     {

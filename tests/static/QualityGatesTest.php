@@ -653,3 +653,211 @@ Harness::test('no unit test touches the database', function (): void {
             . implode("\n   ", $offenders)
     );
 });
+
+// ------------------------------------------------- writes against the schema
+
+/**
+ * Every column the schema declares, by table name without its prefix.
+ *
+ * Parsed from the schema files rather than read from a database, so this gate
+ * runs in the lint job with no MySQL — which is the point: a write naming a
+ * column that does not exist is a 500 on a page, and finding it needs neither
+ * a server nor a seed.
+ *
+ * @return array<string,list<string>>
+ */
+function schema_columns(): array
+{
+    static $tables = null;
+
+    if ($tables !== null) {
+        return $tables;
+    }
+
+    $tables = [];
+    $sql    = '';
+
+    foreach (glob(CC_ROOT . '/install/schema/*.sql') ?: [] as $file) {
+        $sql .= (string) file_get_contents($file) . "\n";
+    }
+
+    // Each CREATE TABLE up to its closing paren, then every `column` at the
+    // start of a line inside it. A key or constraint line starts with a
+    // keyword rather than a backtick, so it is skipped by the same pattern.
+    if (preg_match_all(
+        '/CREATE TABLE IF NOT EXISTS `\{prefix\}([a-z_]+)`\s*\((.*?)\n\)\s*ENGINE/s',
+        $sql,
+        $matches,
+        PREG_SET_ORDER
+    ) === 0) {
+        return $tables;
+    }
+
+    foreach ($matches as $match) {
+        $columns = [];
+
+        foreach (preg_split('/\R/', $match[2]) ?: [] as $line) {
+            if (preg_match('/^\s{4}`([a-z_]+)`\s+[A-Za-z]/', $line, $column) === 1) {
+                $columns[] = $column[1];
+            }
+        }
+
+        $tables[$match[1]] = $columns;
+    }
+
+    return $tables;
+}
+
+Harness::test('the schema parser finds the tables and columns it is asked about', function (): void {
+    // A gate that parsed nothing would pass every test below while checking
+    // nothing at all, which is the failure mode of every static check.
+    $tables = schema_columns();
+
+    Assert::greaterThan(90, count($tables), 'the whole schema should be parsed');
+    Assert::hasKey('bookings', $tables);
+    Assert::inArray('booking_number', $tables['bookings']);
+    Assert::inArray('allergies', $tables['bookings']);
+    Assert::inArray('created_at', $tables['bookings']);
+    Assert::false(
+        in_array('created_at', $tables['booking_tasks'], true),
+        'cc_booking_tasks really has no timestamps — the case this gate exists for'
+    );
+    Assert::false(in_array('PRIMARY', $tables['bookings'], true), 'keys are not columns');
+    Assert::false(in_array('KEY', $tables['bookings'], true));
+});
+
+/**
+ * The TOP-LEVEL keys of the array literal a DB::insert/update call passes.
+ *
+ * A balanced scan rather than a regex, because the first version of this gate
+ * used `(.*?)\n\s*\]` and ran past the end of the array into unrelated code
+ * — reporting `bookings.venue` from a view payload fifty lines later. It also
+ * has to stay at depth 1: a nested `json_encode([...])` inside an `evidence`
+ * value carries keys of its own that belong to no table.
+ *
+ * @return list<array{table:string,columns:list<string>}>
+ */
+function schema_writes(string $contents): array
+{
+    $writes = [];
+    $offset = 0;
+
+    while (true) {
+        if (preg_match(
+            '/DB::(?:insert|update)\(\s*\'([a-z_]+)\'\s*,\s*\[/',
+            $contents,
+            $match,
+            PREG_OFFSET_CAPTURE,
+            $offset
+        ) !== 1) {
+            return $writes;
+        }
+
+        $table  = (string) $match[1][0];
+        $cursor = (int) $match[0][1] + strlen((string) $match[0][0]);
+        $offset = $cursor;
+
+        $depth   = 1;
+        $columns = [];
+        $length  = strlen($contents);
+
+        while ($cursor < $length && $depth > 0) {
+            $char = $contents[$cursor];
+
+            if ($char === '\'' || $char === '"') {
+                // Skip the whole string, honouring escapes, then look at what
+                // follows it: a top-level 'key' => is a column.
+                $quote = $char;
+                $start = $cursor + 1;
+                $cursor++;
+
+                while ($cursor < $length) {
+                    if ($contents[$cursor] === '\\') {
+                        $cursor += 2;
+
+                        continue;
+                    }
+
+                    if ($contents[$cursor] === $quote) {
+                        break;
+                    }
+
+                    $cursor++;
+                }
+
+                $text = substr($contents, $start, $cursor - $start);
+                $cursor++;
+
+                if ($depth === 1
+                    && $quote === '\''
+                    && preg_match('/^[a-z_]+$/', $text) === 1
+                    && preg_match('/^\s*=>/', substr($contents, $cursor, 8)) === 1
+                ) {
+                    $columns[] = $text;
+                }
+
+                continue;
+            }
+
+            if ($char === '[') {
+                $depth++;
+            } elseif ($char === ']') {
+                $depth--;
+            }
+
+            $cursor++;
+        }
+
+        $writes[] = ['table' => $table, 'columns' => $columns];
+    }
+}
+
+Harness::test('the write parser reads the array it is given and stops there', function (): void {
+    $sample = <<<'PHP'
+        DB::insert('bookings', [
+            'booking_number' => $number,
+            'internal_notes' => json_encode(['nested' => 1, 'keys' => 2]),
+        ]);
+
+        return $this->view('bookings/show', ['venue' => $venue, 'tasks' => $tasks]);
+        PHP;
+
+    $writes = schema_writes($sample);
+
+    Assert::count(1, $writes, 'one write, not two');
+    Assert::same('bookings', $writes[0]['table']);
+    Assert::same(['booking_number', 'internal_notes'], $writes[0]['columns']);
+});
+
+Harness::test('every DB::insert and DB::update names columns the schema has', function (): void {
+    // MEASURED, twice, while building the bookings module: a write to
+    // cc_booking_resources and another to cc_booking_tasks each set a
+    // created_at that those tables do not declare. Both were 500s on a real
+    // page — one on saving a booking, one on confirming it — and neither
+    // needed a database to find. This is that check.
+    $tables    = schema_columns();
+    $offenders = [];
+
+    foreach (project_php_files() as $file) {
+        foreach (schema_writes((string) file_get_contents($file)) as $write) {
+            // A table this parser does not know is not evidence of anything:
+            // the upgrade tests write to probe tables of their own.
+            if (!isset($tables[$write['table']])) {
+                continue;
+            }
+
+            foreach ($write['columns'] as $column) {
+                if (!in_array($column, $tables[$write['table']], true)) {
+                    $offenders[] = relative_path($file) . ': ' . $write['table'] . '.' . $column;
+                }
+            }
+        }
+    }
+
+    Assert::same(
+        [],
+        array_values(array_unique($offenders)),
+        "a write names a column the schema does not declare:\n   "
+            . implode("\n   ", array_unique($offenders))
+    );
+});

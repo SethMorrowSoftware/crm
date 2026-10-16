@@ -10,10 +10,10 @@ use App\Core\Response;
 /**
  * Honest placeholders for modules that land in later phases.
  *
- * A page here is deleted as its module ships — contacts, deals and tasks have
- * gone, with Phase 2. A placeholder left behind after the real thing exists is
- * worse than a broken link: it tells the reader a feature is still coming when
- * it is already on the nav above it.
+ * A page here is deleted as its module ships — contacts, deals and tasks went
+ * with Phase 2, bookings with Phase 3. A placeholder left behind after the
+ * real thing exists is worse than a broken link: it tells the reader a feature
+ * is still coming when it is already on the nav above it.
  *
  * The navigation shows the whole application from day one so the venue can see
  * the shape of what is coming, but a nav item that 404s is worse than one that
@@ -22,7 +22,6 @@ use App\Core\Response;
  */
 final class PlaceholderController extends Controller
 {
-
     public function inbox(Request $request): Response
     {
         return $this->placeholder('Inbox', 4, 'inbox', [
@@ -33,16 +32,6 @@ final class PlaceholderController extends Controller
         ], 'Needs the email and SMS drivers, which arrive with Phase 4.');
     }
 
-
-    public function bookings(Request $request): Response
-    {
-        return $this->placeholder('Bookings', 3, 'bookings', [
-            'Availability that understands seasonal attractions and the 7-day notice rule',
-            'Party rooms, lanes and karts allocated as real resources',
-            'Printable run sheets with allergies and cake timing',
-            'Waiver tracking per guest, with guardian signatures for minors',
-        ], 'Mirrors the POS reservation rather than replacing it.');
-    }
 
     public function marketing(Request $request): Response
     {

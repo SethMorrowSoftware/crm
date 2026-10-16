@@ -453,3 +453,71 @@ Harness::test('quantity and rate labels read back the way they were typed', func
     Assert::same('8.1', Q::rateLabel(8100));
     Assert::same('0', Q::rateLabel(0));
 });
+
+// --------------------------------------------- the rate a booking was charged
+
+Harness::test('the effective rate is derived from the figures either side of it', function (): void {
+    // `cc_bookings` has no column for the rate and this phase does not add
+    // one, so the figure shown beside a stored booking's tax is worked back
+    // out of the money. The alternative — reading the current setting — means
+    // a venue that changes the rate in March has February's bookings
+    // displaying the new rate beside money worked out at the old one.
+    Assert::same(QC_RATE, Q::effectiveRate(3242, 39900), '$32.42 on $399 is 8.125%');
+    Assert::same('8.125', Q::rateLabel(Q::effectiveRate(3242, 39900)));
+
+    // Round trip on figures the size of a real party: whatever the calculator
+    // charged, this reads back as the rate it was given.
+    foreach ([0, 4000, 8125, 8875, 100000] as $rate) {
+        foreach ([39900, 57894, 1234567] as $taxable) {
+            $priced = Q::price(['base_price_cents' => $taxable], 0, [], ['tax_rate' => $rate]);
+
+            Assert::same(
+                $rate,
+                Q::effectiveRate($priced['tax_cents'], $taxable),
+                'rate ' . $rate . ' on ' . $taxable . ' cents'
+            );
+        }
+    }
+});
+
+Harness::test('on a SMALL sum the effective rate is not quite the nominal one, and that is correct', function (): void {
+    // Found by the round trip above, which originally included $10 and
+    // failed. Tax is rounded to whole cents, so $10.00 at 8.125% is 81 cents
+    // — and 81 cents on $10.00 is 8.1%, not 8.125%. The figure this reports
+    // is the rate the booking was ACTUALLY charged, which is the one that
+    // agrees with the money printed beside it; the nominal rate would not.
+    $priced = Q::price(['base_price_cents' => 1000], 0, [], ['tax_rate' => QC_RATE]);
+
+    Assert::same(81, $priced['tax_cents'], '8.125% of $10 is 81.25 cents, rounded to 81');
+    Assert::same(8100, Q::effectiveRate(81, 1000), 'which really is 8.1%');
+
+    // The size of the gap is bounded by half a cent over the taxable sum, so
+    // it closes as the figures grow. At the venue's own party prices it is
+    // already below a thousandth of a percent.
+    foreach ([10000, 39900, 100000] as $taxable) {
+        $tax  = Q::price(['base_price_cents' => $taxable], 0, [], ['tax_rate' => QC_RATE])['tax_cents'];
+        $drift = abs(Q::effectiveRate($tax, $taxable) - QC_RATE);
+        $bound = (int) ceil(50000 / $taxable);
+
+        Assert::true(
+            $drift <= $bound,
+            $taxable . ' cents: drift ' . $drift . ' should be within ' . $bound . ' thousandths'
+        );
+    }
+});
+
+Harness::test('a booking with no tax reports no rate, and nothing divides by zero', function (): void {
+    Assert::same(0, Q::effectiveRate(0, 39900), 'tax-exempt');
+    Assert::same(0, Q::effectiveRate(3242, 0), 'a fully discounted party');
+    Assert::same(0, Q::effectiveRate(0, 0));
+    Assert::same(0, Q::effectiveRate(-5, 100));
+});
+
+Harness::test('a hand-typed tax figure reports the rate it actually works out to', function (): void {
+    // Somebody matching a POS receipt to the cent gets the effective rate,
+    // not the rate the booking was never charged at.
+    $typed = Q::price(['base_price_cents' => 10000], 0, [], ['tax_rate' => QC_RATE, 'tax_cents' => 1000]);
+
+    Assert::same(1000, $typed['tax_cents']);
+    Assert::same(10000, Q::effectiveRate($typed['tax_cents'], $typed['taxable_cents']), '10%, as charged');
+});
