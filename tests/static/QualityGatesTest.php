@@ -2206,3 +2206,100 @@ Harness::test('every table a view draws says what it is', function (): void {
             . "of cells and nothing else:\n   " . implode("\n   ", $offenders)
     );
 });
+
+Harness::test('the .htaccess deny patterns match what they are meant to, and nothing else', function (): void {
+    /*
+     * NOTHING IN CI RUNS APACHE. The installer walk drives PHP's built-in
+     * server, which ignores `.htaccess` entirely — so every rule in that file
+     * is, from the suite's point of view, a string nobody has ever evaluated.
+     *
+     * Two of those rules were added after a live probe found `/tests/run.php`
+     * executing and `/.git/config` readable, and one of them carries a
+     * negative lookahead that protects TLS renewal. A typo in it is an outage
+     * ninety days later that nobody connects to this file.
+     *
+     * So the patterns are pulled out of the real file and run against real
+     * paths here. PCRE is PCRE: Apache 2.4 uses it, and `RedirectMatch`
+     * matches against the URL path, which is what these cases are.
+     */
+    $htaccess = (string) file_get_contents(CC_ROOT . '/.htaccess');
+
+    preg_match_all('/^RedirectMatch\s+404\s+(\S.*)$/m', $htaccess, $matches);
+
+    $patterns = array_map('trim', $matches[1]);
+
+    Assert::greaterThan(1, count($patterns), 'the deny patterns were found');
+
+    /** Does any deny rule catch this path? */
+    $denied = static function (string $path) use ($patterns): bool {
+        foreach ($patterns as $pattern) {
+            if (@preg_match('#' . $pattern . '#', $path) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    // Every pattern has to COMPILE, first of all. A broken one is silently
+    // ignored by Apache, which denies nothing and says nothing.
+    foreach ($patterns as $pattern) {
+        Assert::true(
+            @preg_match('#' . $pattern . '#', '/probe') !== false,
+            'this pattern compiles: ' . $pattern
+        );
+    }
+
+    foreach ([
+        // The two the live probe found.
+        '/tests/run.php',
+        '/tests/bootstrap.php',
+        '/tests/install/walk-installer.php',
+        '/tools/backup.php',
+        '/tools/dev-server.php',
+        '/.git/config',
+        '/.git/HEAD',
+        '/.env',
+        // And the ones that were already covered.
+        '/app/Core/DB.php',
+        '/config/config.php',
+        '/storage/logs/castle.log',
+        '/storage/imports/import-1.csv',
+        '/storage/backups/castle-crm-20260101-000000.sql.gz',
+        '/install/schema/001_core.sql',
+        '/install/seeds/demo.php',
+        '/docs/AUDIT.md',
+        '/VERSION.md',
+    ] as $path) {
+        Assert::true($denied($path), 'denied: ' . $path);
+    }
+
+    foreach ([
+        // The application itself.
+        '/',
+        '/index.php',
+        '/contacts',
+        '/contacts/42',
+        '/api/v1/contacts',
+        '/cron.php',
+        // The assets, which must keep working — a deny rule that catches the
+        // stylesheet is an unstyled application.
+        '/assets/css/app.css',
+        '/assets/js/app.js',
+        '/assets/img/logo.svg',
+        '/assets/fonts/inter.woff2',
+        // The installer, which is the product's whole promise.
+        '/install/',
+        '/install/index.php',
+        '/install/probe.php',
+        /*
+         * AND THE ACME CHALLENGE. cPanel's AutoSSL answers here; denying it
+         * stops certificate renewal. This is the case the negative lookahead
+         * exists for, and the reason this test exists at all.
+         */
+        '/.well-known/acme-challenge/abc123',
+        '/.well-known/acme-challenge/' . str_repeat('x', 43),
+    ] as $path) {
+        Assert::false($denied($path), 'reachable: ' . $path);
+    }
+});
