@@ -621,9 +621,17 @@ final class AutomationTriggers
     {
         $days = max(0, (int) ($config['days'] ?? 30));
 
+        /*
+         * BOTH live states, not only `active`. The nightly sweep renames a
+         * membership to `expiring` thirty days out (spec §8.10's state
+         * machine), so a scanner looking only for `active` would match the
+         * T-30 rung and then silently stop matching for T-14 and T-3 — the
+         * ladder would fire its first notice and nothing else, which is the
+         * sort of failure nobody notices until a season's renewals are down.
+         */
         $rows = DB::all(
             "SELECT id, contact_id FROM {memberships}
-              WHERE status = 'active'
+              WHERE status IN ('active', 'expiring')
                 AND expires_at IS NOT NULL
                 AND DATE(expires_at) = DATE(:target)
               ORDER BY id

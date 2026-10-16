@@ -1092,6 +1092,38 @@ pending → active → expiring(T-30) → expired → lapsed(+60d) → [winback]
 - Reports: active count, retention and renewal rate by plan and cohort, revenue per member,
   usage distribution, churn reasons, pass utilisation vs break-even
 
+**As built (Phase 6).** `Services\Membership` is the state machine above, pure
+and tested over every boundary; `Services\MembershipLifecycle` enrols, records
+usage, freezes, renews and sweeps; `MembershipController` is the pages. Six
+decisions worth recording:
+
+1. **A pass sold at the counter works at the counter.** Enrolment decides
+   `active` or `pending` itself rather than waiting for the nightly sweep —
+   otherwise a guest stands there with a pass the system says has not started.
+2. **A visit records ONE use per membership per day.** A family is checked in
+   one child at a time, which is several writes for one afternoon; five
+   punches off a ten-visit card is the kind of error a venue hears about from
+   an angry guest. Usage arrives through the event seam (`visit.recorded`),
+   so `VisitRecorder` knows nothing about memberships.
+3. **Freezing gives the time back.** Unfreezing moves the end date on by
+   however long it was frozen. The alternative — pausing the status while the
+   calendar runs — hands somebody back a pass with three days left on it.
+4. **Renewing starts at the end of the current term, not today**, so renewing
+   early costs a guest nothing. Renewing after expiry starts today: they do
+   not get back the weeks they were away.
+5. **A blank member limit means one person**, not unlimited, unless the plan
+   is marked a family plan. Reading a blank as unlimited would let a counter
+   add a whole family to a pass sold for one.
+6. **The ladders are three sequences each, not one with three waits.**
+   `membership.expiring` is a scanned trigger with its own `days`, so each
+   rung enrols the people who crossed it that morning — a venue can reword or
+   switch off one rung without touching the others, and a pass renewed after
+   the first notice simply never crosses the second.
+
+The seeded plans ship OFF SALE: their prices are round numbers nobody at this
+venue chose, and a plan that could be sold before it was priced is a plan sold
+at the wrong price.
+
 ### 8.11 Forms & landing pages
 
 - Field types: text, email, tel, number, date, time, select, radio, checkbox, textarea,

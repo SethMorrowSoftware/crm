@@ -789,21 +789,192 @@ return static function (): array {
             'ready'   => 'A welcome series, usage nudges, the renewal ladder at 30, 14 and 3 days, '
                 . 'a win-back ladder after expiry, and family-plan cross-sell.',
             'tailor'  => 'Your pass tiers and prices, what each includes, and your renewal incentive.',
+            /*
+             * THE LADDERS ARE THREE SEQUENCES EACH, NOT ONE WITH THREE
+             * WAITS, and that is deliberate.
+             *
+             * `membership.expiring` is a SCANNED trigger: cron looks each
+             * morning for passes exactly N days from their end date, where N
+             * is the automation's own `days`. So the rungs are three
+             * automations with three different N, each enrolling the people
+             * who crossed its own threshold that day — which means a venue
+             * can switch one rung off, reword it, or change its timing
+             * without touching the others, and a pass renewed after the
+             * first notice simply never crosses the second.
+             *
+             * One sequence with two long waits would instead hold every
+             * member in flight for a month and need an exit condition to
+             * stop asking somebody who has already renewed.
+             */
             'automations' => [
-                ['Pass welcome series', 'membership.started', 'Day 0 welcome and how to use it, day 7 what to try, day 30 a check-in.'],
-                ['Unused pass nudge', 'membership.usage_idle', 'After five weeks with no visit, remind them the pass is waiting.'],
-                ['Renewal — 30 days out', 'membership.expiring', 'The first renewal notice, with what they got out of the pass this year.'],
-                ['Renewal — 14 days out', 'membership.expiring', 'A second notice with the early-renewal incentive.'],
-                ['Renewal — 3 days out', 'membership.expiring', 'Final notice, and a task to call a high-value member.'],
-                ['Expiry day', 'membership.expired', 'Tell them it has lapsed and how to restart in one click.'],
-                ['Win-back — 14 days after expiry', 'membership.lapsed', 'First win-back touch with a modest offer.'],
-                ['Win-back — 45 days after expiry', 'membership.lapsed', 'Second touch with a stronger offer.'],
-                ['Win-back — 90 days after expiry', 'membership.lapsed', 'Final touch, then stop. Repeated asking costs goodwill.'],
-                ['Family plan upgrade', 'membership.started', 'Where a household holds several single passes, offer the family plan.'],
-                ['Pass holder — party cross-sell', 'child.birthday_soon', 'Offer pass-holding families a birthday package at their member rate.'],
-                ['Cancellation — ask why', 'membership.cancelled', 'One short question, so the churn report has a real reason in it.'],
-                ['Heavy user recognition', 'membership.usage_idle', 'Thank the members who visit most; they are your advocates.'],
-                ['Monthly membership report', 'cron', 'Active count, renewal rate, utilisation and churn, emailed to managers.'],
+                [
+                    'Pass welcome series',
+                    'membership.started',
+                    'Day 0 welcome and how to use it, then a check-in a month in.',
+                    [
+                        ['type' => 'send_email', 'template' => 'membership-welcome'],
+                        ['type' => 'add_tag', 'tag' => 'pass holder'],
+                        ['type' => 'create_task', 'wait' => 43200,
+                         'title' => 'Check in with {{full_name}} — a month on their pass',
+                         'description' => 'A quick hello. A member who has not been back in the '
+                            . 'first month usually does not come back at all.',
+                         'due_in_hours' => 48, 'priority' => 'low'],
+                    ],
+                    ['once' => 0, 'reentry' => 1, 'goal' => 'visit.recorded', 'goal_hours' => 720],
+                ],
+                [
+                    'Unused pass nudge',
+                    'membership.usage_idle',
+                    'After five weeks with no visit, a reminder that it is paid for and waiting.',
+                    [
+                        ['type' => 'send_email', 'template' => 'membership-unused'],
+                    ],
+                    ['when' => ['days' => 35], 'once' => 0, 'reentry' => 1,
+                     'goal' => 'visit.recorded', 'goal_hours' => 720],
+                ],
+                [
+                    'Renewal — 30 days out',
+                    'membership.expiring',
+                    'The first renewal notice, naming the date and what they got out of the year.',
+                    [
+                        ['type' => 'send_email', 'template' => 'membership-renewal'],
+                    ],
+                    ['when' => ['days' => 30], 'once' => 0, 'reentry' => 1,
+                     'goal' => 'membership.renewed', 'goal_hours' => 1440],
+                ],
+                [
+                    'Renewal — 14 days out',
+                    'membership.expiring',
+                    'A second notice a fortnight out, for anybody who has not renewed.',
+                    [
+                        ['type' => 'send_email', 'template' => 'membership-renewal'],
+                    ],
+                    ['when' => ['days' => 14], 'once' => 0, 'reentry' => 1,
+                     'goal' => 'membership.renewed', 'goal_hours' => 720],
+                ],
+                [
+                    'Renewal — 3 days out',
+                    'membership.expiring',
+                    'Final notice, and somebody rings the members worth ringing.',
+                    [
+                        ['type' => 'send_email', 'template' => 'membership-renewal'],
+                        ['type' => 'create_task',
+                         'title' => 'Ring {{full_name}} — pass ends in three days',
+                         'description' => 'Member {{member_number}}, {{visits_used}} visits this '
+                            . 'year. Three emails have gone; a call is what is left.',
+                         'due_in_hours' => 24, 'priority' => 'high'],
+                    ],
+                    ['when' => ['days' => 3], 'once' => 0, 'reentry' => 1,
+                     'goal' => 'membership.renewed', 'goal_hours' => 336],
+                ],
+                [
+                    'Expiry day',
+                    'membership.expired',
+                    'On the day it ends: what they used it for, and how to start again.',
+                    [
+                        ['type' => 'send_email', 'template' => 'membership-expired'],
+                        ['type' => 'remove_tag', 'tag' => 'pass holder'],
+                    ],
+                    ['once' => 0, 'reentry' => 1, 'goal' => 'membership.renewed', 'goal_hours' => 720],
+                ],
+                [
+                    'Win-back — 14 days after expiry',
+                    'membership.lapsed',
+                    'First win-back touch, a fortnight after it ended.',
+                    [
+                        ['type' => 'send_email', 'template' => 'membership-winback'],
+                    ],
+                    ['when' => ['days' => 14], 'once' => 0, 'reentry' => 1,
+                     'goal' => 'membership.started', 'goal_hours' => 2160],
+                ],
+                [
+                    'Win-back — 45 days after expiry',
+                    'membership.lapsed',
+                    'Second touch, with an offer the venue chooses.',
+                    [
+                        ['type' => 'issue_coupon', 'code' => 'COMEBACK'],
+                        ['type' => 'send_email', 'template' => 'membership-winback'],
+                    ],
+                    ['when' => ['days' => 45], 'once' => 0, 'reentry' => 1,
+                     'goal' => 'membership.started', 'goal_hours' => 2160],
+                ],
+                [
+                    'Win-back — 90 days after expiry',
+                    'membership.lapsed',
+                    'The last one. After this we stop asking.',
+                    [
+                        ['type' => 'send_email', 'template' => 'membership-winback'],
+                        ['type' => 'add_tag', 'tag' => 'lapsed member'],
+                        // Said out loud, because the temptation is always to
+                        // add a fourth: asking again costs more goodwill than
+                        // it recovers.
+                        ['type' => 'exit'],
+                    ],
+                    ['when' => ['days' => 90], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Family plan upgrade',
+                    'membership.started',
+                    'A household with more than one single pass is a family plan waiting to happen.',
+                    [
+                        // A TASK rather than a mailshot: whether a household
+                        // is better off on a family plan depends on what they
+                        // already hold, and a person can see that in two
+                        // clicks where a rule cannot.
+                        ['type' => 'create_task', 'wait' => 1440,
+                         'title' => 'Would {{full_name}} be better on a family plan?',
+                         'description' => 'Check what else the household holds. If there are two '
+                            . 'or more single passes, the family plan is usually cheaper.',
+                         'due_in_hours' => 72, 'priority' => 'low'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Pass holder — party cross-sell',
+                    'child.birthday_soon',
+                    'Pass-holding families get the birthday offer first.',
+                    [
+                        ['type' => 'condition', 'field' => 'tags', 'op' => 'contains', 'value' => 'pass holder'],
+                        ['type' => 'send_email', 'branch' => 'yes', 'template' => 'birthday-club-invite'],
+                    ],
+                    ['when' => ['days' => 45], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Cancellation — ask why',
+                    'membership.cancelled',
+                    'One short question, so the churn report has reasons in it rather than a count.',
+                    [
+                        ['type' => 'create_task',
+                         'title' => 'Why did {{full_name}} cancel?',
+                         'description' => 'If the cancellation note is blank, ring them. A churn '
+                            . 'report with no reasons in it cannot be acted on.',
+                         'due_in_hours' => 72],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Heavy user recognition',
+                    'cron',
+                    'A monthly nudge to thank the members who come most. They are your advocates.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'Thank your heaviest members',
+                         'message' => 'Open Memberships and sort by visits. The handful at the top '
+                            . 'are the people who recommend you — a note from a manager costs '
+                            . 'nothing and is remembered.'],
+                    ],
+                    ['when' => ['expression' => '11 9 8 * *'], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Monthly membership report',
+                    'cron',
+                    'On the 1st: who is live, who is up for renewal, who is not using it.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'This month\'s memberships',
+                         'message' => 'Open Memberships: the renewal queue, the passes nobody is '
+                            . 'using, and anybody who lapsed last month.'],
+                    ],
+                    ['when' => ['expression' => '21 9 1 * *'], 'once' => 0, 'reentry' => 1],
+                ],
             ],
         ],
         [

@@ -112,6 +112,7 @@ $stats = [
     'auto_steps'     => 0,
     'auto_scanned'   => 0,
     'surveys'        => 0,
+    'memberships'    => 0,
     'maintenance' => 0,
     'errors'      => 0,
 ];
@@ -376,7 +377,42 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Nightly maintenance — once a day, not every minute
+// 9. Advance every membership to where today says it should be
+//
+// The state machine from spec §8.10, applied once a tick. It is cheap (one
+// bounded read, a write only where something actually changed) and
+// idempotent, so running it every minute rather than nightly costs almost
+// nothing and means a pass that starts this morning works this morning
+// rather than tomorrow.
+//
+// The renewal LADDER is stamped here too. The notices themselves are sent by
+// the seeded renewal automations, which trigger on `membership.expiring`;
+// this records which rung each membership has reached so a restarted job
+// cannot ask the same family to renew twice.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $swept = App\Services\MembershipLifecycle::sweep($budgetLeft);
+
+        $stats['memberships'] = $swept['changed'];
+
+        if ($swept['changed'] > 0) {
+            cron_out('  ' . $swept['changed'] . ' membership(s) advanced: '
+                . $swept['started'] . ' started, ' . $swept['expired'] . ' expired, '
+                . $swept['lapsed'] . ' lapsed.');
+        }
+
+        App\Services\MembershipLifecycle::stampRenewalNotices();
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: membership sweep failed', ['error' => $e->getMessage()]);
+        cron_out('  ! membership sweep: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 10. Nightly maintenance — once a day, not every minute
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft() && cron_shouldRunDaily()) {
@@ -392,7 +428,7 @@ if ($budgetLeft() && cron_shouldRunDaily()) {
 }
 
 // ---------------------------------------------------------------------------
-// 10. Heartbeat
+// 11. Heartbeat
 // ---------------------------------------------------------------------------
 
 Settings::set('system.cron_last_run', gmdate('Y-m-d H:i:s'));
@@ -409,7 +445,8 @@ $elapsed = round(microtime(true) - CC_START, 2);
 cron_out(sprintf(
     'Done in %ss. Jobs: %d, automations due: %d, conversations woken: %d, '
         . 'campaign messages: %d, Text Club offers: %d, automations started: %d, '
-        . 'automation steps: %d, feedback asks: %d, maintenance tasks: %d, errors: %d.',
+        . 'automation steps: %d, feedback asks: %d, memberships advanced: %d, '
+        . 'maintenance tasks: %d, errors: %d.',
     $elapsed,
     $stats['jobs'],
     $stats['automations'],
@@ -419,6 +456,7 @@ cron_out(sprintf(
     $stats['auto_scanned'],
     $stats['auto_steps'],
     $stats['surveys'],
+    $stats['memberships'],
     $stats['maintenance'],
     $stats['errors']
 ));

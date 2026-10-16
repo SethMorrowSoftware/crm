@@ -616,6 +616,120 @@ return static function (): array {
     ];
 
     /*
+     * MEMBERSHIPS AND SEASON PASSES.
+     *
+     * The renewal ladder is three emails and then it stops, and so is the
+     * win-back. Both are written to be sent in that order by sequences the
+     * venue switches on — so the first is warm, the second carries the
+     * reason to act now, and the third says plainly that it is the last one.
+     * A fourth would cost more goodwill than it recovers.
+     *
+     * {{expires_at}} and {{visits_used}} come from the membership the run is
+     * about. A template that names them on a pass with no end date leaves
+     * them empty, which is why the open-ended plans are never in the ladder.
+     */
+    $templates[] = [
+        'slug'      => 'membership-welcome',
+        'name'      => 'Pass — welcome',
+        'category'  => 'memberships',
+        'subject'   => 'Your pass is ready, {{first_name}}',
+        'preheader' => 'What it covers and how to use it.',
+        'tags'      => ['first_name', 'venue_name', 'member_number', 'expires_at'],
+        'is_system' => false,
+        'body'      => $shell(
+            'Your pass is ready',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('Your pass at {{venue_name}} is live. Give your name at the desk — the '
+                . 'number on it is {{member_number}} — and come as often as you like.')
+            . "\n" . $p('It runs until {{expires_at}}. We will remind you before then.'),
+            null,
+            'Replies to this email reach us directly.'
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'membership-unused',
+        'name'      => 'Pass — it is waiting for you',
+        'category'  => 'memberships',
+        'subject'   => 'Your pass is waiting, {{first_name}}',
+        'preheader' => 'It has been a few weeks.',
+        'tags'      => ['first_name', 'venue_name'],
+        'is_system' => false,
+        'body'      => $shell(
+            'It has been a little while',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('Your pass has not been used for a few weeks, and it is paid for — so '
+                . 'this is a nudge rather than an offer. Come when it suits you.')
+            . "\n" . $p('If something has changed and it is not working for you, tell us; we '
+                . 'would rather know.'),
+            null,
+            'You are getting this because you hold a pass at {{venue_name}}.'
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'membership-renewal',
+        'name'      => 'Pass — time to renew',
+        'category'  => 'memberships',
+        'subject'   => 'Your pass runs out on {{expires_at}}',
+        'preheader' => 'Renewing keeps every day you have already paid for.',
+        'tags'      => ['first_name', 'venue_name', 'expires_at', 'visits_used', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'Your pass runs out soon',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('Your pass at {{venue_name}} runs out on {{expires_at}}. You have been '
+                . 'in {{visits_used}} times on it.')
+            . "\n" . $p('Renewing before it ends keeps every day you have already paid for — the '
+                . 'new year starts where this one finishes, not today. Call {{venue_phone}} or '
+                . 'ask at the desk.'),
+            null,
+            'You are getting this because you hold a pass at {{venue_name}}.'
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'membership-expired',
+        'name'      => 'Pass — it has run out',
+        'category'  => 'memberships',
+        'subject'   => 'Your pass has run out, {{first_name}}',
+        'preheader' => 'Starting again takes a minute at the desk.',
+        'tags'      => ['first_name', 'venue_name', 'visits_used', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'Your pass has run out',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('Your pass has come to an end. You used it {{visits_used}} times, which '
+                . 'we hope was worth having.')
+            . "\n" . $p('Starting again takes a minute at the desk, or call {{venue_phone}} and '
+                . 'we will set it up before you arrive.'),
+            null,
+            'This is the last message about this pass unless you start a new one.'
+        ),
+    ];
+
+    $templates[] = [
+        'slug'      => 'membership-winback',
+        'name'      => 'Pass — come back',
+        'category'  => 'memberships',
+        'subject'   => 'We have missed you, {{first_name}}',
+        'preheader' => 'Your pass ended a little while ago.',
+        'tags'      => ['first_name', 'venue_name', 'venue_phone'],
+        'is_system' => false,
+        'body'      => $shell(
+            'We have missed you',
+            $p('Hi {{first_name}},')
+            . "\n" . $p('Your pass at {{venue_name}} ended a little while ago and we have not '
+                . 'seen you since.')
+            . "\n" . $p('If you would like to start again, ask at the desk or call '
+                . '{{venue_phone}} — and if we got something wrong, we would rather hear it than '
+                . 'not.'),
+            null,
+            'We will stop asking after this.'
+        ),
+    ];
+
+    /*
      * THE TEXTS. Separate from the list above because a text is a different
      * medium, not a shorter email.
      *

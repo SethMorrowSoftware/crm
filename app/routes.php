@@ -690,5 +690,29 @@ $router->group('/reputation', ['auth', 'can:view_reputation'], function ($router
 });
 
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
-$router->get('/memberships', ['PlaceholderController', 'memberships'], ['auth', 'can:view_memberships'], 'memberships');
+// ---------------------------------------------------------------------------
+// Memberships and season passes
+//
+// Two permissions, and the split is the point: `memberships_manage` sells a
+// pass, freezes one and cancels one — counter work. `plans_manage` decides
+// what a pass COSTS and what it includes, which is not. A front desk that can
+// enrol a family must not be able to invent a twelve-pound season pass.
+// ---------------------------------------------------------------------------
+
+$router->group('/memberships', ['auth', 'can:view_memberships'], function ($router): void {
+    $router->get('', ['MembershipController', 'index'], [], 'memberships');
+    $router->post('', ['MembershipController', 'store'], ['csrf', 'can:memberships_manage']);
+
+    $router->get('/plans', ['MembershipController', 'plans'], [], 'memberships.plans');
+    $router->post('/plans', ['MembershipController', 'savePlan'], ['csrf', 'can:plans_manage']);
+    $router->post('/plans/{id:\d+}', ['MembershipController', 'savePlan'], ['csrf', 'can:plans_manage']);
+
+    $router->get('/{id:\d+}', ['MembershipController', 'show'], [], 'memberships.show');
+    $router->post('/{id:\d+}/members', ['MembershipController', 'addMember'], ['csrf', 'can:memberships_manage']);
+    $router->post('/{id:\d+}/members/remove', ['MembershipController', 'removeMember'], ['csrf', 'can:memberships_manage']);
+    $router->post('/{id:\d+}/freeze', ['MembershipController', 'freeze'], ['csrf', 'can:memberships_manage']);
+    $router->post('/{id:\d+}/unfreeze', ['MembershipController', 'unfreeze'], ['csrf', 'can:memberships_manage']);
+    $router->post('/{id:\d+}/cancel', ['MembershipController', 'cancel'], ['csrf', 'can:memberships_manage']);
+    $router->post('/{id:\d+}/renew', ['MembershipController', 'renew'], ['csrf', 'can:memberships_manage']);
+});
 $router->get('/reports', ['PlaceholderController', 'reports'], ['auth', 'can:view_reports'], 'reports');

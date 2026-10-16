@@ -89,6 +89,7 @@ final class Event
         'membership.started'       => 'A membership or pass starts',
         'membership.expired'       => 'A membership expires',
         'membership.cancelled'     => 'A membership is cancelled',
+        'membership.renewed'       => 'A membership is renewed',
 
         // Communication
         'message.received'         => 'An inbound message arrives',
@@ -151,9 +152,6 @@ final class Event
      * @var array<string,string>
      */
     public const PENDING = [
-        'membership.started'   => 'the memberships module',
-        'membership.expired'   => 'the memberships module',
-        'membership.cancelled' => 'the memberships module',
         'coupon.redeemed'      => 'coupon redemption at the till',
         'referral.converted'   => 'the referral module',
         'donation.requested'   => 'the fundraising module',

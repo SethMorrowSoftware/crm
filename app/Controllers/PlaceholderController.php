@@ -38,15 +38,9 @@ final class PlaceholderController extends Controller
     // soon" for a module that shipped is the sort of thing that survives
     // three releases.
 
-    public function memberships(Request $request): Response
-    {
-        return $this->placeholder('Memberships', 6, 'memberships', [
-            'Season passes, memberships and multi-visit cards',
-            'Renewal reminders at 30, 14 and 3 days',
-            'Unused-pass nudges and lapsed win-back ladders',
-            'Retention and utilisation reporting by plan and cohort',
-        ], 'Shared with CenterEdge: the card and its privileges live there, the lifecycle lives here.');
-    }
+    // Memberships was a placeholder until Phase 6. It is now
+    // `MembershipController` — the method is gone rather than left pointing
+    // at a page that exists.
 
 
     public function reports(Request $request): Response

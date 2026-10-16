@@ -25,6 +25,7 @@ declare(strict_types=1);
 
 use App\Core\Event;
 use App\Services\AutomationRunner;
+use App\Services\MembershipLifecycle;
 
 /*
  * ENROLMENT. Every event in the catalogue can start an automation, so this is
@@ -58,4 +59,23 @@ Event::listen('*', static function (array $payload, string $event): void {
     }
 
     AutomationRunner::onGoalEvent($event, $payload);
+});
+
+/*
+ * MEMBERSHIP USAGE. The one place a season pass learns it was used.
+ *
+ * Spec §8.10 wants `membership_usage` rows derived from visits, and the event
+ * seam is how a module hears about another module's business without either
+ * knowing the other exists: `VisitRecorder` fires, this records. The
+ * alternative — VisitRecorder calling the membership module directly — would
+ * make "record a visit" mean "and also these four other things", which is how
+ * a check-in ends up taking two seconds.
+ *
+ * Everything that makes it safe lives in the module: one use per membership
+ * per day (a family checked in one child at a time is one visit), only live
+ * memberships, and family members counted through `membership_members` rather
+ * than through the holder.
+ */
+Event::listen('visit.recorded', static function (array $payload): void {
+    MembershipLifecycle::recordVisitUsage($payload);
 });

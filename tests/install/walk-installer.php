@@ -618,6 +618,25 @@ foreach ($counts as $table => $expected) {
     check($actual === $expected, sprintf('%s: %d (expected %d)', $table, $actual, $expected));
 }
 
+/*
+ * Membership plans arrive as SHAPES, not as prices. The three the venue seed
+ * writes exercise the three branches of the lifecycle (a dated pass runs the
+ * renewal ladder, a punch card ends on its visits, an open-ended membership
+ * never enters the ladder) — but their prices are round numbers nobody at
+ * this venue chose, so none of them may be sellable until somebody has.
+ */
+$plans = (int) $pdo->query('SELECT COUNT(*) FROM cc_membership_plans')->fetchColumn();
+check($plans >= 3, sprintf('membership plans: %d', $plans));
+
+$plansOnSale = (int) $pdo->query('SELECT COUNT(*) FROM cc_membership_plans WHERE is_active = 1')->fetchColumn();
+check($plansOnSale === 0, 'and NONE is on sale before the venue has priced it');
+
+$surveys = (int) $pdo->query('SELECT COUNT(*) FROM cc_surveys')->fetchColumn();
+check($surveys >= 2, sprintf('feedback surveys: %d', $surveys));
+
+$surveysOn = (int) $pdo->query('SELECT COUNT(*) FROM cc_surveys WHERE is_active = 1')->fetchColumn();
+check($surveysOn === 0, 'and neither is running, so nobody is emailed on install day');
+
 $automations = (int) $pdo->query('SELECT COUNT(*) FROM cc_automations')->fetchColumn();
 check($automations >= 100, sprintf('automations: %d', $automations));
 

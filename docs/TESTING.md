@@ -188,6 +188,13 @@ Four more integration suites cover the operator-facing machinery:
   lookback window, never asks about a party that did not happen, never asks the
   same party twice, and records WHY a guest could not be asked rather than
   reporting a low response rate
+- **memberships** — the lifecycle against real rows: a pass sold at the
+  counter works at the counter, a visit records ONE use however many times it
+  is reported (a family checked in one child at a time is one visit), a family
+  member using it counts and not only the holder, freezing gives the frozen
+  time back on the end date, renewing early keeps the time already paid for,
+  and the nightly sweep is idempotent — a second pass writes nothing and fires
+  nothing, or every welcome series would go out once a minute
 - **upgrade** — a pending schema file is applied and recorded on the first
   request after an upload; a failing file leaves the version marker alone so
   the next request retries; and re-running a partially applied file completes
@@ -252,6 +259,11 @@ And two further HTTP suites:
   an unknown token is the same dead end whether or not it could have existed,
   and the review wall is the one public page here that is indexable, cacheable
   and frameable while the rest are none of those
+- **memberships** — the two permissions, in both directions: selling a pass
+  is counter work and pricing one is not, so a front desk that can enrol a
+  family cannot invent a twelve-pound season pass. Plus every button a manager
+  presses — freeze, unfreeze, renew, cancel — driven through the real forms,
+  and the rule that a plan nobody has priced is not offered for sale
 - **admin** — the operator pages: the stored SMTP password is never rendered
   back into the form and a blank field keeps it; the front desk cannot reach
   email settings, backups or export; a backup taken over HTTP downloads as a

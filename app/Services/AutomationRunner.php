@@ -70,6 +70,11 @@ final class AutomationRunner
         'quote_id'   => 'quotes',
         'visit_id'   => 'visits',
         'task_id'    => 'tasks',
+        // Last, so a membership event that also names a booking stays about
+        // the booking: the ladder's templates want the party's details, and
+        // the membership's own columns are reachable either way through the
+        // event payload.
+        'membership_id' => 'memberships',
     ];
 
     /**
@@ -82,8 +87,9 @@ final class AutomationRunner
         'booking' => 'bookings',
         'deal'    => 'deals',
         'quote'   => 'quotes',
-        'visit'   => 'visits',
-        'task'    => 'tasks',
+        'visit'      => 'visits',
+        'task'       => 'tasks',
+        'membership' => 'memberships',
     ];
 
     // =================================================================
@@ -1682,6 +1688,30 @@ final class AutomationRunner
                         AND status NOT IN ('cancelled', 'no_show')",
                     ['c' => $contactId]
                 ) ? 1 : 0;
+
+                /*
+                 * THEIR TAGS, as one string a `contains` rule can read.
+                 *
+                 * Tags live in a join table, so without this a condition on
+                 * `tags` read an absent column — and `contains` on nothing is
+                 * FALSE, so the rule took the no branch for everybody,
+                 * silently and for ever. A sequence written as "only people
+                 * tagged pass holder" would simply never do anything, which
+                 * is the worst way for a rule to be wrong.
+                 *
+                 * Comma-wrapped at both ends so a rule can ask for an exact
+                 * tag as ",vip," without matching "vip family" — the operator
+                 * who wants either can still write `contains vip`.
+                 */
+                $names = DB::column(
+                    "SELECT t.name FROM {taggables} tg
+                       JOIN {tags} t ON t.id = tg.tag_id
+                      WHERE tg.entity_type = 'contact' AND tg.entity_id = :c
+                      ORDER BY t.name",
+                    ['c' => $contactId]
+                );
+
+                $subject['tags'] = $names === [] ? '' : ',' . implode(',', $names) . ',';
             }
         }
 
@@ -1786,6 +1816,7 @@ final class AutomationRunner
          */
         $dates = [
             'party_date'     => ['event_date', 'bookings_event_date', 'deals_event_date'],
+            'expires_at'     => ['event_expires_at', 'memberships_expires_at'],
             'preferred_date' => ['event_date', 'bookings_event_date', 'deals_event_date'],
             'event_date'     => ['event_date', 'bookings_event_date', 'deals_event_date'],
         ];
@@ -1804,6 +1835,11 @@ final class AutomationRunner
 
         $plain = [
             'guest_count'  => ['guest_count', 'bookings_guest_count', 'deals_guest_count'],
+            // A membership run: the pass's own details, under the names a
+            // renewal or win-back template would reach for.
+            'member_number' => ['member_number', 'memberships_member_number'],
+            'plan_name'     => ['event_plan', 'plan_name', 'memberships_plan_name'],
+            'visits_used'   => ['event_visits_used', 'visits_used', 'memberships_visits_used'],
             'child_name'   => ['child_name', 'bookings_child_name'],
             'organisation' => ['company_name', 'organisation', 'bookings_company_name'],
             'group_size'   => ['guest_count', 'bookings_guest_count'],
