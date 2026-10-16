@@ -17,7 +17,7 @@ use Throwable;
  *
  * Most of this venue's automations hang off these rather than off an event.
  * Nobody fires "the party is in fourteen days" — it simply becomes true one
- * morning, and something has to notice. Of the 111 seeded automations, 45 are
+ * morning, and something has to notice. Of the 112 seeded automations, 45 are
  * waiting on one of these.
  *
  * ## Why each scanner is a query and not a loop

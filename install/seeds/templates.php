@@ -164,15 +164,28 @@ return static function (): array {
             'category'  => 'parties',
             'subject'   => 'We got your party inquiry, {{first_name}}!',
             'preheader' => 'A real person will be in touch shortly.',
-            'tags'      => ['first_name', 'child_name', 'preferred_date', 'owner_name', 'venue_phone', 'venue_name'],
+            /*
+             * NO {{child_name}} AND NO {{preferred_date}} IN HERE.
+             *
+             * The seeded enquiry form asks for a name, an email and a phone
+             * number — nothing else — and this is the instant reply to it. A
+             * tag the run cannot fill becomes an empty string, which is right
+             * (nobody should see "{{child_name}}" in their inbox) and which
+             * made this read, in a real inbox: "We have your inquiry about a
+             * party for around ." Written to read properly on what the form
+             * actually collects; a venue that adds the child's name to its
+             * own form can put the tag back.
+             */
+            'tags'      => ['first_name', 'owner_name', 'venue_phone', 'venue_name'],
             'is_system' => false,
             'body'      => $shell(
                 'Thanks for thinking of us',
                 $p('Hi {{first_name}},')
-                . "\n" . $p('We have your inquiry about a party for {{child_name}} around '
-                    . '{{preferred_date}}. {{owner_name}} will come back to you with options and '
-                    . 'availability shortly — usually within the hour while we are open.')
-                . "\n" . $p('If it is easier to talk it through, call us on {{venue_phone}}.'),
+                . "\n" . $p('We have your party enquiry. {{owner_name}} will come back to you with '
+                    . 'dates, packages and prices shortly — usually within the hour while we are '
+                    . 'open.')
+                . "\n" . $p('If it is easier to talk it through, call us on {{venue_phone}} and we '
+                    . 'will take you through what is free.'),
                 null,
                 'Replies to this email reach us directly.'
             ),
@@ -335,6 +348,110 @@ return static function (): array {
             ),
         ],
 
+        // --- Groups and corporate ------------------------------------------
+        //
+        // A group buyer is a different reader from a parent: they are
+        // planning for other people's children, they answer to somebody, and
+        // they work to a calendar set months out. So these name the dates and
+        // the deadlines rather than opening with enthusiasm.
+        [
+            'slug'      => 'group-proposal-followup',
+            'name'      => 'Group proposal — follow-up',
+            'category'  => 'groups',
+            'subject'   => 'Your {{venue_name}} proposal for {{organisation}}',
+            'preheader' => 'Still happy to hold the date while you decide.',
+            'tags'      => ['first_name', 'organisation', 'event_date', 'owner_name',
+                'venue_phone', 'venue_name'],
+            'is_system' => false,
+            'body'      => $shell(
+                'Where are we up to?',
+                $p('Hi {{first_name}},')
+                . "\n" . $p('I sent over the proposal for {{organisation}} on {{event_date}}. No rush '
+                    . 'at all — I know these things go through a few people — but I can hold the date '
+                    . 'while you work through it.')
+                . "\n" . $p('If anything in it needs changing, say so and I will redo it. '
+                    . '{{owner_name}}, {{venue_phone}}.')
+            ),
+        ],
+        [
+            'slug'      => 'group-headcount-request',
+            'name'      => 'Group headcount request',
+            'category'  => 'groups',
+            'subject'   => 'How many are we expecting on {{event_date}}?',
+            'preheader' => 'A number now; we can adjust later.',
+            'tags'      => ['first_name', 'organisation', 'event_date', 'headcount_deadline',
+                'owner_name', 'venue_phone', 'venue_name'],
+            'is_system' => false,
+            'body'      => $shell(
+                'Numbers for {{event_date}}',
+                $p('Hi {{first_name}},')
+                . "\n" . $p('Could you give me a rough headcount for {{organisation}} on '
+                    . '{{event_date}}? An estimate is fine for now — I only need the firm number by '
+                    . '{{headcount_deadline}}, because that is when the kitchen and the staffing are set.')
+                . "\n" . $p('Reply with a number and I will take care of the rest. {{owner_name}}, '
+                    . '{{venue_phone}}.')
+            ),
+        ],
+        [
+            'slug'      => 'group-chaperone-brief',
+            'name'      => 'Chaperone brief',
+            'category'  => 'groups',
+            'subject'   => 'Arrival details for {{organisation}} on {{event_date}}',
+            'preheader' => 'Ratios, rules and where the bus goes.',
+            'tags'      => ['first_name', 'organisation', 'event_date', 'arrival_time',
+                'venue_phone', 'venue_name'],
+            'is_system' => false,
+            'body'      => $shell(
+                'Everything your chaperones need',
+                $p('Hi {{first_name}},')
+                . "\n" . $p('{{organisation}} is with us on {{event_date}}. Please pass this on to '
+                    . 'whoever is travelling with the group.')
+                . "\n" . $p('<strong>Arrive</strong> at {{arrival_time}}. The bus can pull into the '
+                    . 'front lot; the driver should stay with the vehicle or come in for a coffee. '
+                    . 'One adult per ten children keeps everything moving, and chaperones go free.')
+                . "\n" . $p('<strong>Socks are required</strong> on the soft play, and we have them '
+                    . 'to buy if somebody forgets. Anything to flag before the day — allergies, '
+                    . 'wheelchairs, a child who needs a quiet corner — call {{venue_phone}}.')
+            ),
+        ],
+        [
+            'slug'      => 'group-balance-due',
+            'name'      => 'Group balance due',
+            'category'  => 'groups',
+            'subject'   => 'Balance for {{organisation}} — {{event_date}}',
+            'preheader' => 'So the day itself is paperwork-free.',
+            'tags'      => ['first_name', 'organisation', 'event_date', 'balance_due',
+                'owner_name', 'venue_phone', 'venue_name'],
+            'is_system' => false,
+            'body'      => $shell(
+                'One thing before the day',
+                $p('Hi {{first_name}},')
+                . "\n" . $p('{{organisation}} is in on {{event_date}} and there is a balance of '
+                    . '{{balance_due}} outstanding. If it is easier to settle on a purchase order or '
+                    . 'an invoice to the school office, tell me who to send it to.')
+                . "\n" . $p('Getting it done beforehand means nobody is doing paperwork while thirty '
+                    . 'children wait. {{owner_name}}, {{venue_phone}}.')
+            ),
+        ],
+        [
+            'slug'      => 'group-annual-rebook',
+            'name'      => 'Group annual rebook',
+            'category'  => 'groups',
+            'subject'   => 'Same trip again next year, {{first_name}}?',
+            'preheader' => 'The good dates go to last year\'s groups first.',
+            'tags'      => ['first_name', 'organisation', 'owner_name', 'venue_phone', 'venue_name'],
+            'is_system' => false,
+            'body'      => $shell(
+                'Shall we put it in the diary?',
+                $p('Hi {{first_name}},')
+                . "\n" . $p('{{organisation}} came to {{venue_name}} last year and it went well. We are '
+                    . 'taking dates for next season now, and the groups who came last year get first '
+                    . 'pick before anything goes public.')
+                . "\n" . $p('If you tell me roughly when and roughly how many, I will hold something '
+                    . 'and send the paperwork. {{owner_name}}, {{venue_phone}}.')
+            ),
+        ],
+
         // --- Operational ---------------------------------------------------
         [
             'slug'      => 'waiver-reminder',
@@ -444,6 +561,24 @@ return static function (): array {
             'body'     => 'Hi {{first_name}}, the party is tomorrow. Arrive 15 minutes early and '
                 . 'we will have everything ready. Call {{venue_phone}} if anything changes.',
             'tags'     => ['first_name', 'venue_phone'],
+        ],
+        [
+            'slug'     => 'birthday-coupon-sms',
+            'name'     => 'Birthday month offer - text',
+            'category' => 'parties',
+            'kind'     => 'marketing',
+            'body'     => 'Happy birthday month from {{venue_name}}! Show this text for a free '
+                . 'birthday game. Reply STOP to opt out.',
+            'tags'     => ['venue_name'],
+        ],
+        [
+            'slug'     => 'return-offer-sms',
+            'name'     => 'Come back soon - text',
+            'category' => 'retention',
+            'kind'     => 'marketing',
+            'body'     => 'Thanks for coming to {{venue_name}}, {{first_name}}. Here is a little '
+                . 'something for next time - show this text at the desk. Reply STOP to opt out.',
+            'tags'     => ['first_name', 'venue_name'],
         ],
         [
             'slug'     => 'winback-sms',

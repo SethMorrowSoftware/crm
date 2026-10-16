@@ -9,7 +9,7 @@ declare(strict_types=1);
  * Activation is always a deliberate human act, and Safe Mode still applies on
  * top of that — a fresh install cannot message a guest even by accident.
  *
- * @return array{playbooks:int,automations:int,steps:int}
+ * @return array{playbooks:int,automations:int,steps:int,offers:int}
  */
 
 use App\Core\DB;
@@ -310,6 +310,20 @@ return static function (): array {
                     ],
                 ],
                 [
+                    'Website booking request — instant response',
+                    'booking.enquiry_received',
+                    'The same instant reply for a request that comes through the booking page rather than the enquiry form.',
+                    [
+                        ['type' => 'send_email', 'template' => 'party-inquiry-received',
+                         'kind' => 'transactional'],
+                        ['type' => 'create_task', 'title' => 'Confirm the requested date for {{full_name}}',
+                         'description' => 'They picked a date and time on the website. Check it is '
+                            . 'really free, then call them.',
+                         'due_in_hours' => 2, 'priority' => 'high'],
+                    ],
+                    ['goal' => 'booking.deposit_paid'],
+                ],
+                [
                     'Large party VIP handling',
                     'booking.confirmed',
                     'For a party above twenty children, assign a manager and book a planning call.',
@@ -336,23 +350,226 @@ return static function (): array {
                 . 'annual recurrence nudge for groups that come back every year.',
             'tailor'  => 'Your group rates and minimums, your Event Center packages, your deposit '
                 . 'terms, and which schools and companies matter most.',
+            /*
+             * A GROUP BUYER IS NOT A PARENT, and every delay in here says so.
+             * A parent decides over a weekend; a teacher decides at a staff
+             * meeting, a camp director in February for August, and a company
+             * in September for December. So the proposal ladder runs over
+             * three weeks rather than twelve days, and the headcount is asked
+             * for three times with the deadline named — because the kitchen
+             * and the staffing are set from the last number given.
+             *
+             * The two cron sequences have no segment set, so they notify the
+             * venue rather than messaging anybody: "reach out to every camp
+             * that visited last summer" is a list somebody has to look at,
+             * and the automation's job is to make sure they look at it in
+             * February rather than in May.
+             */
             'automations' => [
-                ['Instant group inquiry response', 'form.submitted', 'Acknowledge within minutes with your group information pack, and task the owner.'],
-                ['Qualify the group', 'deal.created', 'Create a qualification task covering headcount, date flexibility and budget.'],
-                ['Proposal follow-up ladder', 'quote.sent', 'Group buyers are slower than parents: a 21-day sequence pitched at a planning cycle.'],
-                ['Site visit booked — prepare', 'deal.stage_changed', 'Send directions and a visit agenda, and brief the host.'],
-                ['Contract chase', 'deal.stage_changed', 'Chase a signed contract or PO at day 3, 7 and 14 after a verbal commitment.'],
-                ['Headcount firming — T-21', 'booking.upcoming', 'First formal headcount request three weeks out.'],
-                ['Headcount firming — T-10', 'booking.upcoming', 'Second request, with the catering deadline named.'],
-                ['Headcount firming — T-3', 'booking.upcoming', 'Final numbers, escalating to a phone task if unanswered.'],
-                ['Group waiver pack', 'booking.confirmed', 'Send the bulk waiver link and a chaperone brief.'],
-                ['Chaperone brief', 'booking.upcoming', 'Two days out, send the chaperone ratio, rules and arrival process.'],
-                ['Invoice issued', 'booking.confirmed', 'Create the invoice task and send payment terms for PO-based groups.'],
-                ['Balance due reminder', 'booking.upcoming', 'Remind a group of its outstanding balance a week before the event.'],
-                ['Post-event thank you and feedback', 'booking.completed', 'Thank the organiser and ask the one question that matters.'],
-                ['Annual recurrence — rebook the school', 'company.recurring_due', 'Eight months after last year\'s trip, email the teacher and task the owner.'],
-                ['Camp season planning', 'cron', 'Each February, reach out to every camp that visited last summer.'],
-                ['Corporate holiday party outreach', 'cron', 'Each September, offer the Event Center to local companies for the holiday season.'],
+                [
+                    'Instant group inquiry response',
+                    'form.submitted',
+                    'Acknowledge within minutes with the group information, and task the owner to call.',
+                    [
+                        ['type' => 'send_email', 'template' => 'group-event-followup',
+                         'kind' => 'transactional'],
+                        ['type' => 'create_task', 'title' => 'Call {{full_name}} about the group visit',
+                         'description' => 'Group enquiry from the website. Ask dates, numbers and budget.',
+                         'due_in_hours' => 4, 'priority' => 'high'],
+                    ],
+                    ['goal' => 'quote.accepted'],
+                ],
+                [
+                    'Qualify the group',
+                    'deal.created',
+                    'Create the qualification task: headcount, date flexibility, budget and who signs.',
+                    [
+                        ['type' => 'create_task', 'title' => 'Qualify: {{title}}',
+                         'description' => 'How many? Which dates can move? What is the budget, '
+                            . 'and who has to approve it?',
+                         'due_in_hours' => 24],
+                    ],
+                ],
+                [
+                    'Proposal follow-up ladder',
+                    'quote.sent',
+                    'A twenty-one day ladder pitched at a planning cycle, not a weekend. Stops when they book.',
+                    [
+                        ['type' => 'send_email', 'template' => 'group-proposal-followup',
+                         'kind' => 'transactional', 'wait' => 5760],
+                        ['type' => 'create_task', 'title' => 'Call {{full_name}} about the proposal',
+                         'wait' => 5760, 'due_in_hours' => 24],
+                        ['type' => 'send_email', 'template' => 'group-proposal-followup', 'wait' => 10080],
+                        ['type' => 'create_task', 'title' => 'Last check on the proposal to {{full_name}}',
+                         'description' => 'Three weeks. Either it is live or the date goes back in the diary.',
+                         'wait' => 10080, 'due_in_hours' => 48],
+                    ],
+                    [
+                        'exit' => ['match' => 'any', 'rules' => [
+                            ['field' => 'has_booking', 'op' => 'is_true', 'value' => '1'],
+                            ['field' => 'quotes_status', 'op' => 'is', 'value' => 'accepted'],
+                        ]],
+                        'goal' => 'quote.accepted',
+                    ],
+                ],
+                [
+                    'Site visit booked — prepare',
+                    'deal.stage_changed',
+                    'Task the host to send directions and an agenda, and to walk the route first.',
+                    [
+                        ['type' => 'create_task', 'title' => 'Prepare the site visit for {{full_name}}',
+                         'description' => 'Send directions and an agenda. Walk the route they will '
+                            . 'walk, and know which rooms are free that day.',
+                         'due_in_hours' => 24],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Contract chase',
+                    'deal.stage_changed',
+                    'Chase the signed contract or PO at day 3, 7 and 14 after a verbal commitment.',
+                    [
+                        ['type' => 'create_task', 'title' => 'Chase the contract: {{title}}',
+                         'wait' => 4320, 'due_in_hours' => 24],
+                        ['type' => 'create_task', 'title' => 'Chase the contract again: {{title}}',
+                         'wait' => 5760, 'due_in_hours' => 24],
+                        ['type' => 'notify_user', 'title' => 'A contract is two weeks overdue',
+                         'message' => 'Still nothing signed for {{title}}. Decide whether the date '
+                            . 'stays held.', 'wait' => 10080],
+                    ],
+                    [
+                        'exit' => ['match' => 'any', 'rules' => [
+                            ['field' => 'has_booking', 'op' => 'is_true', 'value' => '1'],
+                            ['field' => 'deals_status', 'op' => 'in', 'value' => 'won,lost,abandoned'],
+                        ]],
+                        'once' => 0,
+                        'reentry' => 1,
+                    ],
+                ],
+                [
+                    'Headcount firming — T-21',
+                    'booking.upcoming',
+                    'The first headcount request, three weeks out, asking only for an estimate.',
+                    [
+                        ['type' => 'send_email', 'template' => 'group-headcount-request',
+                         'kind' => 'transactional',
+                         'before' => ['field' => 'event_date', 'days' => 21, 'at' => '09:00']],
+                    ],
+                    ['when' => ['days' => 21]],
+                ],
+                [
+                    'Headcount firming — T-10',
+                    'booking.upcoming',
+                    'The second request, ten days out, with the catering deadline named.',
+                    [
+                        ['type' => 'send_email', 'template' => 'group-headcount-request',
+                         'kind' => 'transactional',
+                         'before' => ['field' => 'event_date', 'days' => 10, 'at' => '09:00']],
+                    ],
+                    ['when' => ['days' => 10]],
+                ],
+                [
+                    'Headcount firming — T-3',
+                    'booking.upcoming',
+                    'Final numbers three days out, escalating to a phone task the same day.',
+                    [
+                        ['type' => 'send_email', 'template' => 'group-headcount-request',
+                         'kind' => 'transactional',
+                         'before' => ['field' => 'event_date', 'days' => 3, 'at' => '09:00']],
+                        ['type' => 'create_task', 'title' => 'Ring {{full_name}} for final numbers',
+                         'description' => 'Three days out. The kitchen and the staffing are set from '
+                            . 'whatever number we have tonight.',
+                         'due_in_hours' => 6, 'priority' => 'high'],
+                    ],
+                    ['when' => ['days' => 3]],
+                ],
+                [
+                    'Group waiver pack',
+                    'booking.confirmed',
+                    'Send the waiver link for the whole group as soon as the booking is confirmed.',
+                    [
+                        ['type' => 'send_email', 'template' => 'waiver-reminder', 'kind' => 'transactional'],
+                        ['type' => 'create_task', 'title' => 'Check the waiver returns for {{full_name}}',
+                         'wait' => 10080, 'due_in_hours' => 48],
+                    ],
+                ],
+                [
+                    'Chaperone brief',
+                    'booking.upcoming',
+                    'Two days out, the ratios, the rules and where the bus goes.',
+                    [
+                        ['type' => 'send_email', 'template' => 'group-chaperone-brief',
+                         'kind' => 'transactional',
+                         'before' => ['field' => 'event_date', 'days' => 2, 'at' => '10:00']],
+                    ],
+                    ['when' => ['days' => 2]],
+                ],
+                [
+                    'Invoice issued',
+                    'booking.confirmed',
+                    'Task the office to raise the invoice or take the PO details.',
+                    [
+                        ['type' => 'create_task', 'title' => 'Invoice or PO for {{full_name}}',
+                         'description' => 'Raise it, send it to whoever handles their paperwork, and '
+                            . 'note the terms on the booking.',
+                         'due_in_hours' => 48],
+                    ],
+                ],
+                [
+                    'Balance due reminder',
+                    'booking.upcoming',
+                    'A week before the event, remind the organiser of anything outstanding.',
+                    [
+                        ['type' => 'send_email', 'template' => 'group-balance-due', 'kind' => 'transactional',
+                         'before' => ['field' => 'event_date', 'days' => 7, 'at' => '09:00']],
+                    ],
+                    ['when' => ['days' => 7]],
+                ],
+                [
+                    'Post-event thank you and feedback',
+                    'booking.completed',
+                    'Thank the organiser the next morning and task the host to ask how it went.',
+                    [
+                        ['type' => 'send_email', 'template' => 'group-event-followup', 'wait' => 1080],
+                        ['type' => 'create_task', 'title' => 'Ask {{full_name}} how the visit went',
+                         'description' => 'One question: would you bring them again? The answer is '
+                            . 'next year\'s booking.',
+                         'wait' => 1440, 'due_in_hours' => 48],
+                    ],
+                ],
+                [
+                    'Annual recurrence — rebook the school',
+                    'company.recurring_due',
+                    'Eight months after the trip, email the organiser and task the owner to follow it up.',
+                    [
+                        ['type' => 'send_email', 'template' => 'group-annual-rebook'],
+                        ['type' => 'create_task', 'title' => 'Follow up the rebook with {{full_name}}',
+                         'wait' => 7200, 'due_in_hours' => 48],
+                    ],
+                    ['once' => 0, 'reentry' => 1, 'goal' => 'booking.created'],
+                ],
+                [
+                    'Camp season planning',
+                    'cron',
+                    'Each February, a nudge to go through last summer\'s camps while the dates are open.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'Camp season starts now',
+                         'message' => 'Camps book their summer in February. Pull last year\'s camp '
+                            . 'bookings and call them before somebody else does.'],
+                    ],
+                    ['when' => ['expression' => '34 8 3 2 *'], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Corporate holiday party outreach',
+                    'cron',
+                    'Each September, a nudge to offer the Event Center for the holiday season.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'Holiday party season',
+                         'message' => 'Companies book their December party in September. The Event '
+                            . 'Center diary is still empty — start with last year\'s list.'],
+                    ],
+                    ['when' => ['expression' => '47 8 2 9 *'], 'once' => 0, 'reentry' => 1],
+                ],
             ],
         ],
         [
@@ -447,22 +664,172 @@ return static function (): array {
                 . 'birthday-month coupon, slow-day flash sends, and the lapsed-guest win-back ladder.',
             'tailor'  => 'Your monthly offer calendar, what a slow day is worth discounting, and '
                 . 'how often a guest may hear from you.',
+            /*
+             * WHAT THE TEXT CLUB PAGE ALREADY DOES, THESE DO NOT DO AGAIN.
+             *
+             * The module itself owns the double opt-in, the confirmation
+             * reply and the monthly send — it has its own calendar, its own
+             * subscriber list and its own compliance checks. An automation
+             * that also texted a welcome would send two texts to somebody who
+             * had just joined, which is both a cost and the fastest way to be
+             * reported.
+             *
+             * So the sequences here do the things the module does not: record
+             * the offer against the guest so its redemption can be traced,
+             * tag who is on the list and who has left, run the three-touch
+             * win-back ladder, and put the venue's own list work on somebody's
+             * screen in the week it matters.
+             */
             'automations' => [
-                ['Text Club double opt-in', 'contact.consent_granted', 'Confirm the opt-in before anything else is sent. No confirmation, no messages.'],
-                ['Text Club welcome coupon', 'text_club.confirmed', 'Deliver the joining offer immediately, while intent is high.'],
-                ['Monthly offer', 'cron', 'On the first of each month, send that month\'s offer to confirmed subscribers only.'],
-                ['Birthday month coupon', 'contact.birthday_soon', 'A coupon to the guardian during their birthday month.'],
-                ['Slow day flash', 'manual', 'A same-day offer to nearby subscribers, inside quiet hours and under the frequency cap.'],
-                ['Lapsed guest — touch 1', 'contact.lapsed', 'After the lapse window, a light "we miss you".'],
-                ['Lapsed guest — touch 2', 'contact.lapsed', 'Two weeks later, a real offer.'],
-                ['Lapsed guest — touch 3', 'contact.lapsed', 'A final offer, then move them to dormant and stop.'],
-                ['Post-visit return offer', 'visit.recorded', 'Three days after a visit, an offer timed to the next natural trip.'],
-                ['Weekend reminder', 'cron', 'A Thursday reminder of weekend hours and what is open.'],
-                ['Coupon expiring', 'coupon.issued', 'Remind a guest two days before their coupon expires.'],
-                ['Opt-out handling', 'contact.consent_revoked', 'Honour STOP instantly, confirm once, and never message again.'],
-                ['Re-engagement of silent subscribers', 'cron', 'Ask subscribers who never redeem whether they still want texts.'],
-                ['List growth report', 'cron', 'Weekly: joins, confirmations, opt-outs and redemption rate.'],
-                ['New attraction announcement', 'manual', 'Tell the list when something new opens.'],
+                [
+                    'Text Club joiner — tag them',
+                    'contact.consent_granted',
+                    'Tag a guest who has just granted consent, so the reports and segments can find them. The opt-in itself is handled by the Text Club page.',
+                    [
+                        ['type' => 'add_tag', 'tag' => 'text club'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Text Club welcome offer',
+                    'text_club.confirmed',
+                    'Record the joining offer against the guest so its redemption can be traced. The welcome text itself comes from the Text Club page.',
+                    [
+                        ['type' => 'issue_coupon', 'code' => 'WELCOME10'],
+                    ],
+                ],
+                [
+                    'Monthly offer — set it up',
+                    'cron',
+                    'A nudge on the 25th to set next month\'s offer, before the Text Club sends it on the 1st.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'Next month\'s Text Club offer',
+                         'message' => 'The Text Club sends next month\'s offer on the 1st. Check the '
+                            . 'calendar on the Text Club page and change it if it is not right.'],
+                    ],
+                    ['when' => ['expression' => '32 9 25 * *'], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Birthday month coupon',
+                    'contact.birthday_soon',
+                    'A week before their birthday, issue the free-game offer and text it to them.',
+                    [
+                        ['type' => 'issue_coupon', 'code' => 'BIRTHDAY'],
+                        ['type' => 'send_sms', 'template' => 'birthday-coupon-sms'],
+                    ],
+                    ['when' => ['days' => 7], 'once' => 0, 'reentry' => 1, 'goal' => 'visit.recorded'],
+                ],
+                [
+                    'Slow day flash',
+                    'manual',
+                    'Started by hand on a quiet day. Write the text here first — the wording is different every time, so nothing is shipped for it.',
+                    [],
+                ],
+                [
+                    'Lapsed guest — touch 1',
+                    'contact.lapsed',
+                    'On the day they cross the lapse window, one light "we miss you".',
+                    [
+                        ['type' => 'send_email', 'template' => 'lapsed-guest-winback'],
+                        ['type' => 'add_tag', 'tag' => 'lapsed'],
+                    ],
+                    ['goal' => 'visit.recorded', 'goal_hours' => 1440],
+                ],
+                [
+                    'Lapsed guest — touch 2',
+                    'contact.lapsed',
+                    'Two weeks after the first touch, a real offer by text.',
+                    [
+                        ['type' => 'issue_coupon', 'code' => 'COMEBACK', 'wait' => 20160],
+                        ['type' => 'send_sms', 'template' => 'winback-sms'],
+                    ],
+                    ['goal' => 'visit.recorded', 'goal_hours' => 1440],
+                ],
+                [
+                    'Lapsed guest — touch 3',
+                    'contact.lapsed',
+                    'A final touch six weeks out, then tag them dormant and stop asking.',
+                    [
+                        ['type' => 'send_email', 'template' => 'lapsed-guest-winback', 'wait' => 60480],
+                        ['type' => 'add_tag', 'tag' => 'dormant'],
+                        ['type' => 'remove_tag', 'tag' => 'lapsed'],
+                        // Said out loud, because the temptation is always to
+                        // add a fourth: asking a fourth time costs more
+                        // goodwill than it recovers.
+                        ['type' => 'exit'],
+                    ],
+                    ['goal' => 'visit.recorded', 'goal_hours' => 1440],
+                ],
+                [
+                    'Post-visit return offer',
+                    'visit.recorded',
+                    'Three days after a visit, an offer timed to the next natural trip.',
+                    [
+                        ['type' => 'issue_coupon', 'code' => 'COMEBACK', 'wait' => 4320],
+                        ['type' => 'send_sms', 'template' => 'return-offer-sms'],
+                    ],
+                    ['once' => 0, 'reentry' => 1, 'goal' => 'visit.recorded', 'goal_hours' => 2160],
+                ],
+                [
+                    'Weekend reminder',
+                    'cron',
+                    'A Thursday nudge to post the weekend hours and what is open.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'The weekend',
+                         'message' => 'Post the weekend hours and anything that is closed, while '
+                            . 'people are still making plans.'],
+                    ],
+                    ['when' => ['expression' => '38 9 * * 4'], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Offer issued — remind them it is waiting',
+                    'coupon.issued',
+                    'Five days after an offer goes out unused, one reminder by text.',
+                    [
+                        ['type' => 'send_sms', 'template' => 'return-offer-sms', 'wait' => 7200],
+                    ],
+                    ['once' => 0, 'reentry' => 1, 'goal' => 'coupon.redeemed', 'goal_hours' => 720],
+                ],
+                [
+                    'Opt-out — tag and tell the team',
+                    'contact.consent_revoked',
+                    'Tag the guest and tell the team, so nobody chases them by hand. The STOP itself is honoured by the sending layer before this runs.',
+                    [
+                        ['type' => 'add_tag', 'tag' => 'opted out'],
+                        ['type' => 'notify_user', 'title' => 'Somebody opted out',
+                         'message' => '{{full_name}} has withdrawn consent. Nothing more will be sent '
+                            . 'to them, and nobody should add them back by hand.'],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Re-engagement of silent subscribers',
+                    'cron',
+                    'Each quarter, a nudge to ask the subscribers who never redeem whether they still want texts.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'The quiet half of the list',
+                         'message' => 'Some subscribers have never redeemed anything. Asking them '
+                            . 'whether they still want texts costs one send and saves the rest.'],
+                    ],
+                    ['when' => ['expression' => '44 9 1 1,4,7,10 *'], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'List growth report',
+                    'cron',
+                    'Monday morning: a nudge to read the week\'s joins, opt-outs and redemption rate.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'The list, last week',
+                         'message' => 'Joins, confirmations, opt-outs and redemptions are on the Text '
+                            . 'Club page. A rising opt-out rate is the number to watch.'],
+                    ],
+                    ['when' => ['expression' => '49 7 * * 1'], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'New attraction announcement',
+                    'manual',
+                    'Started by hand when something new opens. The wording is yours — write it here, then start it for a segment.',
+                    [],
+                ],
             ],
         ],
         [
@@ -475,19 +842,169 @@ return static function (): array {
             'ready'   => 'Response deadlines per stage, stale-deal escalation, round-robin '
                 . 'reassignment, a daily task digest for each rep, and a weekly manager scorecard.',
             'tailor'  => 'Your response-time commitments, who escalation reaches, and your targets.',
+            /*
+             * EVERY SEQUENCE IN THIS PLAYBOOK IS INTERNAL. Nothing here
+             * messages a guest: it notifies the venue's own people and puts
+             * work on somebody's list. That makes it the playbook a venue can
+             * switch on first — the only thing it can get wrong is to
+             * interrupt a member of staff — and it needs no templates at all.
+             *
+             * Which is also why the notifications say what they say: a
+             * "digest" here is one line telling somebody where to look,
+             * because composing a report is not something a step can do, and
+             * a notification that pretends to be a report is worse than one
+             * that points at the page holding it.
+             */
             'automations' => [
-                ['Response deadline breached', 'deal.sla_breached', 'Notify the owner, then the manager two hours later, then reassign at four.'],
-                ['Stale deal — no activity', 'deal.idle', 'After seven quiet days, a task for the owner and a note on the deal.'],
-                ['Very stale deal — manager review', 'deal.idle', 'After twenty-one days, surface it to a manager for a decision.'],
-                ['Unanswered conversation', 'conversation.unanswered', 'A guest message unanswered for four hours alerts the assigned rep.'],
-                ['Unassigned lead', 'deal.created', 'A lead with no owner after fifteen minutes goes round-robin and notifies the manager.'],
-                ['Daily rep digest', 'cron', 'At 6:30am: today\'s tasks, overdue items, breaching deals and today\'s parties.'],
-                ['Weekly manager scorecard', 'cron', 'Monday 7am: per-rep leads, median first response, quotes sent, win rate and revenue.'],
-                ['Quote with no follow-up', 'quote.sent', 'If nothing happens three days after a quote, task the owner.'],
-                ['Deal missing a next action', 'deal.stage_changed', 'Require a next action on every open deal; prompt when it is missing.'],
-                ['Won deal — handoff check', 'deal.won', 'Confirm the booking exists, the host is assigned and the deposit is tracked.'],
-                ['Lost deal — reason required', 'deal.lost', 'Prompt for a loss reason so the win/loss report is worth reading.'],
-                ['Monthly pipeline hygiene', 'cron', 'List deals with past event dates still marked open, for cleanup.'],
+                [
+                    'Response deadline breached',
+                    'deal.sla_breached',
+                    'Notify the owner, then task a manager two hours later, then raise the reassignment at four.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'A response deadline has passed',
+                         'message' => '{{full_name}} has been waiting past the deadline on this stage. '
+                            . 'They are almost certainly talking to another venue.'],
+                        ['type' => 'create_task', 'title' => 'Chase the overdue lead: {{full_name}}',
+                         'wait' => 120, 'due_in_hours' => 2, 'priority' => 'high'],
+                        ['type' => 'create_task', 'title' => 'Reassign {{full_name}} — still no response',
+                         'description' => 'Four hours past the deadline. Give it to somebody who can call today.',
+                         'wait' => 120, 'due_in_hours' => 2, 'priority' => 'high'],
+                    ],
+                ],
+                [
+                    'Stale deal — no activity',
+                    'deal.idle',
+                    'After seven quiet days, a task for the owner to move it on or close it.',
+                    [
+                        ['type' => 'create_task', 'title' => 'Move on or close: {{title}}',
+                         'description' => 'A week with no activity. Either there is a next step or there is not.',
+                         'due_in_hours' => 24],
+                    ],
+                    ['when' => ['days' => 7]],
+                ],
+                [
+                    'Very stale deal — manager review',
+                    'deal.idle',
+                    'After twenty-one days, put it in front of a manager for a decision.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'A deal has been quiet for three weeks',
+                         'message' => '{{title}} has had no activity for twenty-one days. Decide whether it is real.'],
+                        ['type' => 'create_task', 'title' => 'Decide on the stale deal: {{title}}',
+                         'due_in_hours' => 48],
+                    ],
+                    ['when' => ['days' => 21]],
+                ],
+                [
+                    'Unanswered conversation',
+                    'conversation.unanswered',
+                    'A guest message unanswered for four hours alerts the team and lands on a list.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'A guest is still waiting',
+                         'message' => 'A message from {{full_name}} has gone four hours without an answer.'],
+                        ['type' => 'create_task', 'title' => 'Answer {{full_name}}',
+                         'due_in_hours' => 2, 'priority' => 'high'],
+                    ],
+                    ['when' => ['hours' => 4], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Unassigned lead',
+                    'deal.created',
+                    'A lead still with no owner after fifteen minutes notifies a manager and lands on a list.',
+                    [
+                        ['type' => 'condition', 'field' => 'deals_owner_id', 'op' => 'is_empty', 'value' => '1',
+                         'wait' => 15],
+                        ['type' => 'notify_user', 'branch' => 'yes', 'title' => 'A lead has nobody on it',
+                         'message' => '{{title}} has had no owner for fifteen minutes. Give it to somebody.'],
+                        ['type' => 'create_task', 'branch' => 'yes', 'title' => 'Assign an owner: {{title}}',
+                         'due_in_hours' => 1, 'priority' => 'high'],
+                    ],
+                ],
+                [
+                    'Daily rep digest',
+                    'cron',
+                    'At 6:30am, a nudge to work the day\'s list: tasks, overdue items and today\'s parties.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'Today at the Castle',
+                         'message' => 'Today\'s tasks, the overdue ones and today\'s parties are on the dashboard. '
+                            . 'Clear the overdue list first.'],
+                    ],
+                    ['when' => ['expression' => '28 6 * * *'], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Weekly manager scorecard',
+                    'cron',
+                    'Monday morning, a nudge to read the week\'s numbers before the week starts.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'Last week, in numbers',
+                         'message' => 'Leads, first response times, quotes sent and win rate are on the reports '
+                            . 'page. Worth ten minutes before the week starts.'],
+                    ],
+                    ['when' => ['expression' => '52 6 * * 1'], 'once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Quote with no follow-up',
+                    'quote.sent',
+                    'Three days after a quote with nothing happening, task the owner. Stops if they book.',
+                    [
+                        ['type' => 'create_task', 'title' => 'Follow up the quote to {{full_name}}',
+                         'description' => 'Sent three days ago and nothing has moved.',
+                         'wait' => 4320, 'due_in_hours' => 8],
+                    ],
+                    [
+                        'exit' => ['match' => 'any', 'rules' => [
+                            ['field' => 'has_booking', 'op' => 'is_true', 'value' => '1'],
+                            ['field' => 'quotes_status', 'op' => 'is', 'value' => 'accepted'],
+                        ]],
+                        'goal' => 'quote.accepted',
+                    ],
+                ],
+                [
+                    'Deal missing a next action',
+                    'deal.stage_changed',
+                    'Every open deal needs a next action; prompt the owner when the stage changes without one.',
+                    [
+                        ['type' => 'condition', 'field' => 'deals_next_action', 'op' => 'is_empty', 'value' => '1',
+                         'wait' => 60],
+                        ['type' => 'create_task', 'branch' => 'yes',
+                         'title' => 'What happens next on {{title}}?',
+                         'description' => 'The stage moved and there is no next action on the deal.',
+                         'due_in_hours' => 24],
+                    ],
+                    ['once' => 0, 'reentry' => 1],
+                ],
+                [
+                    'Won deal — handoff check',
+                    'deal.won',
+                    'Check the booking exists, the host is assigned and the deposit is tracked.',
+                    [
+                        ['type' => 'create_task', 'title' => 'Handoff check: {{title}}',
+                         'description' => 'Booking created? Host assigned? Deposit tracked? Run sheet started?',
+                         'due_in_hours' => 24, 'priority' => 'high'],
+                        ['type' => 'add_tag', 'tag' => 'booked'],
+                    ],
+                ],
+                [
+                    'Lost deal — reason required',
+                    'deal.lost',
+                    'Prompt for a loss reason when one is missing, so the win/loss report is worth reading.',
+                    [
+                        ['type' => 'condition', 'field' => 'deals_lost_reason_id', 'op' => 'is_empty', 'value' => '1'],
+                        ['type' => 'create_task', 'branch' => 'yes', 'title' => 'Why did we lose {{title}}?',
+                         'description' => 'One line on the deal. Without it the win/loss report says nothing.',
+                         'due_in_hours' => 48],
+                    ],
+                ],
+                [
+                    'Monthly pipeline hygiene',
+                    'cron',
+                    'On the first of the month, a nudge to clear out deals whose event date has passed.',
+                    [
+                        ['type' => 'notify_user', 'title' => 'Pipeline tidy-up',
+                         'message' => 'Some deals have event dates in the past and are still open. '
+                            . 'Twenty minutes on the board keeps every forecast honest.'],
+                    ],
+                    ['when' => ['expression' => '41 7 1 * *'], 'once' => 0, 'reentry' => 1],
+                ],
             ],
         ],
         [
@@ -605,9 +1122,71 @@ return static function (): array {
         return $written;
     };
 
+    /**
+     * The offers the sequences hand out.
+     *
+     * An `issue_coupon` step records that a guest has been GIVEN an offer,
+     * against an offer the venue has created — it never invents one, because
+     * a step that could create an offer could create one with any value. So
+     * the three the Text Club sequences name are seeded here, with modest
+     * values the venue is expected to change: they are a starting point in
+     * the same way the templates are, and the playbook's own page says so.
+     *
+     * Re-seedable by code, like everything else in this file.
+     */
+    $writeOffers = static function () use ($now): int {
+        $offers = [
+            [
+                'code'            => 'WELCOME10',
+                'name'            => 'Text Club welcome offer',
+                'type'            => 'percent',
+                'value'           => 10,
+                // Once per family: it is the joining offer, not a standing
+                // discount.
+                'max_per_contact' => 1,
+            ],
+            [
+                'code'            => 'BIRTHDAY',
+                'name'            => 'Birthday month - free game',
+                'type'            => 'free_item',
+                'value'           => 0,
+                // Once a year, for as long as they stay on the list.
+                'max_per_contact' => 10,
+            ],
+            [
+                'code'            => 'COMEBACK',
+                'name'            => 'Come back soon',
+                'type'            => 'fixed',
+                'value'           => 5,
+                'max_per_contact' => 2,
+            ],
+        ];
+
+        $written = 0;
+
+        foreach ($offers as $offer) {
+            if (DB::exists('SELECT id FROM {coupons} WHERE code = :c', ['c' => $offer['code']])) {
+                continue;
+            }
+
+            DB::insert('coupons', $offer + [
+                'min_spend_cents'  => 0,
+                'redemption_count' => 0,
+                'is_active'        => 1,
+                'created_at'       => $now,
+                'updated_at'       => $now,
+            ]);
+
+            $written++;
+        }
+
+        return $written;
+    };
+
     $playbookCount = 0;
     $automationCount = 0;
     $stepCount = 0;
+    $offerCount = $writeOffers();
 
     foreach ($playbooks as $playbook) {
         $existing = DB::first('SELECT id FROM {playbooks} WHERE slug = :slug', ['slug' => $playbook['slug']]);
@@ -742,5 +1321,6 @@ return static function (): array {
         'playbooks'   => $playbookCount,
         'automations' => $automationCount,
         'steps'       => $stepCount,
+        'offers'      => $offerCount,
     ];
 };

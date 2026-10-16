@@ -649,6 +649,83 @@ Harness::test('the preview says what a step would fail on before it fails', func
     ah_clear();
 });
 
+Harness::test('THE PREVIEW NAMES A MERGE TAG THE RUN CANNOT FILL', function () use ($owner): void {
+    /*
+     * An unresolved tag becomes an EMPTY STRING in the message, which is
+     * right — "{{child_name}}" in a guest's inbox is worse — and therefore
+     * invisible until somebody reads what was sent.
+     *
+     * MEASURED by driving the seeded party reply into a real inbox: "We have
+     * your inquiry about a party for around ." The template wanted a child's
+     * name and a date; the enquiry form it replies to collects neither. The
+     * copy was fixed, and the preview now says it before a guest does.
+     */
+    ah_clear();
+    $id = ah_automation('ahttp-tags');
+
+    DB::insert('templates', [
+        'name'       => 'AHttp tag gap',
+        'slug'       => 'ahttp-taggap',
+        'channel'    => 'email',
+        'subject'    => 'About {{child_name}}',
+        'body'       => '<p>Hi {{first_name}}, about the party for {{child_name}} on '
+            . '{{some_field_nobody_fills}}.</p>',
+        'merge_tags' => json_encode(['first_name', 'child_name']),
+        'is_active'  => 1,
+        'created_at' => now_utc(),
+        'updated_at' => now_utc(),
+    ]);
+
+    $owner->postWithToken('/automations/' . $id, '/automations/' . $id . '/steps', [
+        'type'            => 'send_email',
+        'config_template' => 'ahttp-taggap',
+    ]);
+
+    $contactId = ah_contact('Tagless');
+
+    $owner->postWithToken('/automations/' . $id, '/automations/' . $id . '/test', [
+        'contact_id' => (string) $contactId,
+    ]);
+
+    $body = (string) $owner->get('/automations/' . $id)['body'];
+
+    Assert::contains('{{child_name}}', $body, 'the declared tag it cannot fill');
+    Assert::contains(
+        '{{some_field_nobody_fills}}',
+        $body,
+        'and one used in the body that nobody declared — the body is the truth'
+    );
+    Assert::contains('no value for', $body);
+
+    DB::query("DELETE FROM {templates} WHERE slug = 'ahttp-taggap'");
+    ah_clear();
+});
+
+Harness::test('and says nothing when every tag resolves', function () use ($owner): void {
+    // The other direction, so the warning means something when it appears.
+    ah_clear();
+    ah_template('ahttp-tagsok');
+    $id = ah_automation('ahttp-tags-ok');
+
+    $owner->postWithToken('/automations/' . $id, '/automations/' . $id . '/steps', [
+        'type'            => 'send_email',
+        'config_template' => 'ahttp-tagsok',
+    ]);
+
+    $contactId = ah_contact('Tagged');
+
+    $owner->postWithToken('/automations/' . $id, '/automations/' . $id . '/test', [
+        'contact_id' => (string) $contactId,
+    ]);
+
+    $body = (string) $owner->get('/automations/' . $id)['body'];
+
+    Assert::contains('would be sent 1 message', $body);
+    Assert::notContains('no value for', $body);
+
+    ah_clear();
+});
+
 Harness::test('the preview needs a guest to run against', function () use ($owner): void {
     ah_clear();
     $id = ah_automation('ahttp-preview-nobody');
@@ -658,6 +735,96 @@ Harness::test('the preview needs a guest to run against', function () use ($owne
     Assert::contains('Pick a guest', ah_flash($owner, '/automations/' . $id));
 
     ah_clear();
+});
+
+Harness::test('STARTING ONE BY HAND SENDS, AND IS THE ACTIVATE PERMISSION', function () use ($owner): void {
+    /*
+     * The delivery mechanism for a `manual` trigger, which has no other one:
+     * nothing fires it and no scanner looks for it, so a manual automation
+     * with a perfectly good sequence in it could never run at all.
+     *
+     * Unlike the preview beside it on the page, THIS SENDS — so it sits
+     * behind `automations_activate`, and the engine's own rules still apply.
+     */
+    ah_clear();
+    ah_template('ahttp-manual');
+    $id = ah_automation('ahttp-manual', 'manual');
+
+    $owner->postWithToken('/automations/' . $id, '/automations/' . $id . '/steps', [
+        'type'            => 'send_email',
+        'config_template' => 'ahttp-manual',
+    ]);
+
+    $contactId = ah_contact('Handstarted');
+    $email     = (string) DB::value('SELECT email FROM {contacts} WHERE id = :id', ['id' => $contactId]);
+
+    $owner->postWithToken('/automations/' . $id, '/automations/' . $id . '/start', [
+        'contact_id' => (string) $contactId,
+    ]);
+
+    Assert::same(1, (int) DB::value(
+        'SELECT COUNT(*) FROM {automation_runs} WHERE automation_id = :a',
+        ['a' => $id]
+    ), 'a real run');
+
+    Assert::same(1, (int) DB::value(
+        "SELECT COUNT(*) FROM {messages} WHERE to_address = :e AND direction = 'outbound'",
+        ['e' => $email]
+    ), 'and a real message');
+
+    Assert::contains('Started for Handstarted', ah_flash($owner, '/automations/' . $id));
+
+    // The same guest twice is refused by the engine's own once-per-guest
+    // rule, rather than quietly sending again.
+    $owner->postWithToken('/automations/' . $id, '/automations/' . $id . '/start', [
+        'contact_id' => (string) $contactId,
+    ]);
+
+    Assert::same(1, (int) DB::value(
+        'SELECT COUNT(*) FROM {automation_runs} WHERE automation_id = :a',
+        ['a' => $id]
+    ), 'still one run');
+    Assert::contains('was not enrolled', ah_flash($owner, '/automations/' . $id));
+
+    ah_clear();
+});
+
+Harness::test('and the kill switch stops anybody starting one by hand', function () use ($owner, $restore): void {
+    // The one thing somebody reaching for the kill switch means: nothing goes
+    // out. A hand-start that still sent would be a hole in it.
+    ah_clear();
+    ah_template('ahttp-killstart');
+    $id = ah_automation('ahttp-killstart', 'manual');
+
+    $owner->postWithToken('/automations/' . $id, '/automations/' . $id . '/steps', [
+        'type'            => 'send_email',
+        'config_template' => 'ahttp-killstart',
+    ]);
+
+    $contactId = ah_contact('Stopped');
+    $email     = (string) DB::value('SELECT email FROM {contacts} WHERE id = :id', ['id' => $contactId]);
+
+    try {
+        $owner->postWithToken('/automations', '/automations/pause', []);
+
+        $owner->postWithToken('/automations/' . $id, '/automations/' . $id . '/start', [
+            'contact_id' => (string) $contactId,
+        ]);
+
+        Assert::same(0, (int) DB::value(
+            'SELECT COUNT(*) FROM {automation_runs} WHERE automation_id = :a',
+            ['a' => $id]
+        ));
+        Assert::same(0, (int) DB::value(
+            'SELECT COUNT(*) FROM {messages} WHERE to_address = :e',
+            ['e' => $email]
+        ));
+        Assert::contains('Automations are stopped', ah_flash($owner, '/automations/' . $id));
+    } finally {
+        $owner->postWithToken('/automations', '/automations/resume', []);
+        $restore();
+        ah_clear();
+    }
 });
 
 // ------------------------------------------------------------- the two gates
@@ -746,6 +913,12 @@ Harness::test('SEEING AN AUTOMATION IS NOT EDITING IT, AND EDITING IS NOT STARTI
             '/automations/' . $id . '/test',
             ['contact_id' => '1']
         )['status'], 'the preview reads a guest’s record, so it is a manage action');
+
+        Assert::same(403, $viewer->postWithToken(
+            '/automations/' . $id,
+            '/automations/' . $id . '/start',
+            ['contact_id' => '1']
+        )['status'], 'and starting one for real is the activate permission');
 
         // Nothing changed.
         Assert::count(1, ah_steps($id));

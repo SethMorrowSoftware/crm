@@ -1709,14 +1709,171 @@ final class AutomationRunner
     {
         $first = trim((string) ($subject['first_name'] ?? ''));
 
-        return [
+        $tags = [
             // An unnamed guest is greeted as "there", never as nobody.
             'first_name'  => $first === '' ? 'there' : $first,
             'last_name'   => trim((string) ($subject['last_name'] ?? '')),
             'full_name'   => trim($first . ' ' . (string) ($subject['last_name'] ?? '')) ?: 'there',
             'venue_name'  => Settings::venueName(),
             'venue_phone' => (string) Settings::get('venue.phone_display', ''),
+            'venue_email' => (string) Settings::get('venue.email', ''),
+            // Who the guest is dealing with. The seeded templates sign off
+            // with it, and an empty one leaves a sentence beginning with a
+            // full stop — MEASURED in a guest's inbox: ". will come back to
+            // you with options."
+            'owner_name'  => self::ownerName(),
         ];
+
+        /*
+         * THE ENTITY'S OWN VALUES, under the names the templates use.
+         *
+         * A template written for a party says {{party_date}}; the booking
+         * column is `event_date`, and the subject array carries it both
+         * prefixed and bare. Without this mapping every one of those tags
+         * resolved to an empty string and the guest read "your party on ."
+         *
+         * Each is taken from the first place it exists, and anything still
+         * missing is left out of the array entirely rather than added as an
+         * empty string — `describeMissingTags()` can then say which template
+         * wants what, and the preview says it before a guest does.
+         */
+        $dates = [
+            'party_date'     => ['event_date', 'bookings_event_date', 'deals_event_date'],
+            'preferred_date' => ['event_date', 'bookings_event_date', 'deals_event_date'],
+            'event_date'     => ['event_date', 'bookings_event_date', 'deals_event_date'],
+        ];
+
+        foreach ($dates as $tag => $columns) {
+            foreach ($columns as $column) {
+                $value = trim((string) ($subject[$column] ?? ''));
+
+                if ($value !== '') {
+                    $tags[$tag] = local_date($value . (strlen($value) === 10 ? ' 12:00:00' : ''));
+
+                    break;
+                }
+            }
+        }
+
+        $plain = [
+            'guest_count'  => ['guest_count', 'bookings_guest_count', 'deals_guest_count'],
+            'child_name'   => ['child_name', 'bookings_child_name'],
+            'organisation' => ['company_name', 'organisation', 'bookings_company_name'],
+            'group_size'   => ['guest_count', 'bookings_guest_count'],
+            'booking_number' => ['booking_number', 'bookings_booking_number'],
+            'quote_number' => ['number', 'quotes_number'],
+            'deal_title'   => ['title', 'deals_title'],
+        ];
+
+        foreach ($plain as $tag => $columns) {
+            foreach ($columns as $column) {
+                $value = trim((string) ($subject[$column] ?? ''));
+
+                if ($value !== '') {
+                    $tags[$tag] = $value;
+
+                    break;
+                }
+            }
+        }
+
+        $balance = $subject['balance_due_cents'] ?? $subject['bookings_balance_due_cents'] ?? null;
+
+        if ($balance !== null && (int) $balance > 0) {
+            $tags['balance_due'] = money((int) $balance);
+        }
+
+        return $tags;
+    }
+
+    /**
+     * The name a guest-facing message signs off with.
+     *
+     * The owner's own name where there is one, falling back to the venue's:
+     * "The Castle Fun Center will come back to you with options" is a
+     * sentence; an empty tag is not.
+     */
+    private static function ownerName(): string
+    {
+        static $name = null;
+
+        if ($name !== null) {
+            return $name;
+        }
+
+        $found = DB::value(
+            "SELECT u.name FROM {users} u
+               JOIN {roles} r ON r.id = u.role_id
+              WHERE r.slug = 'owner' AND u.is_active = 1
+              ORDER BY u.id LIMIT 1"
+        );
+
+        $name = trim((string) ($found ?? '')) ?: Settings::venueName();
+
+        return $name;
+    }
+
+    /**
+     * The tags a template asks for that this run cannot fill, in words.
+     *
+     * Read by the builder's preview. An unresolved tag becomes an EMPTY
+     * STRING in the message — which is right, because leaving "{{child_name}}"
+     * in a guest's inbox is worse — and that makes it invisible until
+     * somebody reads what was sent. MEASURED on the seeded party reply: "We
+     * have your inquiry about a party for around ." where the template wanted
+     * a child's name and a date the enquiry form had never asked for.
+     *
+     * @param array<string,mixed> $subject
+     * @return list<string>
+     */
+    public static function missingTags(string $templateSlug, array $subject): array
+    {
+        $template = DB::first(
+            'SELECT merge_tags, subject, body FROM {templates} WHERE slug = :slug',
+            ['slug' => $templateSlug]
+        );
+
+        if ($template === null) {
+            return [];
+        }
+
+        // The declared list is the author's intent; the body is the truth.
+        // Both are read, because a template edited in the UI may use a tag
+        // nobody added to the list.
+        $wanted = [];
+
+        $declared = json_decode((string) ($template['merge_tags'] ?? '[]'), true);
+
+        if (is_array($declared)) {
+            foreach ($declared as $tag) {
+                $wanted[strtolower(trim((string) $tag))] = true;
+            }
+        }
+
+        if (preg_match_all(
+            '/\{\{\s*([a-z0-9_.]+)\s*\}\}/i',
+            (string) ($template['subject'] ?? '') . ' ' . (string) ($template['body'] ?? ''),
+            $found
+        ) > 0) {
+            foreach ($found[1] as $tag) {
+                $wanted[strtolower(trim($tag))] = true;
+            }
+        }
+
+        $have    = self::mergeTags($subject);
+        $missing = [];
+
+        foreach (array_keys($wanted) as $tag) {
+            if ($tag === '' || isset($have[$tag])) {
+                continue;
+            }
+
+            $missing[] = $tag;
+        }
+
+        sort($missing);
+
+        return $missing;
     }
 
     /**

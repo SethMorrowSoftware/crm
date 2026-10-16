@@ -1255,7 +1255,7 @@ Eight steps, each independently re-runnable until completion.
 | 4 Schema | Runs numbered `schema/*.sql` in a transaction per file with a live progress log; records each in `migrations`. |
 | 5 Venue profile | Name (default "The Castle Fun Center"), address (Chester, NY), phone, email, timezone (`America/New_York`), currency, tax rate, logo upload, brand colours. |
 | 6 Owner account | Name, email, password (zxcvbn-style strength meter, 12-char minimum), optional MFA enrolment. |
-| 7 Seed data | Checkboxes, all on by default: Attractions (§3.1) · Party packages (§3.3) · Add-ons · Resources · Operating hours · Pipelines & stages · 8 Playbooks · ~40 templates · 8 forms · 111 automations (inactive) · Membership plan examples · Default dashboards · Demo contacts/bookings (**off** by default). |
+| 7 Seed data | Checkboxes, all on by default: Attractions (§3.1) · Party packages (§3.3) · Add-ons · Resources · Operating hours · Pipelines & stages · 8 Playbooks · ~40 templates · 8 forms · 112 automations (inactive) · Membership plan examples · Default dashboards · Demo contacts/bookings (**off** by default). |
 | 8 Finish | Writes `config/config.php` with a generated `APP_KEY`; drops `install/.lock`; shows (a) the **exact cron line** to paste into cPanel › Cron Jobs, (b) the SPF/DKIM/DMARC records for Zone Editor, (c) a reminder that **Safe Mode is on**, (d) a "delete the `install/` directory" instruction with a one-click self-delete attempt, (e) the login link. |
 
 **Cron line shown:**
@@ -1392,7 +1392,7 @@ delivery log and manual replay.
 | **2** | Capture & Convert: contacts, households, companies, pipelines, deals, quotes, forms, tasks | |
 | **3** | Bookings: attractions, packages, availability engine, quote calculator, bookings, calendar, run sheets, waivers, check-in | |
 | **4** | Communicate: mail/SMS drivers, templates, inbox, segments, campaigns, Text Club, usage ledger | |
-| **5** | Automate: engine, builder UI, 111 seeded automations, playbook registry and activation | |
+| **5** | Automate: engine, builder UI, 112 seeded automations, playbook registry and activation | |
 | **6** | Improve: surveys, review routing, review inbox, review wall, memberships, full reporting suite | |
 | **7** | Integrate: CenterEdge MSSQL import, card API, GBP, Slack, webhooks, REST API, iCal, weather | |
 | **8** | Harden: security review, accessibility audit, load test at 50k contacts, docs, backup/restore, update channel | |

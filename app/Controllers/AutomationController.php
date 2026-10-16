@@ -576,6 +576,86 @@ final class AutomationController extends Controller
     }
 
     /**
+     * Start this sequence for one guest, for real.
+     *
+     * THE DELIVERY MECHANISM FOR A `manual` TRIGGER, which otherwise has
+     * none: nothing fires it and no scanner looks for it, so a manual
+     * automation with a perfectly good sequence in it could never run. It is
+     * also how a venue tests a sequence on themselves — on their own contact
+     * record, with Safe Mode redirecting everything to the owner.
+     *
+     * Behind `automations_activate` rather than `automations_manage`, because
+     * unlike the preview beside it THIS SENDS. The engine's own rules still
+     * apply: the kill switch, consent, quiet hours, the weekly cap, and
+     * enrolment once per guest unless the automation says otherwise.
+     */
+    public function start(Request $request): Response
+    {
+        if ($denied = $this->authorize('automations_activate')) {
+            return $denied;
+        }
+
+        $id         = $request->routeInt('id');
+        $automation = $this->find($id);
+
+        if ($automation === null) {
+            return $this->notFound('That automation does not exist.');
+        }
+
+        if (self::paused()) {
+            return $this->refuse(
+                $request,
+                'Automations are stopped. Start them again first — this would send messages.',
+                '/automations/' . $id
+            );
+        }
+
+        if ($this->steps($id) === []) {
+            return $this->refuse($request, 'This automation has no steps yet.', '/automations/' . $id);
+        }
+
+        $contactId = $request->int('contact_id', 0);
+
+        $contact = $contactId > 0
+            ? DB::first(
+                'SELECT id, first_name, last_name FROM {contacts} WHERE id = :id AND deleted_at IS NULL',
+                ['id' => $contactId]
+            )
+            : null;
+
+        if ($contact === null) {
+            return $this->refuse($request, 'Pick a guest to start it for.', '/automations/' . $id);
+        }
+
+        $runId = AutomationRunner::enrol($automation, ['contact_id' => (int) $contact['id']], 'manual');
+
+        if ($runId === null) {
+            return $this->refuse(
+                $request,
+                trim((string) $contact['first_name'] . ' ' . (string) $contact['last_name'])
+                . ' was not enrolled: they do not match the entry conditions, or they have been '
+                . 'through this one already.',
+                '/automations/' . $id
+            );
+        }
+
+        $executed = AutomationRunner::advance($runId);
+
+        Audit::record('automation.started', 'automations', $id, null, [
+            'contact' => (int) $contact['id'],
+            'run'     => $runId,
+        ]);
+
+        return $this->success(
+            $request,
+            'Started for ' . trim((string) $contact['first_name'] . ' ' . (string) $contact['last_name'])
+            . '. ' . $executed . ' ' . ($executed === 1 ? 'step has' : 'steps have') . ' run so far'
+            . (Settings::safeMode() ? ', with Safe Mode redirecting anything it sent to the owner.' : '.'),
+            '/automations/' . $id
+        );
+    }
+
+    /**
      * What this sequence would do to this guest.
      *
      * NOTHING IS SENT AND NOTHING IS WRITTEN. The plan comes from
@@ -642,7 +722,7 @@ final class AutomationController extends Controller
                 'reason'  => $entryRow['reason'],
                 'branch'  => $entryRow['branch'],
                 'stop'    => $entryRow['stop'],
-                'problem' => $this->stepProblem($type, $config, $contact),
+                'problem' => $this->stepProblem($type, $config, $contact, $subject),
             ];
         }
 
@@ -664,8 +744,9 @@ final class AutomationController extends Controller
      *
      * @param array<string,mixed> $config
      * @param array<string,mixed> $contact
+     * @param array<string,mixed> $subject
      */
-    private function stepProblem(string $type, array $config, array $contact): ?string
+    private function stepProblem(string $type, array $config, array $contact, array $subject = []): ?string
     {
         switch ($type) {
             case 'send_email':
@@ -694,6 +775,27 @@ final class AutomationController extends Controller
 
                 if ($channel === 'sms' && trim((string) ($contact['phone'] ?? '')) === '') {
                     return 'this guest has no phone number, so the step would be skipped.';
+                }
+
+                /*
+                 * A MERGE TAG THIS RUN CANNOT FILL BECOMES AN EMPTY STRING,
+                 * which is right — "{{child_name}}" in a guest's inbox is
+                 * worse — and therefore invisible until somebody reads what
+                 * was sent. MEASURED on the seeded party reply: "We have your
+                 * inquiry about a party for around ." because the template
+                 * wanted a child's name and a date the enquiry form never
+                 * asked for.
+                 */
+                $missing = AutomationRunner::missingTags($slug, $subject);
+
+                if ($missing !== []) {
+                    return 'the template uses ' . implode(', ', array_map(
+                        static fn (string $tag): string => '{{' . $tag . '}}',
+                        $missing
+                    )) . ' and this run has no value for '
+                        . (count($missing) === 1 ? 'it' : 'them')
+                        . ' — the message would read with a gap where '
+                        . (count($missing) === 1 ? 'it' : 'each') . ' should be.';
                 }
 
                 return null;

@@ -250,7 +250,7 @@ And two further HTTP suites:
 all eight installer steps over HTTP as a person with cPanel and a browser
 would. It asserts the refusals as well as the successes: wrong credentials,
 an invalid timezone, a short password, a mismatched confirmation. Then it
-verifies the installed state (99 tables, 111 automations, **none active**, Safe
+verifies the installed state (99 tables, 112 automations, **none active**, Safe
 Mode on), that the installer locked itself, and that the application actually
 works — including signing in as the account the installer created.
 

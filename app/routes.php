@@ -236,6 +236,8 @@ $router->group('/automations', ['auth', 'can:view_automations'], function ($rout
     $router->post('/{id:\d+}/deactivate', ['AutomationController', 'deactivate'], ['csrf', 'can:automations_activate']);
     $router->post('/{id:\d+}/steps', ['AutomationController', 'storeStep'], ['csrf', 'can:automations_manage']);
     $router->post('/{id:\d+}/test', ['AutomationController', 'test'], ['csrf', 'can:automations_manage']);
+    // Starting one FOR REAL is the activate permission, not the edit one.
+    $router->post('/{id:\d+}/start', ['AutomationController', 'start'], ['csrf', 'can:automations_activate']);
 });
 
 // ---------------------------------------------------------------------------

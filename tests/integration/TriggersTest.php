@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * The scanners: the triggers nothing fires.
  *
- * Forty-five of the 111 seeded automations wait on one of these. Nobody fires
+ * Forty-five of the 112 seeded automations wait on one of these. Nobody fires
  * "the party is in fourteen days" — it simply becomes true one morning, and
  * `AutomationTriggers::scan()` is what notices.
  *

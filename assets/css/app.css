@@ -1094,6 +1094,8 @@ ul.checks li:last-child { border-bottom: 0; }
 
 .list-plain { margin: .35rem 0 0; padding-left: 1.1rem; display: grid; gap: .3rem; }
 
+.rule { border: 0; border-top: 1px solid var(--line); margin: 1rem 0; }
+
 @media (max-width: 38rem) {
     /* The indent under the step number costs more than it gives on a phone. */
     .step-actions, .step-edit { padding-left: 0; }

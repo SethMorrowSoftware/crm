@@ -34,7 +34,7 @@ handoffs:
 | 2 | Contacts, households, pipelines, deals, quotes, forms, tasks | ✅ |
 | 3 | Bookings: availability, packages, run sheets, waivers, check-in | ✅ |
 | 4 | Email and SMS, inbox, segments, campaigns, Text Club | ✅ |
-| 5 | The automation engine and the 111 seeded automations | next |
+| 5 | The automation engine and the 112 seeded automations | done |
 | 6 | Reputation, memberships, the reporting suite | |
 | 7 | CenterEdge import, Google Business Profile, webhooks, REST API | |
 | 8 | Hardening: security review, accessibility audit, load test, backup/restore | |
@@ -64,7 +64,7 @@ The installer checks each one and names the cPanel screen that fixes it.
 ### Nothing will message a guest by accident
 
 A finished install is in **Safe Mode**: every email and text is redirected to
-the owner's own address, every seeded playbook is off, and all 111 automations
+the owner's own address, every seeded playbook is off, and all 112 automations
 are inactive. Leaving Safe Mode requires a distinct permission and typing the
 venue name to confirm. There is also a global sending pause reachable in two
 clicks from any page.

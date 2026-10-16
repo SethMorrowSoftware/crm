@@ -238,6 +238,26 @@ $statusBadge = static function (string $status): string {
             <button type="submit" class="btn btn-ghost">Preview</button>
         </form>
 
+        <?php if (can('automations_activate')): ?>
+            <hr class="rule">
+            <form method="post" action="<?= e(url('/automations/' . (int) $automation['id'] . '/start')) ?>"
+                  class="form-inline"
+                  data-confirm="This SENDS. Start the sequence for that guest?">
+                <?= csrf_field() ?>
+                <div class="field">
+                    <label for="start_contact_id">Or start it for somebody, for real</label>
+                    <input type="number" id="start_contact_id" name="contact_id" min="1"
+                           placeholder="Guest’s id">
+                    <p class="form-hint">
+                        This one sends. It is also the only way to run an automation whose trigger is
+                        “started by hand”. Safe Mode, consent, quiet hours and the weekly cap all
+                        still apply.
+                    </p>
+                </div>
+                <button type="submit" class="btn btn-ghost">Start it</button>
+            </form>
+        <?php endif; ?>
+
         <?php if ($preview !== null): ?>
             <div class="alert preview-result <?= ($preview['problems'] ?? 0) > 0 ? 'alert-warning' : 'alert-info' ?>">
                 <?= icon(($preview['problems'] ?? 0) > 0 ? 'alert' : 'info') ?>
