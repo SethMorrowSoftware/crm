@@ -56,6 +56,36 @@ final class AutomationRunner
     /** Minutes to wait before each retry: 5, then 30, then two hours. */
     public const BACKOFF_MINUTES = [5, 30, 120];
 
+    /**
+     * The payload keys that name the thing an event is about.
+     *
+     * Read in this order, except that the kind matching the event's own
+     * namespace is tried first — see `locate()`.
+     *
+     * @var array<string,string>
+     */
+    private const ENTITY_KEYS = [
+        'booking_id' => 'bookings',
+        'deal_id'    => 'deals',
+        'quote_id'   => 'quotes',
+        'visit_id'   => 'visits',
+        'task_id'    => 'tasks',
+    ];
+
+    /**
+     * The kind of row each event namespace is about, for the events that fire
+     * a bare `id`.
+     *
+     * @var array<string,string>
+     */
+    private const NAMESPACE_ENTITIES = [
+        'booking' => 'bookings',
+        'deal'    => 'deals',
+        'quote'   => 'quotes',
+        'visit'   => 'visits',
+        'task'    => 'tasks',
+    ];
+
     // =================================================================
     // Enrolment
     // =================================================================
@@ -121,9 +151,9 @@ final class AutomationRunner
     public static function enrol(array $automation, array $payload, string $event = 'manual'): ?int
     {
         $automationId = (int) $automation['id'];
-        $contactId    = isset($payload['contact_id']) ? (int) $payload['contact_id'] : null;
-        $entityType   = isset($payload['entity_type']) ? (string) $payload['entity_type'] : null;
-        $entityId     = isset($payload['entity_id']) ? (int) $payload['entity_id'] : null;
+
+        ['contact_id' => $contactId, 'entity_type' => $entityType, 'entity_id' => $entityId]
+            = self::locate($event, $payload);
 
         $subject = self::subject($contactId, $entityType, $entityId, $payload);
 
@@ -1439,6 +1469,158 @@ final class AutomationRunner
      * @param array<string,mixed> $payload
      * @return array<string,mixed>
      */
+    /**
+     * WHO AND WHAT AN EVENT IS ABOUT.
+     *
+     * The scanners name their subject outright (`entity_type` + `entity_id`,
+     * and the guest when they know them), but a module firing an event does
+     * not: `BookingController` fires `['booking_id' => 17]` and
+     * `DealController` fires `['id' => 4]`, because that is what the event is
+     * about and the module has no business knowing what the automation engine
+     * wants to be handed.
+     *
+     * Without this, `enrol()` read only `contact_id`/`entity_type`/
+     * `entity_id`, so EVERY event-driven automation that sends a message was
+     * broken: the run had no guest, and `send_email` answered "there is no
+     * guest on this run to email" and completed. Silently, because a run that
+     * skips every step still finishes. The engine's own tests did not see it —
+     * they fire `visit.recorded`, which happens to carry a `contact_id`.
+     *
+     * So the conventions are read here, once:
+     *
+     *   * an explicit `entity_type` + `entity_id` wins, since a scanner knows
+     *     better than any inference;
+     *   * then a `<thing>_id` key, preferring the one matching the EVENT's own
+     *     namespace — `quote.accepted` carries both `quote_id` and `deal_id`,
+     *     and it is about the quote;
+     *   * then a bare `id`, when the namespace names a kind of row;
+     *   * and the guest is looked up FROM that row when the event did not name
+     *     them, including the two-hop case (a quote hangs off a deal, and only
+     *     the deal names the family).
+     *
+     * @param array<string,mixed> $payload
+     * @return array{contact_id:?int,entity_type:?string,entity_id:?int}
+     */
+    private static function locate(string $event, array $payload): array
+    {
+        $contactId = isset($payload['contact_id']) && (int) $payload['contact_id'] > 0
+            ? (int) $payload['contact_id']
+            : null;
+
+        $entityType = isset($payload['entity_type']) && (string) $payload['entity_type'] !== ''
+            ? (string) $payload['entity_type']
+            : null;
+
+        $entityId = isset($payload['entity_id']) && (int) $payload['entity_id'] > 0
+            ? (int) $payload['entity_id']
+            : null;
+
+        $namespace = (string) (strtok($event, '.') ?: '');
+
+        if ($entityType === null || $entityId === null) {
+            // The event's own kind first, then the rest in a fixed order so
+            // the answer does not depend on the order of the array literal
+            // whoever fired it happened to write.
+            $keys      = self::ENTITY_KEYS;
+            $preferred = self::NAMESPACE_ENTITIES[$namespace] ?? null;
+
+            if ($preferred !== null) {
+                $keys = array_merge(
+                    array_filter($keys, static fn (string $type): bool => $type === $preferred),
+                    $keys
+                );
+            }
+
+            foreach ($keys as $key => $type) {
+                if (isset($payload[$key]) && (int) $payload[$key] > 0) {
+                    $entityType = $type;
+                    $entityId   = (int) $payload[$key];
+
+                    break;
+                }
+            }
+        }
+
+        // `Event::fire('deal.created', ['id' => $dealId])` — the id of the
+        // thing the namespace names.
+        if (($entityType === null || $entityId === null)
+            && isset($payload['id'])
+            && (int) $payload['id'] > 0
+            && isset(self::NAMESPACE_ENTITIES[$namespace])) {
+            $entityType = self::NAMESPACE_ENTITIES[$namespace];
+            $entityId   = (int) $payload['id'];
+        }
+
+        if ($contactId === null && $entityType !== null && $entityId !== null) {
+            $contactId = self::contactFor($entityType, $entityId);
+        }
+
+        // A conversation and a message name neither a contact nor a kind of
+        // row the engine models, but both know whose thread it is.
+        if ($contactId === null) {
+            foreach (['conversation_id' => 'conversations', 'message_id' => 'messages'] as $key => $table) {
+                if (isset($payload[$key]) && (int) $payload[$key] > 0) {
+                    $found = DB::value(
+                        'SELECT contact_id FROM {' . $table . '} WHERE id = :id',
+                        ['id' => (int) $payload[$key]]
+                    );
+
+                    if ($found !== null && (int) $found > 0) {
+                        $contactId = (int) $found;
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        return ['contact_id' => $contactId, 'entity_type' => $entityType, 'entity_id' => $entityId];
+    }
+
+    /**
+     * The guest a row belongs to.
+     *
+     * A quote does not carry one — it hangs off a deal, and the deal names the
+     * family — and a task carries whatever it is about, which may be a
+     * contact and may be a booking. Both are looked up rather than assumed,
+     * because an automation on `quote.accepted` with no guest attached cannot
+     * send the thank-you that is its entire point.
+     */
+    private static function contactFor(string $entityType, int $entityId): ?int
+    {
+        $table = self::tableFor($entityType);
+
+        if ($table === null) {
+            return null;
+        }
+
+        $found = match ($table) {
+            // The entity IS the guest.
+            'contacts' => $entityId,
+
+            // A child's row names the guardian, who is the person messaged —
+            // a child is not a marketing recipient.
+            'bookings', 'deals', 'visits', 'children', 'conversations', 'memberships' => DB::value(
+                'SELECT contact_id FROM {' . $table . '} WHERE id = :id',
+                ['id' => $entityId]
+            ),
+            'quotes' => DB::value(
+                'SELECT d.contact_id FROM {quotes} q
+                   JOIN {deals} d ON d.id = q.deal_id
+                  WHERE q.id = :id',
+                ['id' => $entityId]
+            ),
+            'tasks' => DB::value(
+                "SELECT entity_id FROM {tasks}
+                  WHERE id = :id AND entity_type IN ('contact', 'contacts')",
+                ['id' => $entityId]
+            ),
+            default => null,
+        };
+
+        return $found === null || (int) $found <= 0 ? null : (int) $found;
+    }
+
     private static function subject(?int $contactId, ?string $entityType, ?int $entityId, array $payload): array
     {
         $subject = [];

@@ -451,8 +451,9 @@ final class AutomationTriggers
      *
      * Matched on month and day rather than on a computed date, because a
      * birthday has no year — and comparing a 1987 date to today's would find
-     * nobody. February 29 is matched on the 28th in a non-leap year, so
-     * somebody born on a leap day is not skipped three years in four.
+     * nobody. A leap-day birthday is matched when the target lands on MARCH 1
+     * in a non-leap year (see `monthDay()`), so somebody born on February 29
+     * is not skipped three years in four.
      *
      * @param array<string,mixed> $automation
      * @param array<string,mixed> $config
@@ -889,9 +890,14 @@ final class AutomationTriggers
         $day   = (int) ($parts[2] ?? 0);
 
         /*
-         * February 29 is matched on the 28th in a non-leap year, so somebody
-         * born on a leap day is not skipped three years in four. The same
-         * clamp the two Slack bots use for the same reason.
+         * A TARGET OF MARCH 1 IN A NON-LEAP YEAR ALSO MATCHES FEBRUARY 29.
+         *
+         * Otherwise somebody born on a leap day is skipped three years in
+         * four: there is no February 29 to match in 2026, and the scanner
+         * compares a target date's month and day against the stored birth
+         * date's. March 1 rather than February 28 because that is the day
+         * their birthday falls on when the year has no 29th — the same
+         * reading most civil calendars take.
          */
         if ($month === 3 && $day === 1 && !self::isLeapYear((int) ($parts[0] ?? 0))) {
             return [2, 29];

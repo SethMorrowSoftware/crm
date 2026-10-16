@@ -82,8 +82,87 @@ function au_clear(): void
             SELECT id FROM {contacts} WHERE source = 'autest')"
     );
     DB::query("DELETE FROM {bookings} WHERE contact_id IN (SELECT id FROM {contacts} WHERE source = 'autest')");
+
+    // The deal side, in dependency order: a quote hangs off a deal and the
+    // stage history hangs off both, so a contact cannot be deleted until all
+    // three are gone.
+    DB::query(
+        "DELETE FROM {quotes} WHERE deal_id IN (
+            SELECT id FROM {deals} WHERE contact_id IN (SELECT id FROM {contacts} WHERE source = 'autest'))"
+    );
+    DB::query(
+        "DELETE FROM {deal_stage_history} WHERE deal_id IN (
+            SELECT id FROM {deals} WHERE contact_id IN (SELECT id FROM {contacts} WHERE source = 'autest'))"
+    );
+    DB::query("DELETE FROM {deals} WHERE contact_id IN (SELECT id FROM {contacts} WHERE source = 'autest')");
+
+    DB::query(
+        "DELETE FROM {coupon_redemptions} WHERE coupon_id IN (
+            SELECT id FROM {coupons} WHERE code LIKE 'AUTEST%')"
+    );
+    DB::query("DELETE FROM {coupons} WHERE code LIKE 'AUTEST%'");
+
+    DB::query(
+        "DELETE FROM {notifications} WHERE user_id IN (
+            SELECT id FROM {users} WHERE email LIKE 'autest.%')"
+    );
+    DB::query("DELETE FROM {users} WHERE email LIKE 'autest.%'");
+
     DB::query("DELETE FROM {contacts} WHERE source = 'autest'");
     DB::query("DELETE FROM {tags} WHERE name LIKE 'autest-%'");
+}
+
+/** A member of staff for the notify step to reach. */
+function au_user(array $overrides = []): int
+{
+    return test_make_user('owner', $overrides + [
+        'name'  => 'AuTest Manager',
+        'email' => 'autest.user.' . bin2hex(random_bytes(3)) . '@example.test',
+    ]);
+}
+
+/** @param array<string,mixed> $overrides */
+function au_deal(int $contactId, array $overrides = []): int
+{
+    $stageId = (int) DB::value(
+        "SELECT id FROM {pipeline_stages} WHERE pipeline_id = 1 AND name = 'New Inquiry'"
+    );
+
+    return (int) DB::insert('deals', $overrides + [
+        'title'            => 'AuTest deal',
+        'contact_id'       => $contactId,
+        'pipeline_id'      => 1,
+        'stage_id'         => $stageId,
+        'status'           => 'open',
+        'value_cents'      => 40000,
+        'stage_entered_at' => now_utc(),
+        'last_activity_at' => now_utc(),
+        'created_at'       => now_utc(),
+        'updated_at'       => now_utc(),
+    ]);
+}
+
+/** @param array<string,mixed> $overrides */
+function au_coupon(string $code, array $overrides = []): int
+{
+    return (int) DB::insert('coupons', $overrides + [
+        'code'            => $code,
+        'name'            => 'AuTest ' . $code,
+        'type'            => 'percent',
+        'value'           => 10,
+        'max_per_contact' => 1,
+        'is_active'       => 1,
+        'created_at'      => now_utc(),
+        'updated_at'      => now_utc(),
+    ]);
+}
+
+function au_stage_id(string $name, int $pipeline = 1): int
+{
+    return (int) DB::value(
+        'SELECT id FROM {pipeline_stages} WHERE pipeline_id = :p AND name = :n',
+        ['p' => $pipeline, 'n' => $name]
+    );
 }
 
 /** @param array<string,mixed> $overrides */
@@ -1268,6 +1347,602 @@ Harness::test(
         au_clear();
     }
 );
+
+// ============================================== who an event is about
+
+Harness::test(
+    'AN EVENT THAT NAMES A BOOKING REACHES THE FAMILY WHO BOOKED IT',
+    function (): void {
+        /*
+         * THE DEFECT THIS PINS, and it was in every event-driven automation.
+         *
+         * A module fires what the moment is about — `BookingController` fires
+         * `['booking_id' => 17]`, because it has no business knowing what the
+         * engine wants to be handed. `enrol()` read only `contact_id`,
+         * `entity_type` and `entity_id`, so the run had NO GUEST: the email
+         * step answered "there is no guest on this run to email", the run
+         * completed, and the venue had a confirmation sequence that sent
+         * nothing and reported success.
+         *
+         * It was invisible to the rest of this suite because every test here
+         * fires `visit.recorded`, which happens to carry a `contact_id`.
+         */
+        au_clear();
+        au_template('autest-subject');
+
+        $automationId = au_automation('autest-subject', 'booking.confirmed');
+        au_step($automationId, 'send_email', ['template' => 'autest-subject']);
+
+        $contactId = au_contact('Booker');
+        $email     = (string) DB::value('SELECT email FROM {contacts} WHERE id = :id', ['id' => $contactId]);
+
+        $bookingId = (int) DB::insert('bookings', [
+            'booking_number' => 'AU-' . bin2hex(random_bytes(4)),
+            'contact_id'     => $contactId,
+            'event_date'     => gmdate('Y-m-d', time() + 86400 * 10),
+            'start_time'     => '14:00',
+            'end_time'       => '16:00',
+            'guest_count'    => 10,
+            'status'         => 'confirmed',
+            'created_at'     => now_utc(),
+            'updated_at'     => now_utc(),
+        ]);
+
+        // Exactly what the controller fires.
+        Event::fire('booking.confirmed', ['booking_id' => $bookingId, 'from' => 'held']);
+        AutomationRunner::tick();
+
+        $run = au_run($automationId);
+        Assert::notNull($run, 'the booking enrolled');
+        Assert::same($contactId, (int) $run['contact_id'], 'and the engine found the family');
+        Assert::same('bookings', (string) $run['entity_type']);
+        Assert::same($bookingId, (int) $run['entity_id']);
+
+        Assert::same(1, au_sent($email), 'so the confirmation actually went');
+
+        au_clear();
+    }
+);
+
+Harness::test('an event that names a deal with a bare id is understood', function (): void {
+    // `DealController` fires `['id' => $dealId]`. The namespace is what says
+    // which kind of row that id belongs to.
+    au_clear();
+
+    $automationId = au_automation('autest-deal-subject', 'deal.won');
+    au_step($automationId, 'add_tag', ['tag' => 'autest-won']);
+
+    $contactId = au_contact('Winner');
+    $dealId    = au_deal($contactId);
+
+    Event::fire('deal.won', ['id' => $dealId]);
+    AutomationRunner::tick();
+
+    $run = au_run($automationId);
+    Assert::notNull($run);
+    Assert::same('deals', (string) $run['entity_type']);
+    Assert::same($dealId, (int) $run['entity_id']);
+    Assert::same($contactId, (int) $run['contact_id'], 'from the deal');
+
+    au_clear();
+});
+
+Harness::test('a quote reaches its guest through the deal it hangs off', function (): void {
+    // `quotes` has no `contact_id` — only a `deal_id` — so this is the
+    // two-hop case, and the thank-you for an accepted quote is the whole
+    // reason the lookup exists.
+    au_clear();
+
+    $automationId = au_automation('autest-quote-subject', 'quote.accepted');
+    au_step($automationId, 'add_tag', ['tag' => 'autest-accepted']);
+
+    $contactId = au_contact('Accepter');
+    $dealId    = au_deal($contactId);
+
+    $quoteId = (int) DB::insert('quotes', [
+        'number'     => 'AUQ-' . bin2hex(random_bytes(4)),
+        'deal_id'    => $dealId,
+        'status'     => 'accepted',
+        'created_at' => now_utc(),
+        'updated_at' => now_utc(),
+    ]);
+
+    // Both ids are in the payload, and the event is about the QUOTE.
+    Event::fire('quote.accepted', ['quote_id' => $quoteId, 'deal_id' => $dealId]);
+    AutomationRunner::tick();
+
+    $run = au_run($automationId);
+    Assert::notNull($run);
+    Assert::same('quotes', (string) $run['entity_type'], 'the event names the quote, not the deal');
+    Assert::same($quoteId, (int) $run['entity_id']);
+    Assert::same($contactId, (int) $run['contact_id'], 'and the family came from the deal');
+
+    au_clear();
+});
+
+Harness::test('a conversation event reaches whoever is on the thread', function (): void {
+    au_clear();
+
+    $automationId = au_automation('autest-convo-subject', 'conversation.closed');
+    au_step($automationId, 'add_tag', ['tag' => 'autest-closed']);
+
+    $contactId = au_contact('Threaded');
+
+    $conversationId = (int) DB::insert('conversations', [
+        'contact_id' => $contactId,
+        'channel'    => 'sms',
+        'status'     => 'open',
+        'created_at' => now_utc(),
+        'updated_at' => now_utc(),
+    ]);
+
+    Event::fire('conversation.closed', ['conversation_id' => $conversationId, 'user_id' => 1]);
+    AutomationRunner::tick();
+
+    $run = au_run($automationId);
+    Assert::notNull($run);
+    Assert::same($contactId, (int) $run['contact_id']);
+
+    DB::query('DELETE FROM {conversations} WHERE id = :id', ['id' => $conversationId]);
+    au_clear();
+});
+
+// ======================================================== notify a user
+
+Harness::test('notifying a user writes the notification AND emails them', function (): void {
+    /*
+     * Both, not either. The bell in the app is where it belongs; the email is
+     * the one that reaches a venue manager, who is not sitting in the CRM at
+     * seven in the morning when the waiver chase runs.
+     */
+    au_clear();
+
+    $userId = au_user();
+    $staff  = (string) DB::value('SELECT email FROM {users} WHERE id = :id', ['id' => $userId]);
+
+    $automationId = au_automation('autest-notify', 'visit.recorded');
+    au_step($automationId, 'notify_user', [
+        'assign_to' => $userId,
+        'title'     => 'Chase the waiver',
+        'message'   => 'No waiver for {{first_name}} yet.',
+    ]);
+
+    $contactId = au_contact('Chased');
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    $note = DB::first('SELECT * FROM {notifications} WHERE user_id = :u ORDER BY id DESC', ['u' => $userId]);
+
+    Assert::notNull($note, 'the notification row');
+    Assert::same('Chase the waiver', (string) $note['title']);
+    Assert::contains('Chased', (string) $note['body'], 'the merge tag resolved');
+    Assert::contains('/contacts/' . $contactId, (string) $note['link'], 'and it links to the guest');
+    Assert::null($note['read_at']);
+
+    Assert::same(1, au_sent($staff), 'and the email went to the member of staff');
+
+    // The guest is NOT emailed: this step is about the venue's own work.
+    $guest = (string) DB::value('SELECT email FROM {contacts} WHERE id = :id', ['id' => $contactId]);
+    Assert::same(0, au_sent($guest));
+
+    au_clear();
+});
+
+Harness::test('a notification for somebody who has left is skipped, not failed', function (): void {
+    // Staff leave, and the automation that named them has to keep working for
+    // everybody else. A failed run would stop the steps after it.
+    au_clear();
+
+    $userId = au_user(['is_active' => 0]);
+
+    $automationId = au_automation('autest-notify-gone', 'visit.recorded');
+    au_step($automationId, 'notify_user', ['assign_to' => $userId, 'message' => 'Anybody?']);
+
+    $contactId = au_contact('Orphaned');
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    $run = au_run($automationId, $contactId);
+    Assert::same('completed', (string) $run['status']);
+
+    $log = au_log((int) $run['id']);
+    Assert::same('ok', (string) $log[0]['status']);
+    Assert::contains('no longer active', (string) $log[0]['output']);
+
+    Assert::same(0, (int) DB::value(
+        'SELECT COUNT(*) FROM {notifications} WHERE user_id = :u',
+        ['u' => $userId]
+    ));
+
+    au_clear();
+});
+
+// ===================================================== move the deal on
+
+Harness::test('moving a deal sets what the board sets, history included', function (): void {
+    /*
+     * The step shares `DealStage` with the pipeline board, so an automated
+     * move is indistinguishable from a manager dragging the card: the stage
+     * stamp the velocity report measures, the SLA deadline the breach scanner
+     * reads, and a history row. A second implementation would drift, and the
+     * one that drifted would be the one nobody is watching.
+     */
+    au_clear();
+
+    $automationId = au_automation('autest-move', 'deal.created');
+    au_step($automationId, 'move_deal_stage', ['stage' => 'Contacted']);
+
+    $contactId = au_contact('Mover');
+    $dealId    = au_deal($contactId);
+
+    Event::fire('deal.created', ['id' => $dealId]);
+    AutomationRunner::tick();
+
+    $deal = (array) DB::first('SELECT * FROM {deals} WHERE id = :id', ['id' => $dealId]);
+
+    Assert::same(au_stage_id('Contacted'), (int) $deal['stage_id']);
+    Assert::notNull($deal['sla_due_at'], 'the stage carries an SLA, so the deadline is stamped');
+    Assert::same('open', (string) $deal['status']);
+
+    Assert::same(1, (int) DB::value(
+        'SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d',
+        ['d' => $dealId]
+    ), 'the move is in the history the velocity report reads');
+
+    // Nobody dragged it, so the history names no user rather than naming
+    // whoever happened to be logged in when cron ran.
+    Assert::null(DB::value('SELECT user_id FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $dealId]));
+
+    au_clear();
+});
+
+Harness::test('moving a deal into a WON stage fires deal.won', function (): void {
+    // The event other automations and the dashboard hang off. An automated
+    // move that did not fire it would leave a won deal nothing reacted to.
+    au_clear();
+
+    $automationId = au_automation('autest-move-won', 'visit.recorded');
+    au_step($automationId, 'move_deal_stage', ['stage' => 'Confirmed']);
+
+    $contactId = au_contact('Won');
+    $dealId    = au_deal($contactId);
+
+    Event::record();
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+    $fired = array_column(Event::recorded(), 'event');
+    Event::record(false);
+
+    Assert::inArray('deal.won', $fired);
+
+    $deal = (array) DB::first('SELECT * FROM {deals} WHERE id = :id', ['id' => $dealId]);
+    Assert::same('won', (string) $deal['status']);
+    Assert::notNull($deal['won_at']);
+
+    au_clear();
+});
+
+Harness::test('a deal already in the stage is left alone', function (): void {
+    // Re-entering a stage would reset `stage_entered_at` — which is what the
+    // velocity report measures — and fire `deal.won` a second time.
+    au_clear();
+
+    $automationId = au_automation('autest-move-same', 'visit.recorded');
+    au_step($automationId, 'move_deal_stage', ['stage' => 'New Inquiry']);
+
+    $contactId = au_contact('Static');
+    $dealId    = au_deal($contactId);
+    $entered   = (string) DB::value('SELECT stage_entered_at FROM {deals} WHERE id = :id', ['id' => $dealId]);
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    Assert::same($entered, (string) DB::value(
+        'SELECT stage_entered_at FROM {deals} WHERE id = :id',
+        ['id' => $dealId]
+    ), 'the stamp is untouched');
+
+    Assert::same(0, (int) DB::value(
+        'SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d',
+        ['d' => $dealId]
+    ), 'and no history row for a move that did not happen');
+
+    $log = au_log((int) au_run($automationId, $contactId)['id']);
+    Assert::contains('already there', (string) $log[0]['output']);
+
+    au_clear();
+});
+
+Harness::test('A STAGE IN ANOTHER PIPELINE IS REFUSED', function (): void {
+    /*
+     * Both seeded pipelines have a "New Inquiry" and a "Confirmed", so a
+     * mistyped playbook could take a party booking's deal onto the corporate
+     * board — off the board it belongs to, out of every report keyed to that
+     * pipeline, and with nothing in the UI to explain where it went.
+     */
+    au_clear();
+
+    $automationId = au_automation('autest-move-cross', 'visit.recorded');
+    au_step($automationId, 'move_deal_stage', ['stage' => (string) au_stage_id('Qualified', 2)]);
+
+    $contactId = au_contact('Crossed');
+    $dealId    = au_deal($contactId);
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    $deal = (array) DB::first('SELECT pipeline_id, stage_id FROM {deals} WHERE id = :id', ['id' => $dealId]);
+
+    Assert::same(1, (int) $deal['pipeline_id'], 'still on its own board');
+    Assert::same(au_stage_id('New Inquiry'), (int) $deal['stage_id']);
+
+    $log = au_log((int) au_run($automationId, $contactId)['id']);
+    Assert::contains('another pipeline', (string) $log[0]['output']);
+
+    au_clear();
+});
+
+Harness::test('a stage name that matches nothing FAILS the run', function (): void {
+    /*
+     * Not a skip. The automation says what it intends to do and cannot do it,
+     * and a venue believing their pipeline is being kept up to date by a step
+     * that quietly does nothing is worse than a failed run they can see.
+     */
+    au_clear();
+
+    $automationId = au_automation('autest-move-typo', 'visit.recorded');
+    au_step($automationId, 'move_deal_stage', ['stage' => 'Deposit Chased']);
+
+    $contactId = au_contact('Typo');
+    au_deal($contactId);
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+
+    // Three attempts, each with its backoff cleared, as the retry schedule
+    // would do over four hours.
+    for ($attempt = 0; $attempt < 3; $attempt++) {
+        AutomationRunner::tick();
+        $run = au_run($automationId, $contactId);
+
+        if ((string) $run['status'] === 'failed') {
+            break;
+        }
+
+        au_due((int) $run['id']);
+    }
+
+    $run = au_run($automationId, $contactId);
+
+    Assert::same('failed', (string) $run['status']);
+    Assert::contains('no stage called', (string) $run['error']);
+
+    au_clear();
+});
+
+Harness::test('a run that is not about a deal skips the move', function (): void {
+    // "Move the deal" in a playbook that also runs for walk-in guests is an
+    // authoring slip, not a breakage: failing the run would stop the messages
+    // after it.
+    au_clear();
+
+    $automationId = au_automation('autest-move-nodeal', 'visit.recorded');
+    au_step($automationId, 'move_deal_stage', ['stage' => 'Contacted']);
+
+    $contactId = au_contact('Dealless');
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    $run = au_run($automationId, $contactId);
+    Assert::same('completed', (string) $run['status']);
+    Assert::contains('not about a deal', (string) au_log((int) $run['id'])[0]['output']);
+
+    au_clear();
+});
+
+// ======================================================= issue a coupon
+
+Harness::test('issuing a coupon records it as GIVEN, not as redeemed', function (): void {
+    /*
+     * The distinction the schema change exists for. A row written as a
+     * redemption would count an offer going out as an offer coming back, and
+     * the venue's redemption rate — the only number that says whether an
+     * offer worked — would read 100% for ever.
+     */
+    au_clear();
+
+    $couponId = au_coupon('AUTEST10');
+
+    $automationId = au_automation('autest-coupon', 'visit.recorded');
+    au_step($automationId, 'issue_coupon', ['code' => 'autest10']);
+
+    $contactId = au_contact('Couponed');
+
+    Event::record();
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+    $fired = array_column(Event::recorded(), 'event');
+    Event::record(false);
+
+    $issued = DB::first(
+        'SELECT * FROM {coupon_redemptions} WHERE coupon_id = :c AND contact_id = :g',
+        ['c' => $couponId, 'g' => $contactId]
+    );
+
+    Assert::notNull($issued, 'the offer is recorded against the guest');
+    Assert::notNull($issued['issued_at']);
+    Assert::null($issued['redeemed_at'], 'nothing has been redeemed');
+    Assert::same(0, (int) $issued['discount_cents'], 'and no discount has been given');
+
+    // The code is matched case-insensitively: an operator types it as they
+    // say it, not as the offers list stores it.
+    Assert::inArray('coupon.issued', $fired, 'so an automation can react to the offer');
+
+    au_clear();
+});
+
+Harness::test('the same guest is not given the same offer twice', function (): void {
+    // `max_per_contact` is the venue's own rule, and it is what makes
+    // re-running a playbook safe.
+    au_clear();
+
+    $couponId = au_coupon('AUTESTONCE');
+
+    $automationId = au_automation('autest-coupon-twice', 'visit.recorded', [
+        'run_once_per_contact' => 0,
+        'allow_reentry'        => 1,
+    ]);
+    au_step($automationId, 'issue_coupon', ['code' => 'AUTESTONCE']);
+
+    $contactId = au_contact('Greedy');
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    // A second run of the same automation for the same guest.
+    DB::query('DELETE FROM {automation_runs} WHERE automation_id = :a', ['a' => $automationId]);
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    Assert::same(1, (int) DB::value(
+        'SELECT COUNT(*) FROM {coupon_redemptions} WHERE coupon_id = :c AND contact_id = :g',
+        ['c' => $couponId, 'g' => $contactId]
+    ));
+
+    $log = au_log((int) au_run($automationId, $contactId)['id']);
+    Assert::contains('already has', (string) $log[0]['output']);
+
+    au_clear();
+});
+
+Harness::test('an offer that has run out is skipped, and the sequence goes on', function (): void {
+    au_clear();
+
+    au_coupon('AUTESTOLD', ['expires_at' => gmdate('Y-m-d H:i:s', time() - 86400)]);
+    au_template('autest-after-coupon');
+
+    $automationId = au_automation('autest-coupon-expired', 'visit.recorded');
+    au_step($automationId, 'issue_coupon', ['code' => 'AUTESTOLD']);
+    au_step($automationId, 'send_email', ['template' => 'autest-after-coupon']);
+
+    $contactId = au_contact('Late');
+    $email     = (string) DB::value('SELECT email FROM {contacts} WHERE id = :id', ['id' => $contactId]);
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+    AutomationRunner::tick();
+
+    $log = au_log((int) au_run($automationId, $contactId)['id']);
+
+    Assert::contains('expired', (string) $log[0]['output']);
+    Assert::same('ok', (string) $log[1]['status']);
+    Assert::same(1, au_sent($email), 'an expired offer is the venue’s own doing, not a failure');
+
+    au_clear();
+});
+
+Harness::test('a coupon code that does not exist FAILS, rather than inventing one', function (): void {
+    /*
+     * An automation that could create offers could create one with any value,
+     * and these steps ship inside playbooks. So an unknown code is a failure
+     * a venue can see, not a coupon the engine makes up.
+     */
+    au_clear();
+
+    $automationId = au_automation('autest-coupon-missing', 'visit.recorded');
+    au_step($automationId, 'issue_coupon', ['code' => 'AUTESTNOPE']);
+
+    $contactId = au_contact('Hopeful');
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+
+    for ($attempt = 0; $attempt < 3; $attempt++) {
+        AutomationRunner::tick();
+        $run = au_run($automationId, $contactId);
+
+        if ((string) $run['status'] === 'failed') {
+            break;
+        }
+
+        au_due((int) $run['id']);
+    }
+
+    $run = au_run($automationId, $contactId);
+
+    Assert::same('failed', (string) $run['status']);
+    Assert::contains('AUTESTNOPE', (string) $run['error']);
+
+    Assert::same(0, (int) DB::value("SELECT COUNT(*) FROM {coupons} WHERE code = 'AUTESTNOPE'"));
+
+    au_clear();
+});
+
+// ========================================================== the webhook
+
+Harness::test('A WEBHOOK POINTING INSIDE THE NETWORK IS REFUSED', function (): void {
+    /*
+     * `Core\Http` decides this and `tests/unit/http.php` covers the addresses;
+     * what matters here is that the STEP refuses rather than calling it, and
+     * that the refusal reaches the run as a failure a venue can see.
+     *
+     * 169.254.169.254 is the cloud metadata service. On shared hosting it is
+     * reachable, and a step that POSTed the venue's data to it would be the
+     * most expensive mistake in this file.
+     */
+    au_clear();
+
+    $automationId = au_automation('autest-webhook-inward', 'visit.recorded');
+    au_step($automationId, 'webhook', ['url' => 'http://169.254.169.254/latest/meta-data/']);
+
+    $contactId = au_contact('Inward');
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+
+    for ($attempt = 0; $attempt < 3; $attempt++) {
+        AutomationRunner::tick();
+        $run = au_run($automationId, $contactId);
+
+        if ((string) $run['status'] === 'failed') {
+            break;
+        }
+
+        au_due((int) $run['id']);
+    }
+
+    $run = au_run($automationId, $contactId);
+
+    Assert::same('failed', (string) $run['status']);
+    Assert::contains('inside the network', (string) $run['error']);
+
+    au_clear();
+});
+
+Harness::test('a webhook step with no URL fails rather than pretending', function (): void {
+    au_clear();
+
+    $automationId = au_automation('autest-webhook-empty', 'visit.recorded');
+    au_step($automationId, 'webhook', ['url' => '']);
+
+    $contactId = au_contact('Urlless');
+
+    Event::fire('visit.recorded', ['contact_id' => $contactId]);
+
+    for ($attempt = 0; $attempt < 3; $attempt++) {
+        AutomationRunner::tick();
+        $run = au_run($automationId, $contactId);
+
+        if ((string) $run['status'] === 'failed') {
+            break;
+        }
+
+        au_due((int) $run['id']);
+    }
+
+    Assert::same('failed', (string) au_run($automationId, $contactId)['status']);
+
+    au_clear();
+});
 
 au_clear();
 $restore();

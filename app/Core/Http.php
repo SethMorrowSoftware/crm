@@ -120,14 +120,22 @@ final class Http
         $url   = trim($url);
         $parts = $url === '' ? false : parse_url($url);
 
-        if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
+        if ($parts === false || !isset($parts['scheme'])) {
             return 'that is not a URL';
         }
 
+        // THE SCHEME IS CHECKED BEFORE THE HOST, so the reason names what is
+        // actually wrong. `file:///etc/passwd` parses with no host at all, and
+        // "that is not a URL" would send somebody looking for a typo in a URL
+        // that is perfectly well formed and simply not callable.
         $scheme = strtolower((string) $parts['scheme']);
 
         if (!in_array($scheme, ['http', 'https'], true)) {
             return 'only http and https URLs can be called';
+        }
+
+        if (!isset($parts['host'])) {
+            return 'that is not a URL';
         }
 
         $host = strtolower(trim((string) $parts['host'], '[]'));
