@@ -341,6 +341,34 @@ Harness::test('no controller action shadows a base Controller helper', function 
     Assert::same([], $offenders, implode("\n   ", $offenders));
 });
 
+Harness::test('NO CONTROLLER THROWS AWAY AN AUTHORIZE REFUSAL', function (): void {
+    // `Controller::authorize()` RETURNS the 403 rather than throwing, so a
+    // bare `$this->authorize('view_x');` compiles, lints, reads like a guard
+    // and does nothing at all — the page renders for everybody. Caught while
+    // writing InboxController, where all seven calls were written that way.
+    //
+    // The shape that works is `if ($refusal = $this->authorize(...)) { return
+    // $refusal; }`, so anything else on that line is the bug.
+    $offenders = [];
+
+    foreach (glob(CC_ROOT . '/app/Controllers/*.php') ?: [] as $file) {
+        foreach (file($file) ?: [] as $number => $line) {
+            if (!str_contains($line, '$this->authorize(')) {
+                continue;
+            }
+
+            // The return value must be used: assigned, returned, or tested.
+            if (preg_match('/(if\s*\(|return |=\s*\$this->authorize|\?\?|!==|===)/', $line) === 1) {
+                continue;
+            }
+
+            $offenders[] = basename($file) . ':' . ($number + 1) . ' discards the refusal';
+        }
+    }
+
+    Assert::same([], $offenders, implode("\n   ", $offenders));
+});
+
 Harness::test('every view rendered by a controller exists', function (): void {
     $offenders = [];
 

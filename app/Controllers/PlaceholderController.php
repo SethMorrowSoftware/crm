@@ -22,17 +22,6 @@ use App\Core\Response;
  */
 final class PlaceholderController extends Controller
 {
-    public function inbox(Request $request): Response
-    {
-        return $this->placeholder('Inbox', 4, 'inbox', [
-            'One thread per guest across email, SMS, web chat and internal notes',
-            'Assignment, snooze, canned replies and @mentions',
-            'First-response-time tracking per team member',
-            'A composer that cannot message anyone who replied STOP',
-        ], 'Needs the email and SMS drivers, which arrive with Phase 4.');
-    }
-
-
     public function marketing(Request $request): Response
     {
         return $this->placeholder('Marketing', 4, 'marketing', [

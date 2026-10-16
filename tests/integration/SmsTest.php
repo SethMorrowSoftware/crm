@@ -150,6 +150,81 @@ function sms_clear(): void
     DB::query("DELETE FROM {contacts} WHERE first_name = 'SmsTest'");
 }
 
+/**
+ * Capture a send on a driver that WOULD reach a carrier.
+ *
+ * `sms_capture()` forces the log driver, and Safe Mode is deliberately moot
+ * for that one — so every Safe Mode test written with the plain helper tests
+ * the exempt path instead of the rule. Capturing happens before delivery, so
+ * naming a real driver here costs no network: it only changes the answer to
+ * "could this have reached anybody".
+ *
+ * @param array<string,mixed> $message
+ * @return array{result:array<string,mixed>,sent:list<array<string,mixed>>}
+ */
+function sms_capture_live(array $message): array
+{
+    Settings::set('sms.twilio_account_sid', 'AC-test');
+    Settings::set('sms.twilio_auth_token', 'token-test');
+    Sms::useDriver('twilio');
+    Sms::startCapturing();
+
+    try {
+        $result = Sms::send($message);
+        $sent   = Sms::captured();
+    } finally {
+        Sms::stopCapturing();
+        Sms::useDriver(null);
+        Settings::forget('sms.twilio_account_sid');
+        Settings::forget('sms.twilio_auth_token');
+    }
+
+    return ['result' => $result, 'sent' => $sent];
+}
+
+/**
+ * The user Safe Mode would divert to, given a phone number.
+ *
+ * Found rather than assumed: the owner `safeModeNumber()` picks is the first
+ * active one by id, and this suite must set the phone on THAT one. It does not
+ * rely on the seeded owner surviving — the runner loads every suite file, so
+ * another suite's fixtures run before this one whatever filter is given, and a
+ * test that assumed row 1 was still there failed for reasons that had nothing
+ * to do with SMS.
+ *
+ * @return array{id:int,phone:?string,created:bool}
+ */
+function sms_owner(): array
+{
+    $owner = DB::first(
+        "SELECT u.id, u.phone FROM {users} u JOIN {roles} r ON r.id = u.role_id
+          WHERE r.slug = 'owner' AND u.is_active = 1 AND u.deleted_at IS NULL
+          ORDER BY u.id LIMIT 1"
+    );
+
+    if ($owner !== null) {
+        return [
+            'id'      => (int) $owner['id'],
+            'phone'   => $owner['phone'] === null ? null : (string) $owner['phone'],
+            'created' => false,
+        ];
+    }
+
+    return ['id' => test_make_user('owner'), 'phone' => null, 'created' => true];
+}
+
+/** @param array{id:int,phone:?string,created:bool} $owner */
+function sms_owner_restore(array $owner): void
+{
+    if ($owner['created']) {
+        DB::delete('users', 'id = :id', ['id' => $owner['id']]);
+
+        return;
+    }
+
+    DB::update('users', ['phone' => $owner['phone']], 'id = :id', ['id' => $owner['id']]);
+}
+
 /** A body that satisfies the bulk opt-out rule, so other rules can be tested alone. */
 const SMS_BULK = 'Half price go-karts this Saturday at the Castle. Reply STOP to opt out.';
 
@@ -605,7 +680,7 @@ Harness::test('SAFE MODE REDIRECTS EVERY TEXT TO ONE NUMBER, and says where it w
 
     $result = with_sms_settings(
         sms_live(['system.safe_mode' => true, 'sms.safe_mode_number' => $owner]),
-        static fn (): array => sms_capture(['to' => '+18455551234', 'body' => SMS_BULK])
+        static fn (): array => sms_capture_live(['to' => '+18455551234', 'body' => SMS_BULK])
     );
 
     Assert::true($result['result']['sent']);
@@ -616,15 +691,147 @@ Harness::test('SAFE MODE REDIRECTS EVERY TEXT TO ONE NUMBER, and says where it w
     Assert::contains('+18455551234', $result['sent'][0]['body'], 'in the message itself');
 });
 
-Harness::test('Safe Mode with no number to redirect to REFUSES rather than sending', function (): void {
-    // The one way Safe Mode could do the opposite of its job.
+Harness::test('Safe Mode with a REAL driver and no redirect number refuses', function (): void {
+    // The one way Safe Mode could do the opposite of its job: a driver that
+    // can reach a carrier, no number to divert to, and nothing stopping the
+    // message.
     $result = with_sms_settings(
-        sms_live(['system.safe_mode' => true, 'sms.safe_mode_number' => null]),
-        static fn (): array => Sms::send(['to' => '+18455551234', 'body' => SMS_BULK])
+        sms_live([
+            'system.safe_mode'       => true,
+            'sms.safe_mode_number'   => null,
+            'sms.twilio_account_sid' => 'AC-test',
+            'sms.twilio_auth_token'  => 'token-test',
+        ]),
+        static function (): array {
+            // No owner mobile either, or the fallback below would cover it —
+            // which is the whole point of having both tests.
+            $owner = sms_owner();
+
+            DB::update('users', ['phone' => null], 'id = :id', ['id' => $owner['id']]);
+
+            Settings::set('sms.twilio_account_sid', 'AC-test');
+            Settings::set('sms.twilio_auth_token', 'token-test');
+            Sms::useDriver('twilio');
+
+            try {
+                return Sms::send(['to' => '+18455551234', 'body' => SMS_BULK]);
+            } finally {
+                Sms::useDriver(null);
+                Settings::forget('sms.twilio_account_sid');
+                Settings::forget('sms.twilio_auth_token');
+                sms_owner_restore($owner);
+            }
+        }
     );
 
     Assert::false($result['sent']);
     Assert::same('safe_mode_no_number', $result['reason']);
+});
+
+Harness::test('SAFE MODE IS MOOT FOR A DRIVER THAT REACHES NO CARRIER', function (): void {
+    // MEASURED on a fresh install, in a browser: Safe Mode defaults to ON and
+    // the SMS driver defaults to `log`, so every text was refused with
+    // "Safe Mode is on but no number is set to redirect to" — a setting the
+    // venue had never heard of, naming a redirect for a message that was
+    // never going to leave the building. The inbox could not text anybody at
+    // all out of the box.
+    //
+    // The log driver writes to a file and sends nothing, so there is nothing
+    // to protect anybody from.
+    $result = with_sms_settings(
+        sms_live(['system.safe_mode' => true, 'sms.safe_mode_number' => null]),
+        static function (): array {
+            Sms::useDriver('log');
+
+            try {
+                return Sms::send(['to' => '+18455551234', 'body' => SMS_BULK]);
+            } finally {
+                Sms::useDriver(null);
+            }
+        }
+    );
+
+    Assert::true($result['sent'], 'a dry run is not stopped by Safe Mode');
+    Assert::false($result['redirected'], 'and nothing is redirected, because nothing is sent');
+
+    DB::query("DELETE FROM {messages} WHERE id = :id", ['id' => (int) $result['message_id']]);
+    DB::delete('usage_ledger', 'entity_type = :t AND entity_id = :id', [
+        't' => 'messages', 'id' => (int) $result['message_id'],
+    ]);
+});
+
+Harness::test('and it falls back to the OWNER\'S OWN MOBILE, as email does', function (): void {
+    // The other half of the same bug. Mailer redirects to the owner's email
+    // address when no Safe Mode address is set, so a venue running a real
+    // driver with Safe Mode on gets its mail diverted rather than refused.
+    // SMS had no equivalent, which is the asymmetry that made the refusal
+    // above the ONLY outcome on a configured install.
+    $owner = sms_owner();
+
+    try {
+        DB::update('users', ['phone' => '845-469-7777'], 'id = :id', ['id' => $owner['id']]);
+
+        $result = with_sms_settings(
+            sms_live(['system.safe_mode' => true, 'sms.safe_mode_number' => null]),
+            static fn (): array => sms_capture_live(['to' => '+18455551234', 'body' => SMS_BULK])
+        );
+
+        Assert::true($result['result']['sent']);
+        Assert::true($result['result']['redirected'], 'it is diverted, not refused');
+        Assert::same('+18454697777', $result['sent'][0]['to'], 'to the owner\'s own mobile');
+        Assert::contains('+18455551234', $result['sent'][0]['body'], 'and it says who it was for');
+    } finally {
+        sms_owner_restore($owner);
+        DB::query("DELETE FROM {messages} WHERE to_address = :p", ['p' => '+18455551234']);
+    }
+});
+
+Harness::test('and it skips an owner with NO mobile for one who has one', function (): void {
+    // A real install shape: the account that first set the venue up has no
+    // phone number on it, and a second owner was added later who does. Taking
+    // "the first owner" without checking refuses the send while a perfectly
+    // good number sits on the next row — and the refusal names a setting
+    // neither of them has touched.
+    $first  = sms_owner();
+    $second = test_make_user('owner', ['phone' => '845-469-5555']);
+
+    try {
+        DB::update('users', ['phone' => null], 'id = :id', ['id' => $first['id']]);
+
+        Assert::greaterThan($first['id'], $second, 'precondition: the phoneless owner comes first');
+
+        $result = with_sms_settings(
+            sms_live(['system.safe_mode' => true, 'sms.safe_mode_number' => null]),
+            static fn (): array => sms_capture_live(['to' => '+18455551234', 'body' => SMS_BULK])
+        );
+
+        Assert::true($result['result']['sent'], 'it is diverted rather than refused');
+        Assert::same('+18454695555', $result['sent'][0]['to'], 'to the owner who actually has a mobile');
+    } finally {
+        DB::delete('users', 'id = :id', ['id' => $second]);
+        sms_owner_restore($first);
+        DB::query("DELETE FROM {messages} WHERE to_address = :p", ['p' => '+18455551234']);
+    }
+});
+
+Harness::test('an explicit Safe Mode number beats the owner\'s', function (): void {
+    // The configured value wins, so a venue can divert to a test handset
+    // rather than the owner's personal phone.
+    $owner = sms_owner();
+
+    try {
+        DB::update('users', ['phone' => '845-469-7777'], 'id = :id', ['id' => $owner['id']]);
+
+        $result = with_sms_settings(
+            sms_live(['system.safe_mode' => true, 'sms.safe_mode_number' => '+18455550000']),
+            static fn (): array => sms_capture_live(['to' => '+18455551234', 'body' => SMS_BULK])
+        );
+
+        Assert::same('+18455550000', $result['sent'][0]['to'], 'the configured number, not the owner\'s');
+    } finally {
+        sms_owner_restore($owner);
+        DB::query("DELETE FROM {messages} WHERE to_address = :p", ['p' => '+18455551234']);
+    }
 });
 
 Harness::test('and a Safe Mode prefix that ADDS a segment is re-measured', function (): void {
@@ -643,7 +850,7 @@ Harness::test('and a Safe Mode prefix that ADDS a segment is re-measured', funct
 
     $result = with_sms_settings(
         sms_live(['system.safe_mode' => true, 'sms.safe_mode_number' => '+18455550000']),
-        static fn (): array => sms_capture(['to' => '+18455551234', 'body' => $body])
+        static fn (): array => sms_capture_live(['to' => '+18455551234', 'body' => $body])
     );
 
     Assert::count(1, $result['sent']);

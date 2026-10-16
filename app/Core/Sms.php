@@ -224,17 +224,25 @@ final class Sms
         }
 
         // --- Safe Mode ------------------------------------------------------
+        //
+        // SAFE MODE IS MOOT WHEN THE DRIVER CANNOT REACH A CARRIER. The `log`
+        // driver writes to a file and sends nothing, so redirecting a message
+        // that goes nowhere protects nobody — and refusing it broke the inbox
+        // on every fresh install, because Safe Mode defaults to ON and `log`
+        // is the default driver. MEASURED: the composer refused every text on
+        // a new install, citing a setting the venue had never heard of.
         $redirected = false;
         $originalTo = $to;
 
-        if (Settings::safeMode()) {
+        if (Settings::safeMode() && self::driverReachesCarrier()) {
             $owner = self::safeModeNumber();
 
             if ($owner === null) {
                 return self::refuse(
                     'safe_mode_no_number',
-                    'Safe Mode is on but no number is configured to redirect texts to. '
-                        . 'Set one in Settings, or use the log driver.'
+                    'Safe Mode is on, this driver can reach a carrier, and no number is set to '
+                        . 'redirect texts to. Set one in Settings, or switch the driver to the '
+                        . 'log one while testing.'
                 );
             }
 
@@ -783,7 +791,7 @@ final class Sms
                 . 'carriers would filter it silently.',
             'quiet_hours'         => 'It is outside the hours this venue sends texts, so it will '
                 . 'go out when the window opens.',
-            'safe_mode_no_number' => 'Safe Mode is on but no number is set to redirect texts to.',
+            'safe_mode_no_number' => 'Safe Mode is on and no number is set to redirect texts to.',
             'driver_error'        => 'The provider could not be reached.',
             default               => $reason === '' ? 'Unknown.' : $reason,
         };
@@ -946,9 +954,49 @@ final class Sms
         return normalize_phone((string) Settings::get('sms.from_number', '')) ?? '';
     }
 
+    /**
+     * Can the current driver actually put a message on a carrier?
+     *
+     * `log` cannot, which is what makes Safe Mode redundant for it. Anything
+     * else is assumed to be able to: a driver added later and left out of this
+     * check would be one Safe Mode silently stopped protecting, and that is
+     * the wrong direction to fail in.
+     */
+    private static function driverReachesCarrier(): bool
+    {
+        return self::driver() !== 'log';
+    }
+
+    /**
+     * The number Safe Mode redirects to.
+     *
+     * Falls back to the OWNER'S OWN MOBILE, exactly as Mailer falls back to
+     * the owner's email address — that asymmetry was the other half of the
+     * bug above. A venue that has configured a real driver and left Safe Mode
+     * on gets its texts redirected to whoever set the install up, rather than
+     * a refusal naming a field they have not filled in.
+     */
     private static function safeModeNumber(): ?string
     {
-        return normalize_phone((string) Settings::get('sms.safe_mode_number', ''));
+        $configured = normalize_phone((string) Settings::get('sms.safe_mode_number', ''));
+
+        if ($configured !== null) {
+            return $configured;
+        }
+
+        try {
+            $owner = DB::value(
+                "SELECT u.phone FROM {users} u
+                   JOIN {roles} r ON r.id = u.role_id
+                  WHERE r.slug = 'owner' AND u.is_active = 1 AND u.deleted_at IS NULL
+                    AND u.phone IS NOT NULL AND u.phone <> ''
+                  ORDER BY u.id LIMIT 1"
+            );
+
+            return is_string($owner) ? normalize_phone($owner) : null;
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /** The unit price in THOUSANDTHS of a cent — carriers quote fractions. */

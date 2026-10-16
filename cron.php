@@ -106,6 +106,7 @@ $stats = [
     'automations' => 0,
     'triggers'    => 0,
     'rollups'     => 0,
+    'woken'       => 0,
     'maintenance' => 0,
     'errors'      => 0,
 ];
@@ -151,7 +152,32 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Nightly maintenance — once a day, not every minute
+// 3. Wake the snoozed conversations whose time has come
+//
+// EVERY TICK, not nightly. A snooze is somebody saying "remind me at nine" —
+// a sweep that only ran once a day would hold a guest's message until the
+// small hours of the following morning, which is worse than not offering the
+// button at all. The step is deliberately dumb and idempotent: anything due
+// goes back in the queue unread, and the next tick finds nothing.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $woken = App\Controllers\InboxController::wakeSnoozed();
+
+        $stats['woken'] = $woken;
+
+        if ($woken > 0) {
+            cron_out('  ' . $woken . ' snoozed conversation(s) back in the queue.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: waking snoozed conversations failed', ['error' => $e->getMessage()]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 4. Nightly maintenance — once a day, not every minute
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft() && cron_shouldRunDaily()) {
@@ -167,7 +193,7 @@ if ($budgetLeft() && cron_shouldRunDaily()) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Heartbeat
+// 5. Heartbeat
 // ---------------------------------------------------------------------------
 
 Settings::set('system.cron_last_run', gmdate('Y-m-d H:i:s'));
@@ -182,10 +208,12 @@ if (Settings::has('system.cron_test_requested_at')) {
 $elapsed = round(microtime(true) - CC_START, 2);
 
 cron_out(sprintf(
-    'Done in %ss. Jobs: %d, automations due: %d, maintenance tasks: %d, errors: %d.',
+    'Done in %ss. Jobs: %d, automations due: %d, conversations woken: %d, '
+        . 'maintenance tasks: %d, errors: %d.',
     $elapsed,
     $stats['jobs'],
     $stats['automations'],
+    $stats['woken'],
     $stats['maintenance'],
     $stats['errors']
 ));

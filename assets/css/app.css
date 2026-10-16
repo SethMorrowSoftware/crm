@@ -825,6 +825,58 @@ ul.checks li:last-child { border-bottom: 0; }
 .cal-lanes th[scope="row"] { width: 14rem; vertical-align: top; }
 .cal-lanes .cal-chip { display: inline-block; margin-right: .3rem; white-space: normal; }
 
+/* ------------------------------------------------------------------- Inbox */
+
+.inbox-tabs { margin-bottom: var(--gap); }
+
+/* An unread row has to be findable at a glance down a list of forty, and
+   weight is the signal rather than colour: the queue is read by whoever is on
+   shift, and a tint alone fails for anyone who cannot distinguish it. The left
+   edge carries it too, so the cue survives a greyscale print. */
+.inbox-unread > th,
+.inbox-unread > td { font-weight: 600; }
+.inbox-unread > th:first-child { box-shadow: inset 3px 0 0 0 var(--brand); }
+
+.inbox-preview { color: var(--muted); max-width: 32rem; }
+
+.inbox-thread { list-style: none; display: flex; flex-direction: column; gap: .75rem; }
+
+.inbox-msg {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: .85rem 1rem; box-shadow: var(--shadow);
+    /* Outbound sits to the right of centre, inbound to the left — the shape
+       every messaging app has taught people to read without a legend. */
+    margin-left: 2.5rem;
+}
+.inbox-msg.is-inbound { margin-left: 0; margin-right: 2.5rem; border-left: 3px solid var(--brand); }
+
+/* A note is staff talking to each other, and it must not be mistaken for
+   something the guest can see. Dashed, because a solid tint reads as another
+   kind of message. */
+.inbox-msg.is-note {
+    background: var(--panel-soft); border-style: dashed;
+    border-left: 3px solid var(--warn);
+}
+
+.inbox-msg-meta {
+    display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap;
+    font-size: .82rem; margin-bottom: .35rem;
+}
+
+.inbox-msg-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.inbox-list { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
+.inbox-list > li { display: flex; flex-direction: column; gap: .1rem; font-size: .9rem; }
+
+/* The canned replies are reference text, so they scroll rather than pushing
+   the composer off the screen. */
+.inbox-canned { max-height: 14rem; overflow-y: auto; font-size: .85rem; }
+
+@media (max-width: 38rem) {
+    .inbox-msg { margin-left: 0; }
+    .inbox-msg.is-inbound { margin-right: 0; }
+}
+
 /* --------------------------------------------------------- Public booking */
 
 /* The only `bare` page that needs two columns' worth of room: a package

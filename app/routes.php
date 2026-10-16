@@ -506,7 +506,26 @@ $router->group('/checkin', ['auth', 'can:checkin'], function ($router): void {
 // renders an honest "coming in Phase N" state rather than a broken link.
 // ---------------------------------------------------------------------------
 
-$router->get('/inbox', ['PlaceholderController', 'inbox'], ['auth', 'can:view_inbox'], 'inbox');
+// ---------------------------------------------------------------------------
+// The unified inbox
+//
+// Three permissions, and they come apart on purpose. `view_inbox` decides
+// which conversations are visible and is scoped like every other read.
+// `inbox_reply` is answering a guest — Front Desk and Party Host both hold it.
+// `inbox_assign` is deciding the QUEUE: handing a conversation to somebody,
+// putting it aside, calling it done. The person on the phone is not
+// automatically the person who decides the queue is clear.
+// ---------------------------------------------------------------------------
+
+$router->group('/inbox', ['auth', 'can:view_inbox'], function ($router): void {
+    $router->get('', ['InboxController', 'index'], [], 'inbox');
+    $router->get('/{id:\d+}', ['InboxController', 'show'], [], 'inbox.show');
+    $router->post('/{id:\d+}/reply', ['InboxController', 'reply'], ['csrf', 'can:inbox_reply']);
+    $router->post('/{id:\d+}/assign', ['InboxController', 'assign'], ['csrf', 'can:inbox_assign']);
+    $router->post('/{id:\d+}/snooze', ['InboxController', 'snooze'], ['csrf', 'can:inbox_assign']);
+    $router->post('/{id:\d+}/close', ['InboxController', 'close'], ['csrf', 'can:inbox_assign']);
+    $router->post('/{id:\d+}/reopen', ['InboxController', 'reopen'], ['csrf', 'can:inbox_assign']);
+});
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
 $router->get('/reputation', ['PlaceholderController', 'reputation'], ['auth', 'can:view_reputation'], 'reputation');
 $router->get('/memberships', ['PlaceholderController', 'memberships'], ['auth', 'can:view_memberships'], 'memberships');
