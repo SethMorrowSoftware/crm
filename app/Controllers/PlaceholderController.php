@@ -10,6 +10,11 @@ use App\Core\Response;
 /**
  * Honest placeholders for modules that land in later phases.
  *
+ * A page here is deleted as its module ships — contacts, deals and tasks have
+ * gone, with Phase 2. A placeholder left behind after the real thing exists is
+ * worse than a broken link: it tells the reader a feature is still coming when
+ * it is already on the nav above it.
+ *
  * The navigation shows the whole application from day one so the venue can see
  * the shape of what is coming, but a nav item that 404s is worse than one that
  * says "this arrives in Phase 3, here is exactly what it will do". Each page
@@ -17,16 +22,6 @@ use App\Core\Response;
  */
 final class PlaceholderController extends Controller
 {
-    public function contacts(Request $request): Response
-    {
-        return $this->placeholder('Contacts', 2, 'contacts', [
-            'A searchable guest list with households, children and birth months',
-            'Full timeline per guest: messages, bookings, visits, payments, surveys',
-            'Duplicate detection and a reversible merge',
-            'Consent and privacy tooling — per-guest export and erase',
-        ], 'Guest identity keys on the CenterEdge card number, so the import brings visit '
-            . 'history without implying marketing consent.');
-    }
 
     public function inbox(Request $request): Response
     {
@@ -38,16 +33,6 @@ final class PlaceholderController extends Controller
         ], 'Needs the email and SMS drivers, which arrive with Phase 4.');
     }
 
-    public function deals(Request $request): Response
-    {
-        return $this->placeholder('Sales pipelines', 2, 'deals', [
-            'Kanban and table views with drag-to-stage',
-            'Birthday and group pipelines seeded with real stages',
-            'Stage response deadlines that escalate when missed',
-            'Quote builder priced from the Castle\'s own packages',
-        ], 'Castle CRM owns the inquiry and the quote; once a party becomes a real '
-            . 'reservation, CenterEdge remains the system of record.');
-    }
 
     public function bookings(Request $request): Response
     {
@@ -89,15 +74,6 @@ final class PlaceholderController extends Controller
         ], 'Shared with CenterEdge: the card and its privileges live there, the lifecycle lives here.');
     }
 
-    public function tasks(Request $request): Response
-    {
-        return $this->placeholder('Tasks', 2, 'tasks', [
-            'Tasks on any contact, deal or booking',
-            'Round-robin and load-balanced assignment',
-            'A daily digest of what is due and what is overdue',
-            'A weekly manager scorecard',
-        ]);
-    }
 
     public function reports(Request $request): Response
     {

@@ -45,6 +45,18 @@ $router->post('/reset-password', ['AuthController', 'resetPassword'], ['guest', 
 $router->get('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], ['throttle:60,5'], 'unsubscribe');
 $router->post('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], ['throttle:60,5']);
 
+// A hosted web form. No login: this is the party enquiry a parent fills in
+// from the venue's website.
+//
+// Unlike one-click unsubscribe above, the POST is NOT CSRF-exempt. Rendering
+// the page mints a token into the visitor's own session, so the submission can
+// carry one — and without it every form on the venue's site would be a write
+// endpoint any other site could aim at a visitor's browser. The throttle is
+// the second spam check after the per-form honeypot; the GET is limited more
+// loosely because a page view is cheap and a real guest may reload.
+$router->get('/f/{slug:[a-z0-9-]+}', ['FormController', 'show'], ['throttle:120,5'], 'forms.public');
+$router->post('/f/{slug:[a-z0-9-]+}', ['FormController', 'submit'], ['csrf', 'throttle:15,10']);
+
 // ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
@@ -173,17 +185,178 @@ $router->group('/playbooks', ['auth', 'can:view_automations'], function ($router
 });
 
 // ---------------------------------------------------------------------------
+// Contacts & households
+//
+// Reading gates on view_contacts and is scoped per role by
+// Acl::scopeCondition(); writing gates on contacts_manage; deleting has its
+// own narrower permission.
+//
+// Consent is NOT part of the contact form. It has its own two endpoints
+// because recording it means stamping a time, naming a source and appending a
+// consent_log row — docs/PRIVACY.md §3. A guest's permission to be marketed
+// to is evidence of something they did, so it cannot be a column somebody
+// edits in passing.
+// ---------------------------------------------------------------------------
+
+$router->group('/contacts', ['auth', 'can:view_contacts'], function ($router): void {
+    $router->get('', ['ContactController', 'index'], [], 'contacts');
+    $router->get('/new', ['ContactController', 'create'], ['can:contacts_manage'], 'contacts.create');
+    $router->post('', ['ContactController', 'store'], ['csrf', 'can:contacts_manage']);
+    $router->get('/{id:\d+}', ['ContactController', 'show'], [], 'contacts.show');
+    $router->get('/{id:\d+}/edit', ['ContactController', 'edit'], ['can:contacts_manage'], 'contacts.edit');
+    $router->post('/{id:\d+}', ['ContactController', 'update'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/notes', ['ContactController', 'storeNote'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/consent', ['ContactController', 'updateConsent'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/do-not-contact', ['ContactController', 'setDoNotContact'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/delete', ['ContactController', 'destroy'], ['csrf', 'can:contacts_delete']);
+});
+
+$router->group('/households', ['auth', 'can:view_contacts'], function ($router): void {
+    $router->get('', ['HouseholdController', 'index'], [], 'households');
+    $router->get('/new', ['HouseholdController', 'create'], ['can:contacts_manage'], 'households.create');
+    $router->post('', ['HouseholdController', 'store'], ['csrf', 'can:contacts_manage']);
+    $router->get('/{id:\d+}', ['HouseholdController', 'show'], [], 'households.show');
+    $router->get('/{id:\d+}/edit', ['HouseholdController', 'edit'], ['can:contacts_manage'], 'households.edit');
+    $router->post('/{id:\d+}', ['HouseholdController', 'update'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/members', ['HouseholdController', 'addMember'], ['csrf', 'can:contacts_manage']);
+    $router->post('/{id:\d+}/members/remove', ['HouseholdController', 'removeMember'], ['csrf', 'can:contacts_manage']);
+});
+
+// ---------------------------------------------------------------------------
+// Sales pipelines and deals (replaces the /deals placeholder)
+//
+// Reading is view_deals, and it is SCOPED: the controller runs every read
+// through Acl::scopeCondition(), so a Party Host holding view_deals at 'own'
+// sees their own leads and a manager holding it at 'all' sees the venue's.
+// Editing is deals_manage, deleting is deals_delete, and taking over somebody
+// else's deal needs deals_reassign — checked in the controller, which is where
+// it can compare the submitted owner against the deal's current one.
+// ---------------------------------------------------------------------------
+
+$router->group('/deals', ['auth', 'can:view_deals'], function ($router): void {
+    $router->get('', ['DealController', 'index'], [], 'deals');
+    // The same deals without the grid: a phone, a screen reader, or sorting by
+    // value down a column.
+    $router->get('/table', ['DealController', 'table'], [], 'deals.table');
+
+    $router->get('/new', ['DealController', 'create'], ['can:deals_manage'], 'deals.create');
+    $router->post('', ['DealController', 'store'], ['csrf', 'can:deals_manage']);
+
+    $router->get('/{id:\d+}', ['DealController', 'show'], [], 'deals.show');
+    $router->get('/{id:\d+}/edit', ['DealController', 'edit'], ['can:deals_manage'], 'deals.edit');
+    $router->post('/{id:\d+}', ['DealController', 'update'], ['csrf', 'can:deals_manage']);
+
+    // Moving a deal is its own route because it writes a stage-history row and
+    // may close the deal, and because the board and the table both post to it.
+    $router->post('/{id:\d+}/stage', ['DealController', 'move'], ['csrf', 'can:deals_manage']);
+
+    $router->post('/{id:\d+}/delete', ['DealController', 'destroy'], ['csrf', 'can:deals_delete']);
+});
+
+$router->group('/pipelines', ['auth', 'can:view_deals'], function ($router): void {
+    $router->get('', ['PipelineController', 'index'], [], 'pipelines');
+    $router->get('/new', ['PipelineController', 'create'], ['can:deals_manage'], 'pipelines.create');
+    $router->post('', ['PipelineController', 'store'], ['csrf', 'can:deals_manage']);
+    $router->get('/{id:\d+}', ['PipelineController', 'edit'], ['can:deals_manage'], 'pipelines.edit');
+    $router->post('/{id:\d+}', ['PipelineController', 'update'], ['csrf', 'can:deals_manage']);
+    $router->post('/{id:\d+}/stages', ['PipelineController', 'saveStages'], ['csrf', 'can:deals_manage']);
+});
+
+
+// ---------------------------------------------------------------------------
+// Quotes
+//
+// `view_deals` opens the group, because a quote belongs to a deal and the two
+// are the same thing to look at. Editing needs `deals_manage`. SENDING has its
+// own permission, `quotes_send`, and only the send route carries it: that is
+// the moment a figure leaves the building with the venue's name on it, and a
+// Party Host who may price a party is not automatically the person who commits
+// it to a guest in writing.
+//
+// There is no status route that can reach `sent` — see QuoteController's
+// TRANSITIONS — so the send gate cannot be stepped around through the
+// cheaper-gated status form.
+// ---------------------------------------------------------------------------
+
+$router->group('/quotes', ['auth', 'can:view_deals'], function ($router): void {
+    $router->get('', ['QuoteController', 'index'], [], 'quotes');
+    $router->get('/new', ['QuoteController', 'create'], ['can:deals_manage'], 'quotes.create');
+    $router->post('', ['QuoteController', 'store'], ['csrf', 'can:deals_manage']);
+    $router->get('/{id:\d+}', ['QuoteController', 'show'], [], 'quotes.show');
+    $router->get('/{id:\d+}/print', ['QuoteController', 'printable'], [], 'quotes.print');
+    $router->get('/{id:\d+}/edit', ['QuoteController', 'edit'], ['can:deals_manage'], 'quotes.edit');
+    $router->post('/{id:\d+}', ['QuoteController', 'update'], ['csrf', 'can:deals_manage']);
+    $router->post('/{id:\d+}/status', ['QuoteController', 'status'], ['csrf', 'can:deals_manage']);
+    $router->post('/{id:\d+}/send', ['QuoteController', 'send'], ['csrf', 'can:quotes_send']);
+});
+
+// ---------------------------------------------------------------------------
+// Web forms
+//
+// `view_marketing` to read a form or its submissions, `forms_manage` to build
+// one: a form carries guest enquiries, so looking and editing are separate.
+// The public pages this module serves are registered with the other
+// unauthenticated endpoints above, not here.
+// ---------------------------------------------------------------------------
+
+$router->group('/forms', ['auth', 'can:view_marketing'], function ($router): void {
+    $router->get('', ['FormController', 'index'], [], 'forms');
+    $router->get('/new', ['FormController', 'create'], ['can:forms_manage'], 'forms.create');
+    $router->post('', ['FormController', 'store'], ['csrf', 'can:forms_manage']);
+
+    $router->get('/{id:\d+}/submissions', ['FormController', 'submissions'], [], 'forms.submissions');
+    $router->get(
+        '/{id:\d+}/submissions/{submission:\d+}',
+        ['FormController', 'submission'],
+        [],
+        'forms.submission'
+    );
+
+    $router->get('/{id:\d+}', ['FormController', 'edit'], ['can:forms_manage'], 'forms.edit');
+    $router->post('/{id:\d+}', ['FormController', 'update'], ['csrf', 'can:forms_manage']);
+    $router->post('/{id:\d+}/delete', ['FormController', 'destroy'], ['csrf', 'can:forms_manage']);
+});
+
+// ---------------------------------------------------------------------------
+// Tasks (replaces the /tasks placeholder)
+//
+// `view_tasks` to read, and it is SCOPED: the controller runs every read
+// through Acl::scopeCondition('view_tasks', 't.assigned_to'), so a Front Desk
+// account holding it at 'own' sees the tasks assigned to them and a manager
+// holding it at 'all' sees the venue's.
+//
+// Writing gates on `inbox_assign`. Acl::CATALOG has no `tasks_manage` key and
+// this module does not add one, so it uses the closest existing fit — "Assign
+// and close conversations" is the same capability these buttons exercise, and
+// in the seeded roles it lands on exactly the people who hand work out. See
+// TaskController::WRITE_PERMISSION, which states the trade-off.
+//
+// Completing and reopening are POSTs with their own routes rather than a
+// status field on the edit form alone, because each one stamps who finished the
+// task and when — the record the weekly scorecard is built from.
+// ---------------------------------------------------------------------------
+
+$router->group('/tasks', ['auth', 'can:view_tasks'], function ($router): void {
+    $router->get('', ['TaskController', 'index'], [], 'tasks');
+    $router->get('/new', ['TaskController', 'create'], ['can:inbox_assign'], 'tasks.create');
+    $router->post('', ['TaskController', 'store'], ['csrf', 'can:inbox_assign']);
+    $router->get('/{id:\d+}', ['TaskController', 'show'], [], 'tasks.show');
+    $router->get('/{id:\d+}/edit', ['TaskController', 'edit'], ['can:inbox_assign'], 'tasks.edit');
+    $router->post('/{id:\d+}', ['TaskController', 'update'], ['csrf', 'can:inbox_assign']);
+    $router->post('/{id:\d+}/complete', ['TaskController', 'complete'], ['csrf']);
+    $router->post('/{id:\d+}/reopen', ['TaskController', 'reopen'], ['csrf']);
+    $router->post('/{id:\d+}/comments', ['TaskController', 'storeComment'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2+ module routes are added as each module lands. The placeholders
 // below give the navigation somewhere real to point in Phase 1, and each
 // renders an honest "coming in Phase N" state rather than a broken link.
 // ---------------------------------------------------------------------------
 
-$router->get('/contacts', ['PlaceholderController', 'contacts'], ['auth', 'can:view_contacts'], 'contacts');
 $router->get('/inbox', ['PlaceholderController', 'inbox'], ['auth', 'can:view_inbox'], 'inbox');
-$router->get('/deals', ['PlaceholderController', 'deals'], ['auth', 'can:view_deals'], 'deals');
 $router->get('/bookings', ['PlaceholderController', 'bookings'], ['auth', 'can:view_bookings'], 'bookings');
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
 $router->get('/reputation', ['PlaceholderController', 'reputation'], ['auth', 'can:view_reputation'], 'reputation');
 $router->get('/memberships', ['PlaceholderController', 'memberships'], ['auth', 'can:view_memberships'], 'memberships');
-$router->get('/tasks', ['PlaceholderController', 'tasks'], ['auth', 'can:view_tasks'], 'tasks');
 $router->get('/reports', ['PlaceholderController', 'reports'], ['auth', 'can:view_reports'], 'reports');

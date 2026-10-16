@@ -433,10 +433,147 @@ Found by the tests, in the code they were written against:
 
 ---
 
+## [1.0.0-phase2] — unreleased
+
+Phase 2: the guest record and the work that happens around it. Contacts,
+households and children; a sales pipeline; quotes; web forms; and the task
+list the first three generate.
+
+### Contacts, households and children
+
+- **Contacts** with search across name, email and phone — the phone matching
+  on `phone_normalized`, so a number found in the POS as `8455550123` and one
+  a parent typed as `(845) 555-0123` reach the same guest.
+- **Households**, because this venue sells to families: a household gathers
+  the guests who share an address, and the member list and member COUNT are
+  scoped identically, so a page can never say "4 members" above a detail view
+  showing one.
+- **Children** with birth date, birth month (denormalised so the birthday
+  campaign is an indexed lookup rather than a function over every row) and
+  **allergies** — the most sensitive column in the application, and the one
+  the scoping work below exists for.
+- **Consent is not part of the contact form.** It has its own two endpoints,
+  because recording it means stamping a time, naming a source and appending to
+  an append-only log. Posting `email_consent=1` to the update endpoint does
+  nothing, and a test holds that.
+- Consent for a channel the guest cannot be reached on is refused outright:
+  email consent needs an email address, SMS consent needs a number. A
+  permission nobody can exercise still reads as a marketable guest in every
+  later count.
+
+### Pipelines, deals and quotes
+
+- **A board and a table over the same deals**, both sharing one WHERE clause
+  so a filter can never mean two things. Stage counts and value totals come
+  from a grouped aggregate, never from the rows drawn on screen.
+- **Stage history** per deal, with the time in each stage, plus response
+  deadlines from the seeded pipelines.
+- **Quotes in integer cents end to end** — line quantities to two decimal
+  places, a per-line total, a subtotal, a discount and a tax figure, with no
+  float anywhere near the arithmetic. Numbers are allocated `Q-YYYY-NNNN`
+  under a unique key, and a collision retries with a fresh number rather than
+  failing the create.
+- **A quote freezes when it is sent.** The guest is holding a copy, so
+  re-pricing one in place is refused; the way to revise is to put it back to
+  draft, which is recorded. Sending is its own permission, separate from
+  editing, and the only way out of `draft` — so a status form cannot step
+  around the send gate.
+- A printable copy, chrome removed by the stylesheet's own `@media print`
+  block, so it is the same document on screen and on paper.
+
+### Web forms
+
+- **A form builder** whose output is a public page at `/f/{slug}` — the only
+  view in the application rendered to somebody with no account, and the one
+  place where the operator's own headings and hints are treated as untrusted
+  input like anything else.
+- **A submission is kept even when it cannot become a contact**, and a contact
+  is NOT created from an enquiry with neither an email nor a phone: a row with
+  no way to reach anybody is litter, not a lead, while the answers the guest
+  typed are never lost.
+- **An enquiry is not an opt-in.** Only a ticked consent box grants anything,
+  an unticked box revokes nothing, and a tick never clears a `do_not_contact`
+  block a member of staff set deliberately. The disclosure wording AS
+  DISPLAYED goes into the evidence, because a tick with nothing behind it is
+  not a defence.
+- A honeypot no human is ever offered (hidden from assistive technology and
+  off the tab order, rather than `type="hidden"`, which the naive form-fillers
+  this catches skip), rate limits on the public route, and a spam submission
+  stored unvalidated and told nothing — showing it the real errors teaches a
+  bot how to pass.
+- UTM parameters captured onto both the submission and the new contact, which
+  is what makes source reporting possible later.
+
+### Tasks
+
+- Due dates in **venue-local time**, so "due today" means the venue's day and
+  not the server's — the tab strip's own count included.
+- **The person a task is assigned to can close it** without holding the write
+  permission. Being handed a job is permission to finish it; it is not
+  permission to close somebody else's, and a role that can see every task
+  still cannot.
+
+### Found by review of this phase
+
+Six findings on the Phase 2 pull request, all confirmed by reproducing them
+first and all fixed here. Three were the same mistake in three modules, which
+is the part worth recording.
+
+- **Scopes come apart, and the write paths were reading the wrong one.** A
+  permission's scope lives per permission in `role_permissions`, and the `can:`
+  middleware only proves a permission is held SOMEWHERE — the scope decides
+  which rows. Every seeded role happens to hold the read and write permissions
+  at the same scope, so nothing caught it: a venue building a supervisor who
+  SEES the whole guest list and EDITS only their own guests had the edit form
+  open, the update apply, notes append and consent become recordable on
+  anybody's record. `ContactController::visible()` and
+  `QuoteController::findQuote()` now take the permission whose scope should
+  decide, and each caller passes the one that governs it — so a quote on
+  somebody else's deal can no longer be edited, re-statused or **sent to the
+  guest**.
+- **A household page leaked another rep's child.** A household row carries no
+  owner of its own — the scope lives on the contacts inside it, which is why
+  the member list joins through `view_contacts` — and the children query was
+  filtered by `household_id` alone. Any rep sharing a household with another
+  rep's guest could read that child's name, birth date and allergy list from a
+  page they are allowed to open. Children are now read through their guardian,
+  and a child with no guardian at all is still shown (the column is nullable;
+  an inner join would have hidden those from everyone, including the owner).
+- **The same leak by another door**, found while fixing that one and not
+  reported by the review: a contact's page listed every other member of its
+  household with no scope at all, while the household page scoped the
+  identical list.
+- **Every search was a 500.** `DB::connect()` disables emulated prepares, and
+  the native driver refuses a named parameter used more than once — it answers
+  `HY093`. Both the deal search (three occurrences of `:q`) and the task search
+  (two) did exactly that, so `?q=` was a server error with no message anywhere
+  in the UI. No test covered it because **no test had ever searched with a
+  term**; the list tests all loaded the page with no filter, so the clause was
+  never built and never bound. Both are now one name per occurrence, and both
+  searches are tested — by the deal's and task's own row LINK rather than its
+  title, because the filter bar echoes the search term back into its own input
+  and a title assertion passes against an empty list.
+- **A web form could record consent for a channel with no address behind it.**
+  A form may carry an "email me offers" box and no email field; the admin path
+  refuses that with "Add an email address before recording email consent." and
+  the public path did not. It now reads the contact's reachability inside the
+  transaction, after the submission's own answers have been filled in — so a
+  number given in the same submission still grants SMS consent, while a tick
+  with nothing behind it records nothing and the enquiry is still kept.
+
+The suite grew from 418 to **610 tests**. Each of the six fixes was
+mutation-checked by restoring the pre-fix code verbatim and confirming the new
+test fails: the two search bugs come back as HTTP 500, the two leaks come back
+as a child's and a sibling's name on a page that should not carry them, and the
+consent bug comes back as `email_consent = 1` on a contact with no email
+address.
+
+---
+
 ## Unreleased — next
 
-Phase 2 is contacts, households and children: the module every other one
-reads from. See `docs/SPEC.md` §13 for the full plan, and §14 for the fifteen
-questions that need the venue's answers before the work that depends on them
-can be finished — the CenterEdge reporting credentials and the real party
-prices being the two that block the most.
+Phase 3 is bookings: availability, run sheets, waivers and check-in. See
+`docs/SPEC.md` §13 for the full plan, and §14 for the fifteen questions that
+need the venue's answers before the work that depends on them can be finished —
+the CenterEdge reporting credentials and the real party prices being the two
+that block the most.
