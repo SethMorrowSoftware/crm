@@ -2127,6 +2127,11 @@ Harness::test(
          * and 27 after it — which is a test that passes or fails by the clock
          * on the wall, and it did exactly that (Expected 28, got 27) once the
          * day had got on a bit. The contract is the date.
+         *
+         * UTC-CORRECT: the `strtotime()` below reads an ABSOLUTE instant —
+         * `$party` at noon UTC — not a relative one, so no clock enters this
+         * at all. The static gate cannot tell those two apart and flags any
+         * `strtotime`, which is why this says so out loud.
          */
         $expected = gmdate(
             'Y-m-d',
