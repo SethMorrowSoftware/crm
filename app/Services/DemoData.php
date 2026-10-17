@@ -90,18 +90,35 @@ final class DemoData
      * the pipeline → quote → deposit" on the example data, so a quote written
      * on an example enquiry is the expected case rather than a corner of one.
      *
-     * Verified against `information_schema` on the real schema: `quotes.deal_id`,
-     * `contact_notes.contact_id`, `conversations.contact_id` and
-     * `campaign_recipients.contact_id` are all ON DELETE CASCADE.
+     * Every ON DELETE CASCADE foreign key into a table this class deletes
+     * from, read from `information_schema`, where the child row is something
+     * a person makes. Left out on purpose: plumbing nobody would miss with
+     * the guest (automation runs, consent log, stage history, a booking's
+     * guest/addon/resource rows) and rows only the seed writes.
      *
-     * @var array<string,array{0:string,1:string,2:string,3:string}>
-     *      key => [table, foreign key column, the tagged type it hangs off, plural label]
+     * The child's own entity type, where it has one, matters: the seed tags
+     * the children, visits and activities it creates, and only the UNTAGGED
+     * ones are the venue's. `taggables` is polymorphic, so that exclusion has
+     * to name the type, or a tagged booking with id 1 would hide a quote with
+     * id 1.
+     *
+     * @var array<string,array{0:string,1:string,2:string,3:string,4:?string,5:?string}>
+     *      key => [table, foreign key column, the tagged type it hangs off,
+     *              plural label, the child's own entity type, extra SQL on `r`]
      */
     private const CASCADE_LOSSES = [
-        'quotes'        => ['quotes', 'deal_id', 'deal', 'quotes written on an example enquiry'],
-        'notes'         => ['contact_notes', 'contact_id', 'contact', 'notes written on an example guest'],
-        'conversations' => ['conversations', 'contact_id', 'contact', 'inbox threads with an example guest'],
-        'deliveries'    => ['campaign_recipients', 'contact_id', 'contact', 'campaign deliveries to an example guest'],
+        'quotes'        => ['quotes', 'deal_id', 'deal', 'quotes written on an example enquiry', null, null],
+        'payments'      => ['booking_payments', 'booking_id', 'booking', 'payments recorded on an example booking',
+                            null, "COALESCE(r.reference, '') NOT LIKE 'DEMO-%'"],
+        'notes'         => ['contact_notes', 'contact_id', 'contact', 'notes written on an example guest', null, null],
+        'conversations' => ['conversations', 'contact_id', 'contact', 'inbox threads with an example guest', null, null],
+        'deliveries'    => ['campaign_recipients', 'contact_id', 'contact', 'campaign deliveries to an example guest', null, null],
+        'visits'        => ['visits', 'contact_id', 'contact', 'visits recorded for an example guest', 'visit', null],
+        'activities'    => ['activities', 'contact_id', 'contact', 'activities logged on an example guest', 'activity', null],
+        'children'      => ['children', 'contact_id', 'contact', 'children added to an example guest', 'child', null],
+        'members'       => ['membership_members', 'contact_id', 'contact', 'membership places held by an example guest', null, null],
+        'referrals'     => ['referrals', 'referrer_contact_id', 'contact', 'referrals made by an example guest', null, null],
+        'comments'      => ['task_comments', 'task_id', 'task', 'comments on an example task', null, null],
     ];
 
     /**
@@ -270,9 +287,8 @@ final class DemoData
     /**
      * Rows the venue wrote that will be DELETED with the seed's, by cascade.
      *
-     * Counted only where the row is not itself the seed's: the seed writes no
-     * quotes, notes or conversations today, but a count that silently included
-     * them would overstate the loss the moment it did.
+     * Counted only where the row is not itself the seed's, which is what the
+     * child's entity type and the extra condition in `CASCADE_LOSSES` are for.
      *
      * @return array<string,int> key => count, zero entries dropped
      */
@@ -280,12 +296,27 @@ final class DemoData
     {
         $losses = [];
 
-        foreach (self::CASCADE_LOSSES as $key => [$table, $column, $parentType]) {
+        foreach (self::CASCADE_LOSSES as $key => [$table, $column, $parentType, , $childType, $extra]) {
             // Joined to the parent's own table so the "this really is the
             // seed's" mark can be applied: a note on a REAL contact somebody
             // tagged `demo-data` is not about to be deleted, because that
             // contact is not about to be deleted either.
             $parentTable = self::ENTITIES[$parentType];
+            $where       = ['1 = 1'];
+            $params      = ['parent' => $parentType, 'tag' => $tagId];
+
+            if ($childType !== null) {
+                $where[] = 'NOT EXISTS (
+                         SELECT 1 FROM {taggables} rt
+                          WHERE rt.entity_id = r.id AND rt.entity_type = :child AND rt.tag_id = :tag2
+                     )';
+                $params['child'] = $childType;
+                $params['tag2']  = $tagId;
+            }
+
+            if ($extra !== null) {
+                $where[] = $extra;
+            }
 
             try {
                 $count = (int) DB::value(
@@ -293,11 +324,8 @@ final class DemoData
                       JOIN {' . $parentTable . '} p ON p.id = r.' . $column . '
                       JOIN {taggables} pt ON pt.entity_id = p.id
                            AND pt.entity_type = :parent AND pt.tag_id = :tag
-                     WHERE NOT EXISTS (
-                         SELECT 1 FROM {taggables} rt
-                          WHERE rt.entity_id = r.id AND rt.tag_id = :tag2
-                     )' . self::seedMark($parentType, 'p', ' AND '),
-                    ['parent' => $parentType, 'tag' => $tagId, 'tag2' => $tagId]
+                     WHERE ' . implode(' AND ', $where) . self::seedMark($parentType, 'p', ' AND '),
+                    $params
                 );
             } catch (Throwable) {
                 // A table this schema version does not have is not a loss.

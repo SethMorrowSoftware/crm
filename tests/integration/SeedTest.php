@@ -775,6 +775,35 @@ Harness::test('a campaign delivery to an example guest is named as deleted, not 
     test_reset_transactional_data();
 });
 
+Harness::test('a visit the venue recorded for an example guest is named, the seed\'s own are not', function (): void {
+    // `visits.contact_id` is ON DELETE CASCADE. The seed's visits are tagged
+    // and are part of the ordinary counts; one recorded during the trial is
+    // the venue's and goes with the guest, so it must be named first.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    Assert::same(0, App\Services\DemoData::summary()['cascade_total'], 'the seed alone loses nothing of yours');
+
+    $contactId = (int) DB::value("SELECT id FROM {contacts} WHERE source = 'demo' LIMIT 1");
+    $now       = gmdate('Y-m-d H:i:s');
+
+    DB::insert('visits', [
+        'contact_id' => $contactId,
+        // A fixed far-off day, so it cannot collide with a seeded visit on
+        // the one-visit-per-day key.
+        'visit_date' => '2099-01-01',
+        'source'     => 'manual',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    $summary = App\Services\DemoData::summary();
+
+    Assert::same(1, $summary['cascade']['visits'] ?? 0, 'the trial visit is counted, the seed\'s are not');
+
+    test_reset_transactional_data();
+});
+
 Harness::test('and it counts an orphan that is not a booking or a deal', function (): void {
     // A membership sold to an example guest came back active, paid for and
     // owned by nobody, while the page named only bookings and deals.
