@@ -304,11 +304,13 @@ final class ApiController extends Controller
             return $this->forbidden($definition['write']);
         }
 
-        $input = $request->json();
+        $notAnObject = $this->bodyNotAnObject($request);
 
-        if (!is_array($input)) {
-            return Response::json(['error' => 'Send a JSON object.'], 400);
+        if ($notAnObject !== null) {
+            return $notAnObject;
         }
+
+        $input = $request->json();
 
         ['data' => $data, 'refused' => $refused, 'invalid' => $invalid] = ApiResource::writable($input, $definition);
 
@@ -386,11 +388,13 @@ final class ApiController extends Controller
             return $this->notFoundJson('No ' . rtrim($name, 's') . ' with that id.');
         }
 
-        $input = $request->json();
+        $notAnObject = $this->bodyNotAnObject($request);
 
-        if (!is_array($input)) {
-            return Response::json(['error' => 'Send a JSON object.'], 400);
+        if ($notAnObject !== null) {
+            return $notAnObject;
         }
+
+        $input = $request->json();
 
         ['data' => $data, 'refused' => $refused, 'invalid' => $invalid] = ApiResource::writable($input, $definition);
 
@@ -662,11 +666,13 @@ final class ApiController extends Controller
             return $this->forbidden('contacts_manage');
         }
 
-        $input = $request->json();
+        $notAnObject = $this->bodyNotAnObject($request);
 
-        if (!is_array($input)) {
-            return Response::json(['error' => 'Send a JSON object.'], 400);
+        if ($notAnObject !== null) {
+            return $notAnObject;
         }
+
+        $input = $request->json();
 
         /*
          * The same id rule the writable fields get, through the same helper —
@@ -816,11 +822,13 @@ final class ApiController extends Controller
             return $this->notFoundJson('No deal with that id.');
         }
 
-        $input = $request->json();
+        $notAnObject = $this->bodyNotAnObject($request);
 
-        if (!is_array($input)) {
-            return Response::json(['error' => 'Send a JSON object.'], 400);
+        if ($notAnObject !== null) {
+            return $notAnObject;
         }
+
+        $input = $request->json();
 
         /*
          * By NAME or by id: an integration written against this venue's board
@@ -912,11 +920,13 @@ final class ApiController extends Controller
             return $this->forbidden('contacts_manage');
         }
 
-        $input = $request->json();
+        $notAnObject = $this->bodyNotAnObject($request);
 
-        if (!is_array($input)) {
-            return Response::json(['error' => 'Send a JSON object.'], 400);
+        if ($notAnObject !== null) {
+            return $notAnObject;
         }
+
+        $input = $request->json();
 
         $validator = Validator::make($input, [
             'channel'    => 'required|in:email,sms',
@@ -1311,6 +1321,43 @@ final class ApiController extends Controller
     private function notFoundJson(string $message): Response
     {
         return Response::json(['error' => $message], 404);
+    }
+
+    /**
+     * A body that could never carry fields, named for what it actually is.
+     *
+     * Every write here reads `$request->json()`, which is typed `: array` and
+     * so hands a list, a scalar and unparseable text over as `[]`. That made
+     * the `if (!is_array($input))` guard this replaces unreachable — MEASURED:
+     * a POST of `[1,2,3]` to the stage endpoint was answered "Name the stage
+     * to move to", which describes a problem the caller does not have. The
+     * body is the problem, so the body is what the error names.
+     *
+     * AN ABSENT BODY IS NOT REFUSED HERE. "Nothing to create — send at least
+     * one field", "Nothing to change" and "Name the stage to move to" already
+     * say precisely what is missing, and they say it about the request the
+     * caller actually made.
+     *
+     * A form-encoded body reads as 'invalid', which is what it is: this API
+     * takes JSON bodies and nothing else, and "not valid JSON" is a truer
+     * answer than telling a caller who sent three fields that they sent none.
+     */
+    private function bodyNotAnObject(Request $request): ?Response
+    {
+        $problem = match ($request->jsonShape()) {
+            'list'    => 'this body is a JSON list, which names no fields',
+            'scalar'  => 'this body is a single JSON value, which names no fields',
+            'invalid' => 'this body is not valid JSON',
+            default   => null,
+        };
+
+        if ($problem === null) {
+            return null;
+        }
+
+        return Response::json([
+            'error' => 'Send a JSON object: ' . $problem . '.',
+        ], 400);
     }
 
     private function forbidden(?string $permission): Response

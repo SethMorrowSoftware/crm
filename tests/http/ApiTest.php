@@ -137,6 +137,11 @@ function ha_token(int $userId, string $name, array $abilities = ['*'], ?string $
  * is NOT a JSON object — a bare string, a number, a list — which is exactly
  * the shape a handler must refuse rather than cast.
  *
+ * With `$raw` the body goes out byte for byte instead of being encoded,
+ * which is the only way to send the bodies json_encode() cannot express from
+ * PHP's own types: `{}` (an empty assoc array encodes as `[]`), `null` (the
+ * encoder's own "no body" value), and bytes that are not JSON at all.
+ *
  * @return array{status:int,body:string,json:array<mixed>,headers:string}
  */
 function ha_call(
@@ -144,7 +149,8 @@ function ha_call(
     string $path,
     ?string $token,
     array|string|int|null $body = null,
-    array $extraHeaders = []
+    array $extraHeaders = [],
+    bool $raw = false
 ): array {
     $base = getenv('CC_TEST_BASE_URL') ?: '';
 
@@ -169,7 +175,7 @@ function ha_call(
     ];
 
     if ($body !== null) {
-        $options[CURLOPT_POSTFIELDS] = json_encode($body, JSON_THROW_ON_ERROR);
+        $options[CURLOPT_POSTFIELDS] = $raw ? (string) $body : json_encode($body, JSON_THROW_ON_ERROR);
         $options[CURLOPT_HTTPHEADER] = array_merge($headers, ['Content-Type: application/json']);
     }
 
@@ -1286,46 +1292,95 @@ Harness::test('MOVING A DEAL TO ANOTHER BOARD TAKES ITS STAGE WITH IT', function
     ha_clear();
 });
 
-Harness::test('a body that is not an object is refused with 422, and never leaks a path', function () use ($full): void {
+Harness::test('a body that is not an object is refused with 400, and never leaks a path', function () use ($full): void {
     ha_clear();
 
     $created = ha_call('POST', '/api/v1/deals', $full, ['title' => 'HA body walk', 'source' => 'hatest']);
     $id      = (int) $created['json']['data']['id'];
 
     /*
-     * 422 EXACTLY, not "400 or 422" — which is what this asserted until
-     * review pointed out the test could not fail for the reason it claimed.
+     * 400 EXACTLY, and about the BODY rather than a field.
      *
      * `Request::json()` is typed `: array` and returns `[]` for a body that
-     * is a list, a scalar, or not JSON at all, so every write handler's
-     * `if (!is_array($input)) return 400` branch is unreachable: the request
-     * arrives looking like an empty object and is refused by whatever field
-     * check comes next. Measured — a list, a string, a number, `null`,
-     * `true`, `{}`, unparseable text, an empty body and a 2MB body all come
-     * back 422.
+     * is a list, a scalar, or not JSON at all, which made every write
+     * handler's `if (!is_array($input)) return 400` branch unreachable: the
+     * request arrived looking like an empty object and was refused by
+     * whatever field check came next. Measured before the fix — a list, a
+     * string, a number, `null`, `true`, unparseable text and a 2MB body all
+     * came back 422, so a caller who sent `[1,2,3]` was told "Name the stage
+     * to move to", about a field a list cannot carry.
      *
-     * That is an acceptable answer but not a precise one, so it is written
-     * down here rather than papered over: a caller who sent `[1,2,3]`
-     * deserves "send a JSON object", not "name the stage".
+     * `Request::jsonShape()` reads the body itself, and these are the shapes
+     * that can never be a set of fields.
      */
     foreach ([
-        'a list body'    => [1, 2, 3],
-        'a string body'  => 'Deposit Paid',
-        'a number body'  => 7,
-        'an empty body'  => [],
+        'a list body'        => '[1, 2, 3]',
+        'an empty list body' => '[]',
+        'a string body'      => '"Deposit Paid"',
+        'a number body'      => '7',
+        'a null body'        => 'null',
+        'a true body'        => 'true',
+        'unparseable text'   => 'Deposit Paid, please',
+        'a 2MB string body'  => '"' . str_repeat('a', 2_000_000) . '"',
     ] as $label => $body) {
-        $response = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, $body);
+        $response = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, $body, [], true);
 
-        Assert::same(422, $response['status'], $label);
+        Assert::same(400, $response['status'], $label);
+        Assert::contains('JSON object', (string) ($response['json']['error'] ?? ''), $label . ' names the body');
         Assert::notContains('/home/', $response['body'], $label . ' must not carry a path');
         Assert::notContains('Stack trace', $response['body'], $label);
     }
+
+    /*
+     * A body that COULD carry fields is not this error, whether or not it
+     * actually carries any: the field checks answer those, and their
+     * messages already say precisely what is missing.
+     */
+    foreach (['an empty object' => '{}', 'an object with a flag for a stage' => '{"stage":true}'] as $label => $body) {
+        $object = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full, $body, [], true);
+
+        Assert::same(422, $object['status'], $label);
+        Assert::contains('stage', strtolower((string) ($object['json']['error'] ?? '')), $label . ' names the field');
+    }
+
+    $absent = ha_call('POST', '/api/v1/deals/' . $id . '/stage', $full);
+
+    Assert::same(422, $absent['status'], 'no body at all is a missing field, not a malformed one');
+    Assert::contains('stage', strtolower((string) ($absent['json']['error'] ?? '')), 'and it names the field');
 
     // And the deal did not move for any of them.
     Assert::same(
         1,
         (int) DB::value('SELECT COUNT(*) FROM {deal_stage_history} WHERE deal_id = :d', ['d' => $id]),
         'only the opening history row'
+    );
+
+    /*
+     * EVERY write, not just this one: the dead guard sat in five handlers,
+     * so a list body has to be read the same way by all five.
+     */
+    $contact = (int) ha_call('POST', '/api/v1/contacts', $full, [
+        'first_name' => 'Body',
+        'last_name'  => 'Walk',
+        'source'     => 'hatest',
+    ])['json']['data']['id'];
+
+    foreach ([
+        'store'   => ['POST', '/api/v1/contacts'],
+        'update'  => ['PATCH', '/api/v1/contacts/' . $contact],
+        'visit'   => ['POST', '/api/v1/visits'],
+        'consent' => ['POST', '/api/v1/contacts/' . $contact . '/consent'],
+    ] as $handler => [$method, $path]) {
+        $response = ha_call($method, $path, $full, '[1, 2, 3]', [], true);
+
+        Assert::same(400, $response['status'], $handler . ' refuses a list body');
+        Assert::contains('JSON object', (string) ($response['json']['error'] ?? ''), $handler . ' names the body');
+    }
+
+    Assert::same(
+        0,
+        (int) DB::value('SELECT COUNT(*) FROM {visits} WHERE contact_id = :c', ['c' => $contact]),
+        'and none of them wrote anything'
     );
 
     ha_clear();

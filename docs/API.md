@@ -451,10 +451,17 @@ whole reason the list exists.
 
 ### Errors and limits
 
-`401` no or bad token (always JSON, never a redirect to a login page), `403`
-the token lacks a permission (and says which), `404` unknown resource or a
-record outside the caller's scope, `405` write to a read-only resource, `422`
-validation or a refused field, `429` rate limited.
+`400` a body that could not carry fields at all — a JSON list, a bare value,
+or bytes that are not JSON — named for what it actually was, `401` no or bad
+token (always JSON, never a redirect to a login page), `403` the token lacks a
+permission (and says which), `404` unknown resource or a record outside the
+caller's scope, `405` write to a read-only resource, `422` validation or a
+refused field, `429` rate limited.
+
+**The body shape is answered before the fields are.** A write whose body is a
+list, a number, a string or junk is a 400 about the body; a body that *is* a
+JSON object, empty or not, gets the field-level answer instead — "Nothing to
+create — send at least one field" means what it says.
 
 **A record outside your scope is a 404, not a 403.** A 403 confirms the record
 exists, which is how an id space gets walked.

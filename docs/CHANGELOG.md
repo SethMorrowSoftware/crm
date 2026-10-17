@@ -1040,6 +1040,18 @@ reachable by accident — which is exactly why they needed finding.
   string or an integer is accepted now, anything else is a 422 that says so,
   and the move is wrapped like every other write so no input can produce a
   fatal.
+- **A body that is not an object is now refused for being one.** Every write
+  read the body through a getter typed `: array`, which hands a list, a bare
+  value and unparseable text over as `[]` — so the guard each of the five
+  writes carried for exactly this case could never run, and the request fell
+  through to the next field check. Measured: a POST of `[1,2,3]` to the stage
+  endpoint was answered "Name the stage to move to", describing a field a
+  list cannot carry, and a form-encoded POST was told it had sent no fields
+  when it had sent three. The body is read for its shape now and a 400 names
+  it — a JSON list, a single value, or not JSON at all. A body that *is* an
+  object, including an empty one, and a request with no body at all are
+  unchanged: "Nothing to create — send at least one field" was already the
+  right answer to those, so it is still the one given.
 - **Imported money is parsed by integer arithmetic**, not through a float.
   The reported half-cent loss did not reproduce — PHP's `round()` compensates,
   measured over 3,000,001 values — but the correctness of a venue's imported

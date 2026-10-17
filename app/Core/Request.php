@@ -47,6 +47,8 @@ final class Request
     /** @var array<string,mixed>|null */
     private ?array $jsonCache = null;
 
+    private ?string $jsonShapeCache = null;
+
     public function __construct()
     {
         $this->query   = $_GET;
@@ -318,6 +320,52 @@ final class Request
         $decoded = json_decode($this->rawBody(), true);
 
         return $this->jsonCache = is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * What the body ACTUALLY is: 'object', 'list', 'scalar', 'empty' or
+     * 'invalid'.
+     *
+     * `json()` cannot answer this and is not meant to: it is typed `: array`
+     * because every caller wants a set of fields, so a list, a scalar and
+     * unparseable text all flatten into `[]` — indistinguishable from `{}`.
+     * A handler reading only that cannot tell "you sent nothing" from "you
+     * sent [1,2,3]", and so answers the second with a message about a field
+     * the caller never had any way to send. This is the missing half, kept
+     * separate so `json()`'s contract does not change.
+     *
+     * Decoded WITHOUT the assoc flag on purpose: `json_decode('{}', true)`
+     * and `json_decode('[]', true)` are both `[]`, and only leaving objects
+     * as objects tells the empty object from the empty list.
+     *
+     * Describes the bytes, not the Content-Type header — `json()` returns
+     * `[]` for a body that is not labelled `application/json`, so a JSON
+     * object sent with the wrong label still reads as 'object' here and is
+     * then refused by whatever field check comes next, exactly as before.
+     */
+    public function jsonShape(): string
+    {
+        if ($this->jsonShapeCache !== null) {
+            return $this->jsonShapeCache;
+        }
+
+        if (trim($this->rawBody()) === '') {
+            return $this->jsonShapeCache = 'empty';
+        }
+
+        $decoded = json_decode($this->rawBody());
+
+        // `json_decode('null')` is a successful decode that returns null, so
+        // the error code is what separates a null body from unparseable text.
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return $this->jsonShapeCache = 'invalid';
+        }
+
+        if ($decoded instanceof \stdClass) {
+            return $this->jsonShapeCache = 'object';
+        }
+
+        return $this->jsonShapeCache = is_array($decoded) ? 'list' : 'scalar';
     }
 
     /** Does the client want JSON back? */
