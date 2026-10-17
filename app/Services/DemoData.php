@@ -302,11 +302,11 @@ final class DemoData
             // tagged `demo-data` is not about to be deleted, because that
             // contact is not about to be deleted either.
             $parentTable = self::ENTITIES[$parentType];
-            $where       = ['1 = 1'];
+            $conditions  = ['1 = 1'];
             $params      = ['parent' => $parentType, 'tag' => $tagId];
 
             if ($childType !== null) {
-                $where[] = 'NOT EXISTS (
+                $conditions[] = 'NOT EXISTS (
                          SELECT 1 FROM {taggables} rt
                           WHERE rt.entity_id = r.id AND rt.entity_type = :child AND rt.tag_id = :tag2
                      )';
@@ -315,7 +315,7 @@ final class DemoData
             }
 
             if ($extra !== null) {
-                $where[] = $extra;
+                $conditions[] = $extra;
             }
 
             try {
@@ -324,7 +324,7 @@ final class DemoData
                       JOIN {' . $parentTable . '} p ON p.id = r.' . $column . '
                       JOIN {taggables} pt ON pt.entity_id = p.id
                            AND pt.entity_type = :parent AND pt.tag_id = :tag
-                     WHERE ' . implode(' AND ', $where) . self::seedMark($parentType, 'p', ' AND '),
+                     WHERE ' . implode(' AND ', $conditions) . self::seedMark($parentType, 'p', ' AND '),
                     $params
                 );
             } catch (Throwable) {
