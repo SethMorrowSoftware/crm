@@ -1371,6 +1371,155 @@ final class Mailer
     }
 
     /**
+     * The DNS records a venue should publish, FOR THE WAY THIS INSTALL SENDS.
+     *
+     * Pure: it takes the driver, the SMTP host and the domain, so the advice
+     * can be tested without a database.
+     *
+     * **THIS EXISTS BECAUSE THE OLD VERSION WAS DANGEROUS.** It printed
+     * `v=spf1 +a +mx ~all` for the domain unconditionally — the record for a
+     * venue whose mail leaves this web server. Pasted onto a domain whose
+     * mail lives at Microsoft 365, Google Workspace or any other provider, it
+     * REPLACES that provider's SPF record (a domain may publish only one) and
+     * every message the company sends starts failing authentication: not the
+     * CRM's mail, all of it. The Castle's own install is exactly that case —
+     * Microsoft 365 for mail, DNS at Cloudflare — so the instruction would
+     * have taken down a venue's email on the day they deployed.
+     *
+     * The record depends entirely on WHO sends. If this install hands mail to
+     * a provider over SMTP, that provider's own SPF is what must be
+     * authorised and this server must not be in the record at all.
+     *
+     * @return array{records:list<array{type:string,name:string,value:string,note:string}>,warning:string,sender:string}
+     */
+    public static function dnsAdvice(string $driver, string $smtpHost, string $domain): array
+    {
+        $domain = strtolower(trim($domain)) ?: 'your-domain.com';
+        $host   = strtolower(trim($smtpHost));
+
+        /*
+         * The providers worth naming: between them they carry most small
+         * venues' mail, and each publishes a documented include. An unknown
+         * host is NOT guessed at — it is said to be unknown, with where to
+         * look, because a wrong include is the same breakage as a wrong
+         * record.
+         */
+        $known = [
+            'office365'   => ['match' => ['smtp.office365.com', 'smtp-mail.outlook.com', 'outlook.office365.com'],
+                              'name'  => 'Microsoft 365',
+                              'spf'   => 'include:spf.protection.outlook.com',
+                              'dkim'  => 'Microsoft publishes two CNAMEs, selector1._domainkey and '
+                                       . 'selector2._domainkey. Turn DKIM on in the Microsoft 365 Defender '
+                                       . 'portal and it tells you both targets.'],
+            'google'      => ['match' => ['smtp.gmail.com', 'smtp-relay.gmail.com'],
+                              'name'  => 'Google Workspace',
+                              'spf'   => 'include:_spf.google.com',
+                              'dkim'  => 'Generate a DKIM key in the Google Admin console and publish the '
+                                       . 'TXT record it gives you.'],
+            'sendgrid'    => ['match' => ['smtp.sendgrid.net'], 'name' => 'SendGrid',
+                              'spf'   => 'include:sendgrid.net',
+                              'dkim'  => 'SendGrid gives you CNAMEs under its own domain authentication setup.'],
+            'postmark'    => ['match' => ['smtp.postmarkapp.com'], 'name' => 'Postmark',
+                              'spf'   => 'include:spf.mtasv.net',
+                              'dkim'  => 'Postmark gives you a DKIM TXT record per sending domain.'],
+            'mailgun'     => ['match' => ['smtp.mailgun.org'], 'name' => 'Mailgun',
+                              'spf'   => 'include:mailgun.org',
+                              'dkim'  => 'Mailgun gives you a DKIM TXT record per sending domain.'],
+            'ses'         => ['match' => ['email-smtp.'], 'name' => 'Amazon SES',
+                              'spf'   => 'include:amazonses.com',
+                              'dkim'  => 'SES gives you three CNAMEs when you verify the domain.'],
+        ];
+
+        $provider = null;
+
+        foreach ($known as $candidate) {
+            foreach ($candidate['match'] as $needle) {
+                if ($host !== '' && str_contains($host, $needle)) {
+                    $provider = $candidate;
+                    break 2;
+                }
+            }
+        }
+
+        $dmarc = [
+            'type'  => 'TXT',
+            'name'  => '_dmarc.' . $domain,
+            'value' => 'v=DMARC1; p=none; rua=mailto:postmaster@' . $domain,
+            'note'  => 'Report-only to begin with, so nothing is rejected while you watch. '
+                . 'Tighten to p=quarantine once the reports look clean. Add this only if '
+                . 'you have no _dmarc record already — like SPF, there is one per domain.',
+        ];
+
+        if ($driver === 'smtp' && $provider !== null) {
+            return [
+                'sender'  => $provider['name'],
+                'warning' => '',
+                'records' => [
+                    [
+                        'type'  => 'TXT',
+                        'name'  => $domain,
+                        'value' => 'v=spf1 ' . $provider['spf'] . ' -all',
+                        'note'  => 'Your mail leaves ' . $provider['name'] . ', so ' . $provider['name']
+                            . ' is what SPF must authorise — NOT this web server. If you already send '
+                            . 'company mail through ' . $provider['name'] . ' this record is almost '
+                            . 'certainly published already: check before you touch it. A domain may '
+                            . 'publish only ONE SPF record, so if one exists, ADD a term to it rather '
+                            . 'than adding a second record or replacing it.',
+                    ],
+                    [
+                        'type'  => 'CNAME or TXT',
+                        'name'  => 'see the note',
+                        'value' => '(' . $provider['name'] . ' generates these)',
+                        'note'  => $provider['dkim'],
+                    ],
+                    $dmarc,
+                ],
+            ];
+        }
+
+        if ($driver === 'smtp') {
+            return [
+                'sender'  => $host === '' ? 'an SMTP server you have not named yet' : $host,
+                'warning' => $host === ''
+                    ? 'Set the SMTP host first and this page will tell you which records to publish.'
+                    : 'This install hands mail to ' . $host . ', which is not a provider this page '
+                        . 'recognises. Look up the SPF term that host publishes — usually an '
+                        . '"include:" in its own documentation — and authorise THAT. Do not '
+                        . 'authorise this web server: it is not what sends.',
+                'records' => [$dmarc],
+            ];
+        }
+
+        // Only here does the local server really send, which is the one case
+        // the old unconditional advice was right about.
+        return [
+            'sender'  => 'this web server',
+            'warning' => '',
+            'records' => [
+                [
+                    'type'  => 'TXT',
+                    'name'  => $domain,
+                    'value' => 'v=spf1 +a +mx ~all',
+                    'note'  => 'This install sends through the server it runs on, so the server is '
+                        . 'what SPF authorises. A domain may publish only ONE SPF record: if one '
+                        . 'exists, ADD to it — two records break both, and replacing a provider\'s '
+                        . 'record breaks all of that provider\'s mail, not just this.',
+                ],
+                [
+                    'type'  => 'TXT',
+                    'name'  => 'default._domainkey.' . $domain,
+                    'value' => '(generated for you)',
+                    'note'  => 'If your DNS is hosted at the same cPanel, Email Deliverability → '
+                        . 'Repair generates and installs DKIM for you. If your DNS is somewhere '
+                        . 'else — Cloudflare, a registrar — Repair cannot write there, so copy the '
+                        . 'record it shows you into whichever service holds the zone.',
+                ],
+                $dmarc,
+            ],
+        ];
+    }
+
+    /**
      * The host part of a configured URL or a Host header, or '' if it is not
      * one. Deliberately strict: a host is letters, digits, dots, hyphens and
      * an optional port, so a header carrying a path, a credential, a space or
