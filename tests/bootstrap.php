@@ -167,6 +167,34 @@ function test_drop_all(): void
  *
  * @param array<string,mixed> $overrides
  */
+/**
+ * A date N days ago IN THE VENUE'S OWN CALENDAR, which is the frame the
+ * application reasons in.
+ *
+ * Use this instead of `gmdate('Y-m-d', time() - N * 86400)` whenever a test
+ * builds a date the code will compare against a venue-local day — a
+ * membership freeze, a report window, a rollup bucket. The two frames agree
+ * for twenty hours a day and disagree for four, so a test built on UTC passes
+ * all afternoon and fails between 8pm and midnight Eastern. Three tests were
+ * written that way and all three broke the moment the clock crossed midnight
+ * UTC, having passed every run before it:
+ *
+ *   - "FREEZING GIVES THE TIME BACK" expected 10 days back and got 9
+ *   - "freezing and unfreezing move the end date" lost its "moved on by 7 days"
+ *   - "the rollup agrees with the report it summarises" read 25000 against 96000
+ *
+ * None of them was a bug in the application. All three were a test telling the
+ * truth about the wrong calendar.
+ */
+function test_local_day(int $daysAgo = 0, string $suffix = ''): string
+{
+    $day = (new DateTimeImmutable('now', venue_tz()))
+        ->modify(($daysAgo === 0 ? '' : '-' . $daysAgo . ' days') ?: 'now')
+        ->format('Y-m-d');
+
+    return $suffix === '' ? $day : $day . ' ' . $suffix;
+}
+
 function test_make_user(string $roleSlug = 'owner', array $overrides = []): int
 {
     $roleId = (int) DB::value('SELECT id FROM {roles} WHERE slug = :s', ['s' => $roleSlug]);
