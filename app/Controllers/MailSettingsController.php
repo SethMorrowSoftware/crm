@@ -33,7 +33,7 @@ final class MailSettingsController extends Controller
             'hasPassword' => Settings::get('mail.smtp_password') !== null
                 && Settings::get('mail.smtp_password') !== '',
             'safeMode'   => Settings::safeMode(),
-            'dns'        => $this->dnsRecords(),
+            'dns'        => $this->dnsAdvice(),
             'phpMailAvailable' => function_exists('mail'),
         ]);
     }
@@ -146,36 +146,25 @@ final class MailSettingsController extends Controller
     /**
      * The DNS records that stop this venue's mail being filtered as spam.
      *
-     * @return list<array{type:string,name:string,value:string,note:string}>
+     * The advice itself lives in `Mailer::dnsAdvice()`, which is pure and
+     * tested: WHICH records are right depends entirely on who actually sends
+     * the mail, and this page used to answer that question wrongly in the
+     * most damaging direction. See the note on that method.
+     *
+     * @return array{records:list<array{type:string,name:string,value:string,note:string}>,warning:string,sender:string}
      */
-    private function dnsRecords(): array
+    private function dnsAdvice(): array
     {
         $from = (string) Settings::get('mail.from_email', '');
+
         $domain = $from !== '' && str_contains($from, '@')
             ? explode('@', $from)[1]
             : (string) preg_replace('/^www\./', '', explode(':', request()->host())[0]);
 
-        return [
-            [
-                'type'  => 'TXT',
-                'name'  => $domain,
-                'value' => 'v=spf1 +a +mx ~all',
-                'note'  => 'Authorises this server to send mail for the domain. If an SPF record '
-                    . 'already exists, ADD to it — two SPF records break both.',
-            ],
-            [
-                'type'  => 'TXT',
-                'name'  => '_dmarc.' . $domain,
-                'value' => 'v=DMARC1; p=none; rua=mailto:postmaster@' . $domain,
-                'note'  => 'Report-only to begin with. Tighten to p=quarantine once the reports look clean.',
-            ],
-            [
-                'type'  => 'TXT',
-                'name'  => 'default._domainkey.' . $domain,
-                'value' => '(generated for you)',
-                'note'  => 'In cPanel open Email Deliverability and click Repair — it generates and '
-                    . 'installs DKIM and SPF for you, which is easier than doing it by hand.',
-            ],
-        ];
+        return Mailer::dnsAdvice(
+            Mailer::driver(),
+            (string) Settings::get('mail.smtp_host', ''),
+            $domain
+        );
     }
 }

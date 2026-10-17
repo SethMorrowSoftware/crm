@@ -1052,30 +1052,30 @@ reachable by accident — which is exactly why they needed finding.
 
 ### The calendar the tests were written in
 
-- **Three tests broke the moment a run crossed midnight UTC**, having passed
-  every run before it, and none of them was an application bug. The venue's
-  day is `America/New_York`; a test that builds its dates with `gmdate()` is
-  making a claim in UTC, and the two calendars disagree for four hours out of
-  every twenty-four. So those tests passed all afternoon and failed between
-  8pm and midnight Eastern: a membership gave back 9 days instead of 10, its
-  HTTP twin lost "moved on by 7 days", and a rollup compared 25000 against
-  96000 because the UTC "yesterday" it booked revenue on was still today at
-  the venue, and the nightly rollup only covers days that have finished.
-- **`test_local_day()`** is now the way a test says "a day at the venue".
-  Every date the suite builds from the clock was read and classified one at
-  a time — 75 lines, which is what the new gate below flags on the tree
-  before this change. The ones that reach a venue day were converted; the 29
-  that remain are UTC on purpose, and each carries a line saying so, because
-  the alternative is every future reader deriving it again. They are not all
-  the same case: `SegmentEngine` windows really are `UTC_TIMESTAMP()`, the
-  importer refuses a future date against its own `gmdate('Y-m-d')`, and a
-  `visit_date` posted to the API and compared only with itself has no
-  calendar in it at all.
+- **Three tests broke the moment a run crossed midnight UTC**, and the fix
+  for those three — `test_local_day()`, and the diagnosis it carries — landed
+  with the validator change above. What was left was the question that fix
+  could not answer by itself: whether the rest of the suite had the same
+  thing wrong, and nothing to stop it happening again.
+- **Every date the suite builds from the clock has now been read and
+  classified one at a time** — 71 lines, which is what the new gate below
+  flags on the tree before this change. The ones that reach a venue day were
+  converted to `test_local_day()`; the 29 that remain are UTC on purpose, and
+  each carries a line saying so, because the alternative is every future
+  reader deriving it again. They are not all the same case: `SegmentEngine`
+  windows really are `UTC_TIMESTAMP()`, the importer refuses a future date
+  against its own `gmdate('Y-m-d')`, and a `visit_date` posted to the API and
+  compared only with itself has no calendar in it at all. Three spellings the
+  first pass did not cover are included: bare `gmdate('Y-m-d')`,
+  `strtotime('-3 days')`, and a whole-day offset on a timestamp — which is
+  the shape the two membership tests were actually written in.
 - **A build failure rather than a comment.** `static/quality-gates` refuses a
-  test that builds a day from UTC unless a comment next to it says why UTC is
-  right. The datetime form is flagged only when the offset is a whole number
-  of days, which is the shape that means "N days ago" — and the shape the
-  membership tests were written in.
+  test that builds a day from UTC unless a comment within six lines says why
+  UTC is right there. A marker rather than an allowlist of file:line: an
+  allowlist goes stale on the next insertion above it and then either fails
+  honest tests or silently stops covering the line it named, and the reason
+  belongs where the date is written. An offset in hours or minutes is left
+  alone — those are instants, and instants here really are UTC.
 - **`CC_TEST_VENUE_TZ` runs the whole suite in another venue's calendar**, so
   this class of bug can be reproduced on demand instead of waiting for the
   evening. The suite is green in four positions: the Castle inside its bad
@@ -1087,6 +1087,47 @@ reachable by accident — which is exactly why they needed finding.
 ---
 
 ## Unreleased — next
+
+### Fixed: the app was telling venues to break their own email
+
+**`Settings → Email` printed `v=spf1 +a +mx ~all` for the domain whatever the
+driver said.** That is the right SPF record for a venue whose mail leaves the
+web server, and a catastrophe for one whose mail lives at Microsoft 365 or
+Google Workspace: a domain publishes only ONE SPF record, so pasting it
+REPLACES the provider's, and every message the company sends starts failing
+authentication — staff mail included, not just this app's. The Castle's own
+install is exactly that case, so the instruction would have taken a venue's
+email down on the day they deployed.
+
+The advice now follows **who actually sends**: `Mailer::dnsAdvice()` reads the
+configured driver and SMTP host, names the sender on the page ("your mail is
+sent by Microsoft 365, so that is what these records have to authorise"), and
+prints that provider's own SPF term. Six providers are recognised by name; an
+unrecognised SMTP host is SAID to be unrecognised, with where to look, rather
+than guessed at — and in no case does it authorise this server when this
+server is not what sends. The one-record-per-domain rule is stated on every
+record that has it, because the failure is silent and total.
+
+`INSTALL.md` §6 was rewritten to match, and two further traps are now named:
+**cPanel's Email Deliverability → Repair cannot write a zone held at
+Cloudflare or a registrar** (it was offered as "the shortcut" unconditionally,
+which leaves an operator believing mail is configured when it is not), and
+**every mail record at Cloudflare must be DNS-only** — a proxied DKIM record
+silently fails with nothing to say so.
+
+### Added: a deployment runbook for the venue
+
+`docs/DEPLOY-CASTLE.md` — the install with the Castle's own pieces named, in
+the order they have to happen: the Microsoft 365 mailbox and SMTP AUTH (off by
+default, and the usual cause of a correct-looking setup refusing to
+authenticate), the Cloudflare records and the grey-cloud rule, the certificate
+before the HTTPS requirement, importing the CSV lists while Safe Mode still
+guarantees nothing reaches a guest, and why the POS feed has to be a push from
+the CEplay box rather than a pull from shared hosting. It also carries the
+five-minute Database Explorer query that settles whether CenterEdge holds
+usable guest email at all — the question `SPEC.md` §14 calls its most
+important, which nobody has ever run.
+
 
 Phase 8 is done and written up in `docs/AUDIT.md`. **Phases 1–6 and 8 are
 complete. Phase 7 is partly done**, and the part that is missing is the part

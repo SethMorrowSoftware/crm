@@ -15,7 +15,7 @@ declare(strict_types=1);
  * @var bool                $hasPassword
  * @var bool                $safeMode
  * @var bool                $phpMailAvailable
- * @var list<array{type:string,name:string,value:string,note:string}> $dns
+ * @var array{records:list<array{type:string,name:string,value:string,note:string}>,warning:string,sender:string} $dns
  */
 
 // old()'s DEFAULT, not `?:`. With `?:`, a submitted empty value is falsy and
@@ -278,17 +278,35 @@ $currentDriver = old('driver') ?: $driver;
         <div>
             <h2>Deliverability (DNS)</h2>
             <p class="card-sub">
-                Three records that decide whether your mail reaches an inbox or a spam folder.
+                The records that decide whether your mail reaches an inbox or a spam folder.
             </p>
         </div>
     </div>
 
     <p>
         Without these, mail sent as your domain is unauthenticated, and Gmail and Outlook treat
-        unauthenticated mail from an unfamiliar domain exactly as you would expect. The shortcut on
-        cPanel is <strong>Email Deliverability &rarr; Repair</strong>, which writes SPF and DKIM for
-        you. If you are editing DNS by hand, these are the values.
+        unauthenticated mail from an unfamiliar domain exactly as you would expect.
     </p>
+
+    <?php /* WHICH records are right depends on WHO sends. This page used to
+             print the record for a server that sends its own mail, whatever
+             the driver said — and pasted onto a domain whose mail lives at
+             Microsoft 365 or Google, that replaces the provider's SPF record
+             and breaks every message the company sends, not just this app's.
+             So the sender is named, in the operator's own terms, above the
+             table. See Mailer::dnsAdvice(). */ ?>
+    <p>
+        As configured, your mail is sent by <strong><?= e($dns['sender']) ?></strong>, so that is
+        what these records have to authorise.
+        <strong>A domain publishes only one SPF record and one <code>_dmarc</code> record.</strong>
+        If one already exists &mdash; and if your company already sends mail as this domain, one
+        does &mdash; add a term to it. Do not add a second, and do not replace it: replacing the
+        record your provider needs stops all of your mail, not only the mail from here.
+    </p>
+
+    <?php if ($dns['warning'] !== ''): ?>
+        <p class="alert alert-warning"><?= e($dns['warning']) ?></p>
+    <?php endif; ?>
 
     <div class="table-wrap">
         <table class="table">
@@ -298,7 +316,7 @@ $currentDriver = old('driver') ?: $driver;
                     <th scope="col">Value</th><th scope="col">Why</th></tr>
             </thead>
             <tbody>
-                <?php foreach ($dns as $record): ?>
+                <?php foreach ($dns['records'] as $record): ?>
                     <tr>
                         <td><code><?= e($record['type']) ?></code></td>
                         <td><code><?= e($record['name']) ?></code></td>
@@ -312,6 +330,8 @@ $currentDriver = old('driver') ?: $driver;
 
     <p class="field-hint">
         DNS changes can take a few hours to propagate. Test again tomorrow before concluding that
-        something is broken.
+        something is broken. If your DNS is at Cloudflare, every mail record must be
+        <strong>DNS only</strong> &mdash; the grey cloud, not the orange one. A proxied mail record
+        does not work, and nothing says so.
     </p>
 </section>

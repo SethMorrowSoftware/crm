@@ -1576,6 +1576,111 @@ Harness::test('a bad id is a 422 that NAMES the field, on any resource', functio
     ha_clear();
 });
 
+Harness::test('CONSENT IS NEVER WITHDRAWN BY A VALUE NOBODY MEANT AS "NO"', function () use ($full): void {
+    ha_clear();
+
+    $created = ha_call('POST', '/api/v1/contacts', $full, [
+        'first_name' => 'Consent', 'last_name' => 'Shapes',
+        'email' => 'consent.shapes@example.test', 'source' => 'hatest',
+    ]);
+
+    $id = (int) $created['json']['data']['id'];
+
+    /*
+     * `filter_var(..., FILTER_VALIDATE_BOOLEAN)` returns FALSE for anything it
+     * does not recognise, so each of these recorded a WITHDRAWAL the guest
+     * never made: the flag cleared, `marketing_opt_out_at` stamped, and a row
+     * in an append-only compliance log saying they revoked. `"Y"` is the one
+     * that matters most — it is what a venue's own spreadsheets send.
+     *
+     * Losing a reachable guest to a typo is bad. A false entry in the log
+     * that exists to BE the evidence is worse.
+     */
+    foreach (['maybe', 'Y', 'N', '2', 'unknown', 'nope', 'granted'] as $ambiguous) {
+        $response = ha_call('POST', '/api/v1/contacts/' . $id . '/consent', $full, [
+            'channel' => 'email',
+            'granted' => $ambiguous,
+            'source'  => 'ha-shapes',
+        ]);
+
+        Assert::same(422, $response['status'], var_export($ambiguous, true) . ' must be refused');
+    }
+
+    // Nothing was written by any of them — not the flag, not the opt-out
+    // stamp, and not a single row in the log.
+    $row = DB::first(
+        'SELECT email_consent, marketing_opt_out_at FROM {contacts} WHERE id = :id',
+        ['id' => $id]
+    );
+
+    Assert::same(0, (int) $row['email_consent']);
+    Assert::null($row['marketing_opt_out_at'], 'and the guest was not opted out');
+    Assert::same(
+        0,
+        (int) DB::value('SELECT COUNT(*) FROM {consent_log} WHERE contact_id = :c', ['c' => $id])
+    );
+
+    // Every real way of saying yes and no still works.
+    foreach ([[true, 'granted'], ['yes', 'granted'], ['on', 'granted'], [1, 'granted'],
+              [false, 'revoked'], ['no', 'revoked'], ['off', 'revoked'], [0, 'revoked']] as [$value, $action]) {
+        $response = ha_call('POST', '/api/v1/contacts/' . $id . '/consent', $full, [
+            'channel'    => 'email',
+            'granted'    => $value,
+            'source'     => 'ha-shapes',
+            'disclosure' => 'I agree to hear about parties at The Castle Fun Center.',
+        ]);
+
+        Assert::same(200, $response['status'], var_export($value, true));
+        Assert::same($action, (string) $response['json']['data']['granted'] ? 'granted' : 'revoked', var_export($value, true));
+    }
+
+    // A text field that is not text is refused BEFORE anything is written —
+    // `max:80` does not check a type, so an array passed validation and then
+    // died on the cast, after the flag and before its evidence.
+    $before = (int) DB::value('SELECT COUNT(*) FROM {consent_log} WHERE contact_id = :c', ['c' => $id]);
+
+    foreach ([['source' => ['a', 'b']], ['source' => ['x' => 1]],
+              ['disclosure' => ['a']], ['channel' => ['email']]] as $bad) {
+        $body = array_merge([
+            'channel' => 'email', 'granted' => true, 'source' => 'ha-shapes',
+            'disclosure' => 'I agree to hear about parties.',
+        ], $bad);
+
+        $response = ha_call('POST', '/api/v1/contacts/' . $id . '/consent', $full, $body);
+
+        Assert::same(422, $response['status'], json_encode($bad));
+        Assert::notContains('/home/', $response['body'], json_encode($bad));
+    }
+
+    Assert::same(
+        $before,
+        (int) DB::value('SELECT COUNT(*) FROM {consent_log} WHERE contact_id = :c', ['c' => $id]),
+        'and none of them wrote a half-record'
+    );
+
+    /*
+     * THE FLAG AND ITS EVIDENCE MOVE TOGETHER. Every log row this guest has
+     * should correspond to the flag as it stands after the last one — a flag
+     * set with no row behind it is the state the endpoint exists to prevent.
+     */
+    $last = DB::first(
+        'SELECT action FROM {consent_log} WHERE contact_id = :c ORDER BY id DESC LIMIT 1',
+        ['c' => $id]
+    );
+
+    Assert::notNull($last, 'the successful writes left evidence');
+
+    $flag = (int) DB::value('SELECT email_consent FROM {contacts} WHERE id = :id', ['id' => $id]);
+
+    Assert::same(
+        (string) $last['action'] === 'granted' ? 1 : 0,
+        $flag,
+        'the flag agrees with the last thing the log recorded'
+    );
+
+    ha_clear();
+});
+
 ha_clear();
 ha_clear_users();
 ha_clear_tokens();

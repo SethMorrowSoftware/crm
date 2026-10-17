@@ -722,13 +722,13 @@ Harness::test('the rollup agrees with the report it summarises', function (): vo
 
     // The one assertion that catches a rollup drifting from the live query:
     // two independent implementations of "what did we take", compared.
-    //
-    // Both ends are venue days. The rollup never writes today — "it is not
-    // over, so it is not an actual" — and its today is the venue's, so a UTC
-    // "yesterday" is still today at the Castle from 8pm Eastern onwards and
-    // its revenue is in the live report but not in the rollup. That is the
-    // 96000-against-25000 this assertion reported on the evening it was
-    // written in the wrong calendar.
+    /*
+     * The window in the VENUE's calendar, not UTC's. A report groups by the
+     * venue's own day, so a booking dated UTC-yesterday lands in local TODAY
+     * for four hours every night — and the rollup, which never holds today,
+     * then disagreed with the live report by the whole of that booking
+     * (measured: 25000 against 96000).
+     */
     $from = test_local_day(8);
     $to   = test_local_day(1);
 

@@ -193,54 +193,6 @@ function test_apply_venue_tz_override(): void
 }
 
 /**
- * The venue's calendar day, `$daysAgo` days ago.
- *
- * ```php
- * test_local_day()                 // today, at the venue
- * test_local_day(7)                // a week ago, at the venue
- * test_local_day(-7)               // a week from now: negative is the future
- * test_local_day(10, ' 12:00:00')  // that day, as a timestamp
- * ```
- *
- * **Use this, and not `gmdate('Y-m-d', time() - $n * 86400)`, for any date a
- * test expects the application to reason about as a day.**
- *
- * The application reasons in the VENUE's calendar day, not UTC. The venue is
- * `America/New_York` (`venue_tz()` in `app/helpers.php`), so from 8pm Eastern
- * until midnight it is already tomorrow in UTC and still today at the Castle.
- * `MembershipLifecycle::today()` reads the venue's day; so does every report
- * window and every rollup bucket, through `App\Services\LocalDay`.
- *
- * A test that builds its dates with `gmdate()` is therefore making a claim in
- * the wrong calendar for four hours out of every twenty-four. It does not
- * fail flakily — it fails *deterministically, in the evening*, and passes
- * every time anyone looks at it the next morning. Three tests did exactly
- * that the moment a run crossed midnight UTC:
- *
- *   - `FREEZING GIVES THE TIME BACK` wanted 10 days back and got 9, because
- *     the UTC date it wrote into `updated_at` was a day further from the
- *     venue's today than it meant to be;
- *   - `freezing and unfreezing move the end date` lost its "moved on by
- *     7 days" for the same reason, over HTTP;
- *   - `the rollup agrees with the report it summarises` compared 96000
- *     against 25000, because the UTC "yesterday" it booked revenue on was
- *     still today at the venue, and the nightly rollup only covers days that
- *     have finished.
- *
- * The suffix is appended verbatim, for the columns that want a timestamp
- * rather than a date. Midday is the right time of day to ask for: it is the
- * same calendar day in the venue's frame and in UTC whatever the offset, so
- * the value says what it means however the column is later read.
- */
-function test_local_day(int $daysAgo = 0, string $suffix = ''): string
-{
-    $day = (new DateTimeImmutable('now', venue_tz()))
-        ->modify(sprintf('%+d days', -$daysAgo));
-
-    return $day->format('Y-m-d') . $suffix;
-}
-
-/**
  * Drop every table in the test database, so a fresh run is genuinely fresh.
  *
  * Foreign key checks go off for the duration: dropping 99 interlinked tables
@@ -263,6 +215,51 @@ function test_drop_all(): void
     }
 
     DB::pdo()->exec('SET FOREIGN_KEY_CHECKS = 1');
+}
+
+/**
+ * A date N days ago IN THE VENUE'S OWN CALENDAR, which is the frame the
+ * application reasons in.
+ *
+ * ```php
+ * test_local_day()                // today, at the venue
+ * test_local_day(7)               // a week ago
+ * test_local_day(-7)              // a week from now: negative is the future
+ * test_local_day(10, '12:00:00')  // that day, as a timestamp
+ * ```
+ *
+ * Use this instead of `gmdate('Y-m-d', time() - N * 86400)` whenever a test
+ * builds a date the code will compare against a venue-local day — a
+ * membership freeze, a report window, a rollup bucket. The two frames agree
+ * for twenty hours a day and disagree for four, so a test built on UTC passes
+ * all afternoon and fails between 8pm and midnight Eastern. Three tests were
+ * written that way and all three broke the moment the clock crossed midnight
+ * UTC, having passed every run before it:
+ *
+ *   - "FREEZING GIVES THE TIME BACK" expected 10 days back and got 9
+ *   - "freezing and unfreezing move the end date" lost its "moved on by 7 days"
+ *   - "the rollup agrees with the report it summarises" read 25000 against 96000
+ *
+ * None of them was a bug in the application. All three were a test telling the
+ * truth about the wrong calendar.
+ *
+ * MIDDAY IS THE RIGHT TIME OF DAY TO ASK FOR when a column wants a timestamp:
+ * noon is the same calendar day in the venue's frame and in UTC whatever the
+ * offset, so the value says what it means however the column is later read.
+ * That is what makes `test_local_day(10, '12:00:00')` safe to write into
+ * `updated_at`, which `MembershipLifecycle::unfreeze()` reads the date part
+ * of and compares against the venue's today.
+ */
+function test_local_day(int $daysAgo = 0, string $suffix = ''): string
+{
+    // `%+d` rather than '-N days': a negative $daysAgo is a date in the
+    // FUTURE, and spelling that by hand produces '--7 days', which is not a
+    // relative format at all. TriggersTest counts forward through this.
+    $day = (new DateTimeImmutable('now', venue_tz()))
+        ->modify(sprintf('%+d days', -$daysAgo))
+        ->format('Y-m-d');
+
+    return $suffix === '' ? $day : $day . ' ' . $suffix;
 }
 
 /**

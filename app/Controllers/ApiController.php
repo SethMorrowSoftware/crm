@@ -945,8 +945,45 @@ final class ApiController extends Controller
             return $this->notFoundJson('No contact with that id.');
         }
 
+        /*
+         * `granted` HAS TO BE A YES OR A NO, AND NOTHING ELSE IS READ AS "NO".
+         *
+         * This was `filter_var($input['granted'], FILTER_VALIDATE_BOOLEAN)`,
+         * which returns **false** for anything it does not recognise. So
+         * `"maybe"`, `"2"`, `"unknown"` — and `"Y"`, which is what a venue's
+         * own spreadsheets and plenty of integrations send — each recorded a
+         * WITHDRAWAL of consent the guest never made: the flag cleared,
+         * `marketing_opt_out_at` stamped, and a row in an append-only
+         * compliance log saying they revoked. Losing a reachable guest to a
+         * typo is bad; writing a false entry in the log that exists to be
+         * evidence is worse. `FILTER_NULL_ON_FAILURE` separates "no" from
+         * "not a yes or a no", and the second one is refused.
+         */
+        $granted = filter_var($input['granted'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+        if ($granted === null) {
+            return Response::json([
+                'error' => 'granted has to say yes or no: true, false, 1, 0, "true", "false", '
+                    . '"yes", "no", "on" or "off". Anything else is refused rather than read as a '
+                    . 'withdrawal of consent.',
+            ], 422);
+        }
+
+        /*
+         * And the text fields have to be text. `max:80` does not check a
+         * type, so an array passed validation and then died on `(string)` —
+         * AFTER the consent flag had been written and before its evidence
+         * row, which is the one state this endpoint exists to prevent.
+         */
+        foreach (['channel', 'source', 'disclosure'] as $field) {
+            if (array_key_exists($field, $input) && $input[$field] !== null && !is_scalar($input[$field])) {
+                return Response::json([
+                    'error' => $field . ' has to be text.',
+                ], 422);
+            }
+        }
+
         $channel = (string) $input['channel'];
-        $granted = filter_var($input['granted'], FILTER_VALIDATE_BOOLEAN);
         $now     = gmdate('Y-m-d H:i:s');
 
         $disclosure = trim((string) ($input['disclosure'] ?? ''));
@@ -978,30 +1015,43 @@ final class ApiController extends Controller
             $update['sms_consent_source'] = (string) $input['source'];
         }
 
-        DB::update('contacts', $update, 'id = :id', ['id' => (int) $contact['id']]);
+        /*
+         * THE FLAG AND ITS EVIDENCE, OR NEITHER.
+         *
+         * These were two unwrapped writes. A consent flag with no record of
+         * what the guest agreed to, when, and through what is the thing this
+         * endpoint's whole docblock is about — it is what a venue would have
+         * to produce if a complaint ever went anywhere — and anything failing
+         * between the two left exactly that. Review found a reachable way in
+         * (an array in a text field, which passed `max:80` and then died on
+         * the cast); a full disk or a lock timeout would do it too.
+         */
+        DB::transaction(function () use ($update, $contact, $channel, $granted, $input, $request, $disclosure, $now): void {
+            DB::update('contacts', $update, 'id = :id', ['id' => (int) $contact['id']]);
 
-        DB::insert('consent_log', [
-            'contact_id' => (int) $contact['id'],
-            'channel'    => $channel,
-            // The enum is granted|revoked. "withdrawn" is not one of them and
-            // MySQL would have truncated it to an empty string in a
-            // non-strict mode — a consent record with no action on it.
-            'action'     => $granted ? 'granted' : 'revoked',
-            'source'     => (string) $input['source'],
-            'ip'         => $request->ip(),
-            'user_agent' => 'API token #' . (int) (Auth::apiToken()['id'] ?? 0),
-            // The disclosure goes in `evidence`, which is where this schema
-            // keeps the words the guest agreed to.
-            'evidence'   => json_encode(
-                array_filter([
-                    'disclosure' => $disclosure === '' ? null : $disclosure,
-                    'via'        => 'rest api v1',
-                    'token_id'   => (int) (Auth::apiToken()['id'] ?? 0),
-                ], static fn ($v): bool => $v !== null),
-                JSON_UNESCAPED_SLASHES
-            ),
-            'created_at' => $now,
-        ]);
+            DB::insert('consent_log', [
+                'contact_id' => (int) $contact['id'],
+                'channel'    => $channel,
+                // The enum is granted|revoked. "withdrawn" is not one of them
+                // and MySQL would have truncated it to an empty string in a
+                // non-strict mode — a consent record with no action on it.
+                'action'     => $granted ? 'granted' : 'revoked',
+                'source'     => (string) $input['source'],
+                'ip'         => $request->ip(),
+                'user_agent' => 'API token #' . (int) (Auth::apiToken()['id'] ?? 0),
+                // The disclosure goes in `evidence`, which is where this
+                // schema keeps the words the guest agreed to.
+                'evidence'   => json_encode(
+                    array_filter([
+                        'disclosure' => $disclosure === '' ? null : $disclosure,
+                        'via'        => 'rest api v1',
+                        'token_id'   => (int) (Auth::apiToken()['id'] ?? 0),
+                    ], static fn ($v): bool => $v !== null),
+                    JSON_UNESCAPED_SLASHES
+                ),
+                'created_at' => $now,
+            ]);
+        });
 
         Audit::event('api_consent_recorded', [
             'contact_id' => (int) $contact['id'],
