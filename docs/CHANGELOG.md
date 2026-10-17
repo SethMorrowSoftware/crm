@@ -1054,6 +1054,47 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Fixed: the app was telling venues to break their own email
+
+**`Settings → Email` printed `v=spf1 +a +mx ~all` for the domain whatever the
+driver said.** That is the right SPF record for a venue whose mail leaves the
+web server, and a catastrophe for one whose mail lives at Microsoft 365 or
+Google Workspace: a domain publishes only ONE SPF record, so pasting it
+REPLACES the provider's, and every message the company sends starts failing
+authentication — staff mail included, not just this app's. The Castle's own
+install is exactly that case, so the instruction would have taken a venue's
+email down on the day they deployed.
+
+The advice now follows **who actually sends**: `Mailer::dnsAdvice()` reads the
+configured driver and SMTP host, names the sender on the page ("your mail is
+sent by Microsoft 365, so that is what these records have to authorise"), and
+prints that provider's own SPF term. Six providers are recognised by name; an
+unrecognised SMTP host is SAID to be unrecognised, with where to look, rather
+than guessed at — and in no case does it authorise this server when this
+server is not what sends. The one-record-per-domain rule is stated on every
+record that has it, because the failure is silent and total.
+
+`INSTALL.md` §6 was rewritten to match, and two further traps are now named:
+**cPanel's Email Deliverability → Repair cannot write a zone held at
+Cloudflare or a registrar** (it was offered as "the shortcut" unconditionally,
+which leaves an operator believing mail is configured when it is not), and
+**every mail record at Cloudflare must be DNS-only** — a proxied DKIM record
+silently fails with nothing to say so.
+
+### Added: a deployment runbook for the venue
+
+`docs/DEPLOY-CASTLE.md` — the install with the Castle's own pieces named, in
+the order they have to happen: the Microsoft 365 mailbox and SMTP AUTH (off by
+default, and the usual cause of a correct-looking setup refusing to
+authenticate), the Cloudflare records and the grey-cloud rule, the certificate
+before the HTTPS requirement, importing the CSV lists while Safe Mode still
+guarantees nothing reaches a guest, and why the POS feed has to be a push from
+the CEplay box rather than a pull from shared hosting. It also carries the
+five-minute Database Explorer query that settles whether CenterEdge holds
+usable guest email at all — the question `SPEC.md` §14 calls its most
+important, which nobody has ever run.
+
+
 Phase 8 is done and written up in `docs/AUDIT.md`. **Phases 1–6 and 8 are
 complete. Phase 7 is partly done**, and the part that is missing is the part
 that needs the venue's own systems rather than more code:

@@ -1,5 +1,11 @@
 # Installing Castle CRM on cPanel
 
+> **Deploying at The Castle Fun Center itself?** Read
+> [`DEPLOY-CASTLE.md`](DEPLOY-CASTLE.md) instead. It is this guide with the
+> venue's own pieces named — Cloudflare DNS, Microsoft 365 mail, the CEplay
+> box — and it covers three steps where a general instruction would be wrong
+> for that setup.
+
 This is the whole procedure, written for somebody who has used cPanel to upload
 files and nothing more. It takes about twenty minutes, and most of that is
 waiting for an upload.
@@ -204,19 +210,66 @@ To send real email, open **Settings → Email**:
 
 1. Choose a driver. **SMTP** is the right answer for anything beyond a handful
    of messages a day; your own cPanel mailbox works, and so does a sending
-   service.
+   service or your existing Microsoft 365 / Google Workspace mailbox.
 2. Set the **From** address to one at your own domain. A Gmail or Yahoo
    address will be rejected outright by most recipients, because those
    providers' DMARC policies forbid anyone else sending as them.
 3. Save, then use **Send a test**.
 
-Then do the DNS work, which decides whether your mail reaches an inbox or a
-spam folder. The shortcut: in cPanel open **Email Deliverability** and click
-**Repair** on your domain. It writes SPF and DKIM for you. If you are editing
-DNS by hand, the exact records are on the **Settings → Email** page.
+### Then the DNS, and read this part before you touch anything
+
+DNS decides whether your mail reaches an inbox or a spam folder, and it is
+also the one step in this guide that can break something that currently
+works. Two questions decide what to do, and they are independent:
+
+**Who sends your mail?** Not who hosts your website — who sends. If you
+pointed the driver above at `smtp.office365.com`, Microsoft sends it; at
+`smtp.sendgrid.net`, SendGrid does; only the `php_mail` driver means this
+server sends it. **SPF has to authorise whoever actually sends.** The
+**Settings → Email** page names your sender at the top of its DNS table and
+prints the records for it — use those, not a generic example from anywhere
+else.
+
+**A domain publishes only ONE SPF record.** If your company already sends
+mail as this domain — and if you have Microsoft 365 or Google Workspace, you
+do — that record already exists. Add a term to it if you need to. Never add a
+second (two records fail both) and never replace it (you stop all of your
+company's mail, not just this app's).
+
+**Where is your DNS?** If the zone is hosted at the same cPanel, then
+**Email Deliverability → Repair** is a genuine shortcut: it generates and
+installs DKIM and SPF for you. **If your DNS is anywhere else** — Cloudflare,
+your registrar, a managed DNS service — Repair cannot write there. It will
+either fail or write to a zone nobody queries, and its warning panel will
+show problems that do not matter. Copy the records from **Settings → Email**
+into whichever service actually holds the zone.
+
+**At Cloudflare specifically:** every mail-related record must be set to
+**DNS only** — the grey cloud, not the orange one. A proxied DKIM or mail
+record silently does not work, and nothing tells you.
 
 Expect the first test message to land in spam. That is normal for a new
 sending domain; the DNS records are the fix.
+
+### If you are sending through Microsoft 365 or Google Workspace
+
+It works, and it is free if you already pay for the mailbox, but know the
+ceiling before you plan a campaign:
+
+- **Microsoft 365** accepts roughly 30 messages a minute and 10,000
+  recipients a day, with a limit per message as well. SMTP AUTH is **disabled
+  by default** now, per-tenant and per-mailbox, so it has to be turned on for
+  the mailbox you send from; if that account has MFA, you need an app
+  password rather than the normal one.
+- **Google Workspace** has comparable limits.
+- Either way, **bulk marketing from a company mailbox puts that mailbox's
+  reputation at risk**, and it is the same reputation your staff's own mail
+  depends on. For transactional mail — password resets, booking
+  confirmations, run sheets — this is the right setup. Before you send
+  campaigns to a list of thousands, move those to a sending service on a
+  subdomain (`mail.your-domain.com`), which keeps the two reputations
+  separate. Castle CRM sends in chunks on the cron either way, so the limits
+  above throttle it rather than breaking it.
 
 ---
 
