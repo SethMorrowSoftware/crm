@@ -210,9 +210,9 @@ Harness::test('every report renders, with no warnings and no notices', function 
 
     // Some real data, so the tables, totals and charts are exercised rather
     // than every report taking its empty path.
-    hr_booking(gmdate('Y-m-d', time() - (86400 * 2)));
-    hr_booking(gmdate('Y-m-d', time() - (86400 * 2)), 30000);
-    hr_booking(gmdate('Y-m-d', time() - (86400 * 9)), 60000);
+    hr_booking(test_local_day(2));
+    hr_booking(test_local_day(2), 30000);
+    hr_booking(test_local_day(9), 60000);
 
     foreach (array_keys(Reports::CATALOG) as $id) {
         $response = $owner->get('/reports/' . $id . '?range=last_30');
@@ -250,7 +250,7 @@ Harness::test('a report that does not exist is a 404, not a 500', function () us
 Harness::test('a custom window is honoured and echoed back', function () use ($owner): void {
     hr_clear();
 
-    $day = gmdate('Y-m-d', time() - (86400 * 20));
+    $day = test_local_day(20);
     hr_booking($day, 77700);
 
     $response = $owner->get('/reports/revenue_by_day?range=custom&from=' . $day . '&to=' . $day);
@@ -261,7 +261,7 @@ Harness::test('a custom window is honoured and echoed back', function () use ($o
 });
 
 Harness::test('an absurd window is clamped on the page, and says so', function () use ($owner): void {
-    $response = $owner->get('/reports/revenue_by_day?range=custom&from=1995-01-01&to=' . gmdate('Y-m-d'));
+    $response = $owner->get('/reports/revenue_by_day?range=custom&from=1995-01-01&to=' . test_local_day());
 
     Assert::same(200, $response['status']);
     Assert::contains('shortened', $response['body'], 'a silent clamp under-reports by decades');
@@ -278,7 +278,7 @@ Harness::test('a role without view_reports cannot reach any of it', function () 
 Harness::test('a role with no revenue reads the counts and none of the money', function () use ($tech): void {
     hr_clear();
 
-    $day = gmdate('Y-m-d', time() - (86400 * 3));
+    $day = test_local_day(3);
     hr_booking($day, 123400);
 
     $response = $tech->get('/reports/revenue_by_day?range=last_30');
@@ -302,7 +302,7 @@ Harness::test('a role with no revenue reads the counts and none of the money', f
 
 Harness::test('the headline comparison goes with the money, not half of it', function () use ($tech): void {
     hr_clear();
-    hr_booking(gmdate('Y-m-d', time() - (86400 * 3)), 500000);
+    hr_booking(test_local_day(3), 500000);
 
     $response = $tech->get('/reports/revenue_by_day?range=last_30');
 
@@ -329,7 +329,7 @@ Harness::test('exporting is its own permission', function () use ($screen, $owne
 
 Harness::test('the export is scrubbed for a role with no revenue', function () use ($techRole): void {
     hr_clear();
-    hr_booking(gmdate('Y-m-d', time() - (86400 * 4)), 98700);
+    hr_booking(test_local_day(4), 98700);
 
     // Give the technician the export permission and nothing else. This is the
     // exact hole: `reports_export` alone on the route would hand them the
@@ -362,7 +362,7 @@ Harness::test('the export is scrubbed for a role with no revenue', function () u
 
 Harness::test('an export is a CSV with the report\'s own filename', function () use ($owner): void {
     hr_clear();
-    hr_booking(gmdate('Y-m-d', time() - (86400 * 5)), 55500);
+    hr_booking(test_local_day(5), 55500);
 
     $response = $owner->get('/reports/revenue_by_day/export?range=last_30');
 
@@ -406,8 +406,8 @@ Harness::test('a saved report keeps its period by name, not by date', function (
         'report' => 'revenue_by_day',
         'name'   => 'HR Monthly revenue',
         'range'  => 'last_30',
-        'from'   => gmdate('Y-m-d', time() - (86400 * 29)),
-        'to'     => gmdate('Y-m-d'),
+        'from'   => test_local_day(29),
+        'to'     => test_local_day(),
     ]);
 
     Assert::same(302, $response['status']);

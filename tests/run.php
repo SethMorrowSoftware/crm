@@ -16,6 +16,10 @@ declare(strict_types=1);
  *   CC_TEST_DB_HOST / _PORT / _NAME / _USER / _PASS   database to use
  *   CC_TEST_SKIP_DB=1                                 skip database suites
  *   CC_TEST_SKIP_HTTP=1                               skip the HTTP suite
+ *   CC_TEST_VENUE_TZ=Pacific/Midway                   run the suite in
+ *       another venue's calendar, to find tests that only agree with the
+ *       application while UTC and the venue are on the same day. See
+ *       `test_apply_venue_tz_override()` in bootstrap.php.
  */
 
 /*

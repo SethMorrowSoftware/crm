@@ -802,6 +802,8 @@ Harness::test('a snooze still in the future is left alone', function (): void {
     $contactId = ib_contact();
     $id        = ib_conversation($contactId, 'sms', [
         'status'        => 'snoozed',
+        // UTC-CORRECT: an instant, not a day. wakeSnoozed() compares the
+        // whole column against UTC now; no calendar is involved.
         'snoozed_until' => gmdate('Y-m-d H:i:s', time() + 86400),
         'is_unread'     => 0,
     ]);
@@ -821,6 +823,7 @@ Harness::test('replying to a snoozed conversation reopens it', function () use (
     $contactId = ib_contact();
     $id        = ib_conversation($contactId, 'sms', [
         'status'        => 'snoozed',
+        // UTC-CORRECT: an instant, compared against UTC now.
         'snoozed_until' => gmdate('Y-m-d H:i:s', time() + 86400),
     ]);
 

@@ -1062,6 +1062,40 @@ reachable by accident — which is exactly why they needed finding.
   float loses the last cent. Both are now refused and reported against the
   line they came from, rather than imported as a number nobody typed.
 
+### The calendar the tests were written in
+
+- **Three tests broke the moment a run crossed midnight UTC**, and the fix
+  for those three — `test_local_day()`, and the diagnosis it carries — landed
+  with the validator change above. What was left was the question that fix
+  could not answer by itself: whether the rest of the suite had the same
+  thing wrong, and nothing to stop it happening again.
+- **Every date the suite builds from the clock has now been read and
+  classified one at a time** — 71 lines, which is what the new gate below
+  flags on the tree before this change. The ones that reach a venue day were
+  converted to `test_local_day()`; the 29 that remain are UTC on purpose, and
+  each carries a line saying so, because the alternative is every future
+  reader deriving it again. They are not all the same case: `SegmentEngine`
+  windows really are `UTC_TIMESTAMP()`, the importer refuses a future date
+  against its own `gmdate('Y-m-d')`, and a `visit_date` posted to the API and
+  compared only with itself has no calendar in it at all. Three spellings the
+  first pass did not cover are included: bare `gmdate('Y-m-d')`,
+  `strtotime('-3 days')`, and a whole-day offset on a timestamp — which is
+  the shape the two membership tests were actually written in.
+- **A build failure rather than a comment.** `static/quality-gates` refuses a
+  test that builds a day from UTC unless a comment within six lines says why
+  UTC is right there. A marker rather than an allowlist of file:line: an
+  allowlist goes stale on the next insertion above it and then either fails
+  honest tests or silently stops covering the line it named, and the reason
+  belongs where the date is written. An offset in hours or minutes is left
+  alone — those are instants, and instants here really are UTC.
+- **`CC_TEST_VENUE_TZ` runs the whole suite in another venue's calendar**, so
+  this class of bug can be reproduced on demand instead of waiting for the
+  evening. The suite is green in four positions: the Castle inside its bad
+  window, the Castle at midday, a venue 11 hours behind UTC, and a venue 14
+  hours ahead. The last of those found two tests that failed on their own
+  preconditions rather than standing down, which read as a timezone bug
+  rather than as a case that does not apply.
+
 ---
 
 ## Unreleased — next

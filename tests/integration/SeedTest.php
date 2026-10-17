@@ -287,6 +287,8 @@ Harness::test('the demo seed produces both a lapsed and a recent guest', functio
     // So the lapsed-guest report and the recent-visit widget each have a row.
     $lapseDays = 120;
 
+    // UTC-CORRECT: this test compares a stored UTC instant against a UTC
+    // instant in its own SQL. Nothing here is a calendar day.
     $lapsed = (int) DB::value(
         "SELECT COUNT(*) FROM {contacts}
           WHERE source = 'demo' AND last_visit_at < :cutoff",
@@ -296,6 +298,7 @@ Harness::test('the demo seed produces both a lapsed and a recent guest', functio
     $recent = (int) DB::value(
         "SELECT COUNT(*) FROM {contacts}
           WHERE source = 'demo' AND last_visit_at >= :cutoff",
+        // UTC-CORRECT: the other half of the same comparison.
         ['cutoff' => gmdate('Y-m-d H:i:s', time() - (30 * 86400))]
     );
 
@@ -1009,7 +1012,13 @@ Harness::test('A MILESTONE CONGRATULATES A GUEST ONCE, NOT ON EVERY LATER VISIT'
         for ($day = 0; $day < 12; $day++) {
             App\Services\VisitRecorder::record([
                 'contact_id'  => $contactId,
-                'visit_date'  => gmdate('Y-m-d', time() - ($day * 86400)),
+                // Venue days, because that is what a visit_date IS here —
+                // "the day a guest would say they came", which is the same
+                // thing VisitRecorder fills in when a caller omits it. Only
+                // distinctness matters to the count below, but a UTC "today"
+                // files the first of these on a day the venue has not
+                // reached yet.
+                'visit_date'  => test_local_day($day),
                 'source'      => 'check_in',
                 'spend_cents' => 2500,
             ]);
