@@ -16,6 +16,10 @@
 //      application looks like; they are not golden-master tests and nothing
 //      compares against them.
 //
+// Needs Playwright, which this repository deliberately does not vendor (there
+// is no npm in the application). Install it once, anywhere on the path:
+//   npm install --no-save playwright
+//
 // Usage, from the install root, with a dev server already running:
 //   node tools/screenshots.js
 //   node tools/screenshots.js --base http://127.0.0.1:8777 --out docs/screenshots
@@ -23,7 +27,13 @@
 // Environment: CC_SHOT_EMAIL / CC_SHOT_PASSWORD for the sign-in, defaulting to
 // the dev credentials.
 
-const { chromium } = require('playwright');
+let chromium;
+try {
+  ({ chromium } = require('playwright'));
+} catch (e) {
+  console.error('Playwright is not installed. Run `npm install --no-save playwright` first.');
+  process.exit(1);
+}
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -157,10 +167,20 @@ const run = async () => {
   });
   const page = await context.newPage();
 
-  page.on('pageerror', e => problems.push(`pageerror: ${String(e).slice(0, 120)}`));
-  page.on('response', r => {
-    if (r.status() >= 500) problems.push(`${r.status()} ${r.url().replace(BASE, '')}`);
-  });
+  // Every page the capture opens carries the same three checks. `pageerror`
+  // only sees uncaught exceptions, so a `console.error` needs its own listener.
+  const watch = (p, label) => {
+    const where = label ? ` (${label})` : '';
+    p.on('pageerror', e => problems.push(`pageerror${where}: ${String(e).slice(0, 120)}`));
+    p.on('console', m => {
+      if (m.type() === 'error') problems.push(`console error${where}: ${m.text().slice(0, 120)}`);
+    });
+    p.on('response', r => {
+      if (r.status() >= 500) problems.push(`${r.status()} ${r.url().replace(BASE, '')}${where}`);
+    });
+  };
+
+  watch(page, '');
 
   // ---------------------------------------------------------------- sign in
   await page.goto(BASE + '/login', { waitUntil: 'domcontentloaded' });
@@ -179,6 +199,7 @@ const run = async () => {
   // taken from a context with no session.
   const anon = await browser.newContext({ viewport: { width: WIDTH, height: 900 } });
   const anonPage = await anon.newPage();
+  watch(anonPage, 'signed out');
   await anonPage.goto(BASE + '/login', { waitUntil: 'domcontentloaded' });
   await anonPage.screenshot({ path: path.join(OUT, 'login.png'), fullPage: true });
   await anon.close();
@@ -298,12 +319,7 @@ const run = async () => {
   });
   const phonePage = await phoneContext.newPage();
 
-  // The same two listeners the desktop page carries. Without them a phone
-  // capture could log a page error or take a 500 and nothing would say so.
-  phonePage.on('pageerror', e => problems.push(`pageerror (phone): ${String(e).slice(0, 120)}`));
-  phonePage.on('response', r => {
-    if (r.status() >= 500) problems.push(`${r.status()} ${r.url().replace(BASE, '')} (phone)`);
-  });
+  watch(phonePage, 'phone');
 
   await phonePage.goto(BASE + '/login', { waitUntil: 'domcontentloaded' });
   await phonePage.fill('input[name="email"]', EMAIL);
