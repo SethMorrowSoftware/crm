@@ -1095,6 +1095,16 @@ reachable by accident — which is exactly why they needed finding.
   hours ahead. The last of those found two tests that failed on their own
   preconditions rather than standing down, which read as a timezone bug
   rather than as a case that does not apply.
+- **The override now survives the run, and says so if it does not.** Review
+  caught that `http/smoke` saves the venue settings form with a hard-coded
+  `America/New_York`, which SET the zone: from that suite onwards every HTTP
+  request was served in New York while the test process still held the
+  override, and the run reported a clean pass over an instrument that had
+  quietly stopped working. The form now echoes the zone already configured —
+  nothing in that test is about timezones, it is a required field — and
+  `tests/run.php` fails any run that does not end in the zone it was asked
+  for, because a tool that silently stops testing is worse than one that is
+  not there.
 
 ---
 
