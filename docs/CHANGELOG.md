@@ -1106,6 +1106,54 @@ five-minute Database Explorer query that settles whether CenterEdge holds
 usable guest email at all — the question `SPEC.md` §14 calls its most
 important, which nobody has ever run.
 
+### Added: removing the example data, which the runbook had been promising
+
+The installer offers "Example guests and bookings" so the reports can be
+judged on something that looks like a Saturday, and the runbook tells a venue
+to delete the lot before importing a real guest list. **There was no way to
+do that** — the doc described a button nobody had written, found while
+preparing the runbook rather than by any test.
+
+**Settings → Backups → Remove the example data** is now that button: it names
+the count first, asks for the word DELETE, and leaves an audit row. It deletes
+the seed's rows EXPLICITLY, children before parents, rather than deleting the
+demo contacts and trusting the database — because every foreign key here is
+`SET NULL` or `CASCADE` and not one is `RESTRICT`, so the obvious version does
+not fail, it SUCCEEDS and leaves fake bookings behind with no guest. That is
+worse than failing: it looks finished. The seed's own header records hitting
+exactly that.
+
+Two things it deliberately will not do: delete a booking or deal the venue
+made itself against an example guest (those are theirs, so they survive with
+no guest attached — and the count is on the page BEFORE the decision, not in
+the message afterwards), and delete the `demo-data` tag while anything else
+still wears it.
+
+### Fixed: a "coming soon" page for four features that had shipped
+
+The sidebar carried a **Marketing** item pointing at an "Arrives in Phase 4"
+placeholder listing campaigns, segments, Text Club and web forms — all four
+of which were live, and three of which sat in the nav directly beneath it.
+The placeholder, its route, its controller and its styles are gone, and
+**Forms** takes the slot, which had no nav entry of its own at all.
+
+A smoke test now walks the sidebar itself and holds every item in it to
+rendering for an owner and to not being a placeholder, so neither a nav link
+that goes nowhere nor one still advertising a shipped feature can come back
+unnoticed.
+
+### Added: screenshots of every section
+
+`docs/screenshots/` — 38 images, one per section plus dark mode and three at
+phone width, with an index naming what to look at in each. `tools/screenshots.js`
+takes them and asserts as it goes that no page errors, no page 500s and no page
+scrolls sideways at 390px.
+
+`tools/screenshot-guard.php` runs first and refuses the capture unless every
+contact's email address is on a domain the standards reserve for fiction. The
+check is on the DATA, not on a flag somebody set: these images go into git, and
+a venue's guest list in git history is in every clone for ever.
+
 
 Phase 8 is done and written up in `docs/AUDIT.md`. **Phases 1–6 and 8 are
 complete. Phase 7 is partly done**, and the part that is missing is the part
