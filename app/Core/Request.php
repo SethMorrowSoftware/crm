@@ -181,6 +181,22 @@ final class Request
         return $this->post[$key] ?? $default;
     }
 
+    /**
+     * Every posted field, and ONLY the posted fields.
+     *
+     * Unlike `all()`, which merges the query string, the JSON body and the
+     * route parameters. A provider that signs its webhook signs exactly the
+     * form fields it posted, so reproducing that signature needs this set
+     * and not a superset — one extra route parameter in the mix and the
+     * signature never matches again.
+     *
+     * @return array<string,mixed>
+     */
+    public function postAll(): array
+    {
+        return $this->post;
+    }
+
     /** A trimmed string, guaranteed scalar. Arrays become ''. */
     public function str(string $key, string $default = ''): string
     {
@@ -525,6 +541,30 @@ final class Request
         foreach (['CONTENT_TYPE' => 'content-type', 'CONTENT_LENGTH' => 'content-length'] as $server => $name) {
             if (isset($_SERVER[$server])) {
                 $headers[$name] = (string) $_SERVER[$server];
+            }
+        }
+
+        /*
+         * THE AUTHORIZATION HEADER ON cPANEL.
+         *
+         * Apache with mod_rewrite does not pass `Authorization` through to
+         * CGI/FastCGI unless it is told to, and the venue this is built for
+         * runs on exactly that. The symptom is the worst kind: every API
+         * token is rejected with "this endpoint needs an API token", the
+         * header is visibly in the request, and nothing anywhere says the
+         * server ate it.
+         *
+         * `.htaccess` asks for it back under this name (see the rule there),
+         * and this is the other half. Only used when the real header is
+         * absent, so a server that passes it properly is unaffected.
+         */
+        if (!isset($headers['authorization'])) {
+            foreach (['REDIRECT_HTTP_AUTHORIZATION', 'HTTP_X_AUTHORIZATION'] as $fallback) {
+                if (isset($_SERVER[$fallback]) && (string) $_SERVER[$fallback] !== '') {
+                    $headers['authorization'] = (string) $_SERVER[$fallback];
+
+                    break;
+                }
             }
         }
 

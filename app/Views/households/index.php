@@ -47,6 +47,7 @@ declare(strict_types=1);
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Households</caption>
                 <thead>
                 <tr>
                     <th scope="col">Household</th>

@@ -64,19 +64,35 @@ require CC_ROOT . '/app/helpers.php';
  * Bring the database up to date when the code has been replaced.
  *
  * An upgrade on shared hosting is an unzip over the top of the old files;
- * nothing runs afterwards. Comparing the shipped VERSION against the marker
- * the last upgrade stored costs one string comparison per request, and skips
- * everything else until there is actually a new release in place.
+ * nothing runs afterwards. So this is the only thing standing between a new
+ * release and a venue meeting a 500 on a page whose table does not exist yet.
+ *
+ * **TWO TRIGGERS, AND THE SECOND ONE IS THERE BECAUSE THE FIRST FAILED.**
+ * This used to compare the shipped `VERSION` against the marker alone. That
+ * is one string comparison per request, which is pleasingly cheap and also
+ * trusts a human to remember something: `VERSION` sat at `1.0.0-phase1` for
+ * three phases, so this function returned on its first line and three schema
+ * files were never applied by any upgrade. Found by opening the page: a bare
+ * 500, and `Unknown column 'd.status'` in the log.
+ *
+ * So the schema directory is asked too. `Upgrade::schemaMarker()` is a hash
+ * of the shipped file NAMES — one `glob()` of a directory the OS has cached,
+ * next to a string comparison — and it changes exactly when there is a new
+ * file to apply, whatever anybody remembered to edit.
  */
 function cc_apply_pending_upgrade(): void
 {
     $shipped = trim((string) @file_get_contents(CC_ROOT . '/VERSION'));
+    $schema  = Upgrade::schemaMarker();
 
-    if ($shipped === '' || $shipped === (string) Settings::get('system.version', '')) {
+    $versionMoved = $shipped !== '' && $shipped !== (string) Settings::get('system.version', '');
+    $schemaMoved  = $schema !== (string) Settings::get('system.schema_files', '');
+
+    if (!$versionMoved && !$schemaMoved) {
         return;
     }
 
-    Upgrade::run($shipped);
+    Upgrade::run($shipped === '' ? (string) Settings::get('system.version', '0.0.0') : $shipped, $schema);
 }
 
 // -----------------------------------------------------------------------
@@ -202,6 +218,20 @@ View::init(CC_ROOT . '/app/Views');
 // 404, send that response, and only then run the actual scheduled work.
 // -----------------------------------------------------------------------
 
+/*
+ * WHAT LISTENS TO WHAT, registered BEFORE the CLI early return below.
+ *
+ * It has to be both entry points, and cron is the more important of the two:
+ * most automations fire from the time-based triggers and the nightly jobs, so
+ * listeners registered only on the web path would mean an engine that works
+ * when somebody is clicking and does nothing overnight. Registering one is
+ * only storing a closure, so this costs nothing on a request that fires no
+ * events.
+ */
+if ($isInstalled) {
+    require CC_ROOT . '/app/listeners.php';
+}
+
 if (PHP_SAPI === 'cli' || defined('CC_WEB_CRON')) {
     if ($isInstalled) {
         DB::connect();
@@ -309,6 +339,7 @@ View::share('currentUser', Auth::user());
 View::share('venueName', Settings::venueName());
 View::share('safeMode', Settings::safeMode());
 View::share('sendingPaused', Settings::sendingPaused());
+View::share('automationsPaused', (bool) Settings::get('system.automations_paused', false));
 View::share('flashMessages', Session::pull('_flash', []));
 
 // Validation state survives exactly one redirect.
@@ -320,7 +351,13 @@ require CC_ROOT . '/app/routes.php';
 
 $response = $router->dispatch($request);
 
-$response->headers($securityHeaders);
+/*
+ * NOT overwriting. A route that deliberately set one of these headers meant
+ * it: the public review wall exists to be embedded on the venue's own site
+ * and so replaces `frame-ancestors 'self'` with its own policy. Everything
+ * else sets none of these and gets all of them.
+ */
+$response->headers($securityHeaders, false);
 
 // Persist the session and attach its cookie.
 $cookie = Session::save();

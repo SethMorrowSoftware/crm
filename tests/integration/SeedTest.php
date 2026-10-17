@@ -34,6 +34,8 @@ function load_seed(string $name): callable
 }
 
 // ------------------------------------------------------------ the templates
+//
+// (The playbook tests are at the foot of this file.)
 
 Harness::test('the template seed is idempotent', function (): void {
     $seed = load_seed('templates');
@@ -46,8 +48,77 @@ Harness::test('the template seed is idempotent', function (): void {
     Assert::same($before, (int) DB::value('SELECT COUNT(*) FROM {templates}'));
 });
 
-Harness::test('every seeded template has a subject, a body and declared merge tags', function (): void {
-    foreach (DB::all('SELECT * FROM {templates}') as $template) {
+Harness::test('EVERY SEEDED TEXT FITS ONE SEGMENT, AND THE MARKETING ONES CARRY THEIR OPT-OUT', function (): void {
+    /*
+     * A text costs per SEGMENT, and the limit is 160 characters in GSM-7 but
+     * only 70 in UCS-2 — so one curly apostrophe pasted from a word processor
+     * re-encodes a whole message and doubles what every send costs. These are
+     * the venue's own messages, going out on a sequence nobody watches, so
+     * each one is measured WITH ITS MERGE TAGS FILLED: a template that fits
+     * in the editor and spills over once somebody's name is in it is the
+     * version that actually gets sent.
+     *
+     * The values below are deliberately long — a full name and the venue's
+     * own name, which is 21 characters.
+     */
+    $values = [
+        '{{first_name}}'  => 'Katherine',
+        '{{full_name}}'   => 'Katherine Fitzgerald',
+        '{{venue_name}}'  => 'The Castle Fun Center',
+        '{{venue_phone}}' => '(845) 555-0123',
+        '{{child_name}}'  => 'Alexander',
+        /*
+         * A LINK IS THE EXPENSIVE MERGE TAG, and the one most likely to be
+         * underestimated: this is a real-length domain plus the full
+         * 32-character token the feedback links carry, 69 characters that are
+         * invisible in the template editor. Left unsubstituted it would
+         * measure as the 15 characters of "{{survey_link}}" and a text that
+         * costs two segments would pass this test.
+         */
+        '{{survey_link}}' => 'https://www.thecastlefuncenter.com/s/0123456789abcdef0123456789abcdef',
+    ];
+
+    $texts = DB::all("SELECT slug, body FROM {templates} WHERE channel = 'sms'");
+
+    Assert::greaterThan(4, count($texts), 'the installer should ship the texts the playbooks send');
+
+    $tooLong = [];
+    $noOptOut = [];
+
+    foreach ($texts as $text) {
+        $body = strtr((string) $text['body'], $values);
+
+        if (App\Services\SmsPolicy::segments($body) > 1) {
+            $tooLong[] = (string) $text['slug'] . ' is ' . App\Services\SmsPolicy::length($body)
+                . ' ' . App\Services\SmsPolicy::encoding($body) . ' characters, so it costs '
+                . App\Services\SmsPolicy::segments($body) . ' texts';
+        }
+
+        // A text about a booking the guest has already made is transactional
+        // and needs no opt-out; anything that offers or invites does. The
+        // seeded marketing ones are recognisable by their category.
+        if (in_array((string) $text['slug'], [
+            'winback-sms',
+            'quote-nudge-sms',
+            // A feedback request is marketing too: it is not something a
+            // guest needs in order to use a booking they have already made,
+            // so consent applies and an opt-out belongs in it.
+            'survey-invitation-sms',
+        ], true)) {
+            if (!App\Services\SmsPolicy::hasOptOut($body)) {
+                $noOptOut[] = (string) $text['slug'];
+            }
+        }
+    }
+
+    Assert::same([], $tooLong, implode("\n   ", $tooLong));
+    Assert::same([], $noOptOut, 'marketing texts with no way to stop them: ' . implode(', ', $noOptOut));
+});
+
+Harness::test('every seeded EMAIL template has a subject, a body and declared merge tags', function (): void {
+    // Email only: a text has no subject line, and storing one would put
+    // "Subject:" above a text message somewhere.
+    foreach (DB::all("SELECT * FROM {templates} WHERE channel = 'email'") as $template) {
         $slug = (string) $template['slug'];
 
         Assert::notEmpty($template['subject'], $slug . ' has no subject');
@@ -82,6 +153,16 @@ Harness::test('every merge tag used in a template is declared', function (): voi
                 $slug . ' uses {{' . $used . '}} but does not declare it'
             );
         }
+    }
+});
+
+Harness::test('and every seeded TEXT has a body and declared merge tags', function (): void {
+    foreach (DB::all("SELECT * FROM {templates} WHERE channel = 'sms'") as $text) {
+        $slug = (string) $text['slug'];
+
+        Assert::notEmpty($text['body'], $slug . ' has no body');
+        Assert::notEmpty($text['merge_tags'], $slug . ' declares no merge tags');
+        Assert::null($text['subject'], $slug . ' has a subject, and a text has no subject line');
     }
 });
 
@@ -378,4 +459,450 @@ Harness::test('every demo row is reachable from the demo-data tag', function ():
     );
 
     test_reset_transactional_data();
+});
+
+// ------------------------------------------------------------- the playbooks
+
+Harness::test('EVERY SEEDED STEP IS ONE THE ENGINE CAN ACTUALLY PERFORM', function (): void {
+    /*
+     * A step the engine refuses is worse than a missing one: it saves, it
+     * shows in the sequence, and then it FAILS a run days later — or, for a
+     * condition with nothing to check, quietly sends every guest down the NO
+     * side with half the sequence unreachable.
+     *
+     * The two mistakes this catches are the ones that are invisible to read:
+     * a delay tied to a date whose config does not name the date, and a
+     * condition saved as a bare list instead of a group. Both were made while
+     * writing this seed.
+     */
+    $offenders = [];
+
+    foreach (DB::all('SELECT s.*, a.slug AS automation FROM {automation_steps} s
+                        JOIN {automations} a ON a.id = s.automation_id
+                       ORDER BY a.id, s.sort_order') as $step) {
+        $problem = App\Services\AutomationEngine::validateStep($step);
+
+        if ($problem !== null) {
+            $offenders[] = (string) $step['automation'] . ' step ' . (int) $step['sort_order']
+                . ' (' . (string) $step['type'] . '): ' . $problem;
+        }
+    }
+
+    Assert::same([], $offenders, "seeded steps the engine would refuse:\n   " . implode("\n   ", $offenders));
+});
+
+Harness::test('EVERY TEMPLATE A SEEDED STEP NAMES EXISTS, ON THE RIGHT CHANNEL', function (): void {
+    /*
+     * The failure this prevents is the most ordinary one in the whole
+     * product: a sequence that names a template nobody shipped. The run
+     * fails, three times with backoff, days after the venue switched it on
+     * and nowhere near the screen where they did it. An email step naming a
+     * TEXT template fails the same way, which is why the channel is checked
+     * too.
+     */
+    $missing = [];
+
+    foreach (DB::all('SELECT s.type, s.config, a.slug AS automation FROM {automation_steps} s
+                        JOIN {automations} a ON a.id = s.automation_id
+                       WHERE s.type IN (\'send_email\', \'send_sms\')') as $step) {
+        $config = json_decode((string) $step['config'], true);
+        $slug   = is_array($config) ? (string) ($config['template'] ?? '') : '';
+        $channel = (string) $step['type'] === 'send_sms' ? 'sms' : 'email';
+
+        if ($slug === '') {
+            $missing[] = (string) $step['automation'] . ': a ' . $channel . ' step with no template';
+
+            continue;
+        }
+
+        if (!DB::exists(
+            'SELECT id FROM {templates} WHERE (slug = :slug OR name = :name) AND channel = :channel AND is_active = 1',
+            ['slug' => $slug, 'name' => $slug, 'channel' => $channel]
+        )) {
+            $missing[] = (string) $step['automation'] . ': no active ' . $channel . ' template "' . $slug . '"';
+        }
+    }
+
+    Assert::same([], $missing, "steps naming a template that is not there:\n   " . implode("\n   ", $missing));
+});
+
+Harness::test('EVERY AUTOMATION WHOSE TRIGGER CAN FIRE HAS STEPS', function (): void {
+    /*
+     * THE RULE THIS WHOLE SEED EXISTS TO SATISFY, and the one a count cannot
+     * express: an automation the venue can switch on must DO something.
+     *
+     * An empty sequence behind a live trigger is the worst shape in the
+     * library. It is listed, it is described, it can be activated, and then
+     * it runs and performs nothing — and nothing on the page distinguishes
+     * it from the eighty that work. The venue finds out when they ask why
+     * the thank-you never went.
+     *
+     * The exception is deliberate and is the other half of the rule: an
+     * automation whose trigger is in `Event::PENDING` CANNOT fire, because
+     * the module that would fire it is not built. Those ship empty on
+     * purpose, the automation page says exactly what each is waiting on, and
+     * this test asserts they are empty rather than quietly authored — a
+     * sequence behind a dead trigger reads as finished for ever.
+     */
+    $rows = DB::all(
+        'SELECT a.slug, a.name, a.trigger_type,
+                (SELECT COUNT(*) FROM {automation_steps} s WHERE s.automation_id = a.id) AS steps
+           FROM {automations} a
+          ORDER BY a.id'
+    );
+
+    Assert::greaterThan(100, count($rows), 'the library is seeded');
+
+    $emptyButLive = [];
+    $authoredButDead = [];
+
+    foreach ($rows as $row) {
+        $trigger = (string) $row['trigger_type'];
+        $steps   = (int) $row['steps'];
+        $waiting = App\Core\Event::pendingOn($trigger);
+
+        if ($waiting === null && $steps === 0) {
+            $emptyButLive[] = (string) $row['slug'] . ' — ' . (string) $row['name']
+                . ' (' . $trigger . ')';
+        }
+
+        if ($waiting !== null && $steps > 0) {
+            $authoredButDead[] = (string) $row['slug'] . ' — ' . (string) $row['name']
+                . ' (' . $trigger . ', waiting on ' . $waiting . ')';
+        }
+    }
+
+    Assert::same(
+        [],
+        $emptyButLive,
+        "automations a venue can switch on that would do nothing:\n   "
+            . implode("\n   ", $emptyButLive)
+    );
+
+    Assert::same(
+        [],
+        $authoredButDead,
+        "sequences behind a trigger nothing fires — they would read as finished for ever:\n   "
+            . implode("\n   ", $authoredButDead)
+    );
+});
+
+Harness::test('A SCHEDULED AUTOMATION THAT MESSAGES A GUEST HAS SOMEBODY TO MESSAGE', function (): void {
+    /*
+     * The trap: a `cron` automation with NO SEGMENT enrols a single run with
+     * no contact on it, and `send_email` on a contactless run returns "there
+     * is no guest on this run to email" and records the step as DONE.
+     *
+     * So the run succeeds, the automation reports success, the step shows as
+     * performed — and the seasonal announcement went to nobody. For ever,
+     * with nothing on any page to say so. It is the quietest failure in this
+     * whole application, and three seeded sequences had it before this test
+     * existed.
+     *
+     * A cron automation that only notifies a USER or raises a task is
+     * correct with no segment: that is venue-wide work and needs no guest.
+     * The rule is about the ones that reach a guest.
+     */
+    $offenders = [];
+
+    $rows = DB::all(
+        "SELECT a.slug, a.name, a.trigger_config
+           FROM {automations} a
+          WHERE a.trigger_type = 'cron'
+            AND EXISTS (
+                SELECT 1 FROM {automation_steps} s
+                 WHERE s.automation_id = a.id
+                   AND s.type IN ('send_email', 'send_sms', 'send_survey', 'issue_coupon')
+            )"
+    );
+
+    foreach ($rows as $row) {
+        $config = json_decode((string) $row['trigger_config'], true);
+        $segment = is_array($config) ? (int) ($config['segment_id'] ?? 0) : 0;
+
+        if ($segment <= 0) {
+            $offenders[] = (string) $row['slug'] . ' — ' . (string) $row['name'];
+
+            continue;
+        }
+
+        // And the segment it names has to be there. A stale id is the same
+        // silence by another route.
+        if (!DB::exists('SELECT id FROM {segments} WHERE id = :id', ['id' => $segment])) {
+            $offenders[] = (string) $row['slug'] . ' — names segment ' . $segment . ', which does not exist';
+        }
+    }
+
+    Assert::same(
+        [],
+        $offenders,
+        "scheduled sequences that would message a guest but have no audience:\n   "
+            . implode("\n   ", $offenders)
+    );
+});
+
+Harness::test('every seeded segment compiles to SQL and is answerable', function (): void {
+    /*
+     * A segment whose rules do not compile is not an error anywhere a person
+     * would see: the campaign planner reports an audience of nobody, which
+     * reads exactly like a segment that genuinely matches nobody.
+     *
+     * These three also have to be venue-INDEPENDENT — defined on columns
+     * every install maintains rather than on this venue's attractions — or
+     * they ship empty and the automations that target them send to nobody,
+     * which is the failure the test above is about arriving by another road.
+     */
+    $segments = DB::all('SELECT slug, name, rules FROM {segments} ORDER BY id');
+
+    Assert::greaterThan(2, count($segments), 'the standing segments are seeded');
+
+    foreach ($segments as $segment) {
+        $rules = json_decode((string) $segment['rules'], true);
+
+        Assert::true(is_array($rules), (string) $segment['slug'] . ': rules are not readable');
+
+        $check = App\Services\SegmentEngine::validate($rules);
+
+        Assert::true(
+            (bool) $check['ok'],
+            (string) $segment['slug'] . ': ' . (string) ($check['error'] ?? 'does not compile')
+        );
+
+        Assert::greaterThan(
+            0,
+            (int) $check['rules'],
+            (string) $segment['slug'] . ': compiles to no rules at all, so it matches everybody'
+        );
+
+        // And the SQL it compiles to really runs. The count is whatever
+        // this database holds — what matters is that asking does not throw,
+        // because a cron automation whose segment throws enrols NOBODY and
+        // says so only in the log.
+        Assert::doesNotThrow(
+            static function () use ($check, $rules): void {
+                $compiled = App\Services\SegmentEngine::compile($rules);
+                DB::value(
+                    'SELECT COUNT(*) FROM {contacts} c WHERE ' . $compiled['sql'],
+                    $compiled['params']
+                );
+            },
+            (string) $segment['slug'] . ': the SQL it compiles to will not run'
+        );
+    }
+});
+
+Harness::test('a seeded automation with steps can be switched on, and one without cannot', function (): void {
+    /*
+     * The product promise, as an assertion: a playbook whose steps are
+     * authored arrives ready to switch on. The pre-condition is dull and
+     * worth stating — every step valid, every template present — and the two
+     * tests above are what make it true.
+     */
+    $withSteps = (int) DB::value(
+        'SELECT COUNT(DISTINCT automation_id) FROM {automation_steps}'
+    );
+
+    Assert::greaterThan(100, $withSteps, 'every playbook ships its sequences');
+
+    // And the ones with no steps are honest about it rather than switched on.
+    Assert::same(0, (int) DB::value(
+        'SELECT COUNT(*) FROM {automations} a
+          WHERE a.is_active = 1
+            AND NOT EXISTS (SELECT 1 FROM {automation_steps} s WHERE s.automation_id = a.id)'
+    ), 'nothing is seeded switched on with nothing to do');
+});
+
+Harness::test('THE REPUTATION PLAYBOOK HANDS THE ASK TO THE FEEDBACK MODULE', function (): void {
+    /*
+     * Two things could go wrong here and both are invisible until a guest is
+     * involved.
+     *
+     * The first is a sequence that sends its own survey invitation — it
+     * cannot, because the link carries a one-use token that has to be written
+     * before it is sent, so an email step naming a template with a
+     * {{survey_link}} in it would go out with a hole where the link should
+     * be. The `send_survey` step exists to hand that to the module.
+     *
+     * The second is the detractor sequence raising its own task beside the
+     * one the module already raises, which means two people ringing one
+     * family about one complaint.
+     */
+    $playbookId = (int) DB::value("SELECT id FROM {playbooks} WHERE slug = 'reputation-protection'");
+
+    Assert::greaterThan(0, $playbookId, 'the reputation playbook is seeded');
+
+    $steps = DB::all(
+        'SELECT a.slug, s.type, s.config
+           FROM {automation_steps} s
+           JOIN {automations} a ON a.id = s.automation_id
+          WHERE a.playbook_id = :p
+          ORDER BY a.id, s.sort_order',
+        ['p' => $playbookId]
+    );
+
+    Assert::greaterThan(10, count($steps), 'its sequences are authored, not empty');
+
+    $types = [];
+    $tasksOnDetractor = 0;
+
+    foreach ($steps as $step) {
+        $types[(string) $step['type']] = true;
+
+        if (str_contains((string) $step['slug'], 'detractor') && (string) $step['type'] === 'create_task') {
+            $tasksOnDetractor++;
+        }
+    }
+
+    Assert::hasKey('send_survey', $types, 'the ask goes through the module');
+
+    Assert::same(
+        0,
+        $tasksOnDetractor,
+        'the detractor sequence must not raise a second task beside the module\'s own'
+    );
+});
+
+Harness::test('the playbook seed is idempotent, steps included', function (): void {
+    $seed = load_seed('playbooks');
+
+    $before = (int) DB::value('SELECT COUNT(*) FROM {automation_steps}');
+    $result = $seed();
+
+    Assert::same(0, $result['playbooks'], 'a second run creates no playbook');
+    Assert::same(0, $result['automations'], 'and no automation');
+    Assert::same(0, $result['steps'], 'and no step');
+    Assert::same($before, (int) DB::value('SELECT COUNT(*) FROM {automation_steps}'));
+});
+
+Harness::test('an automation somebody has emptied on purpose stays empty', function (): void {
+    /*
+     * The top-up on re-seed is for the install that predates the steps
+     * shipping. A venue that deleted the steps of a seeded automation has
+     * said what they want, and a later seed run putting them back — on an
+     * automation that may be switched ON — would start sending the venue's
+     * own sequence again.
+     */
+    $id = (int) DB::value(
+        "SELECT a.id FROM {automations} a
+          WHERE a.slug LIKE 'birthday-celebration-sales-%'
+            AND EXISTS (SELECT 1 FROM {automation_steps} s WHERE s.automation_id = a.id)
+          ORDER BY a.id LIMIT 1"
+    );
+
+    Assert::greaterThan(0, $id, 'precondition: a seeded automation with steps');
+
+    $steps = DB::all('SELECT * FROM {automation_steps} WHERE automation_id = :a ORDER BY sort_order', ['a' => $id]);
+
+    DB::query('DELETE FROM {automation_steps} WHERE automation_id = :a', ['a' => $id]);
+
+    try {
+        $seed = load_seed('playbooks');
+        $seed();
+
+        Assert::same(0, (int) DB::value(
+            'SELECT COUNT(*) FROM {automation_steps} WHERE automation_id = :a',
+            ['a' => $id]
+        ), 'the seed must not refill an automation somebody emptied');
+    } finally {
+        // Put them back, in their own order, so the rest of the suite sees
+        // the install the seed describes.
+        foreach ($steps as $step) {
+            unset($step['id']);
+            DB::insert('automation_steps', $step);
+        }
+    }
+});
+
+Harness::test('A MILESTONE CONGRATULATES A GUEST ONCE, NOT ON EVERY LATER VISIT', function (): void {
+    /*
+     * MEASURED, and it is the subtlest trap in the whole seeded library.
+     *
+     * `run_once_per_contact` is deliberately bypassed when the trigger names
+     * an ENTITY, and `visit.recorded` names a visit — so every visit enrols a
+     * fresh run whatever that flag is set to. The "tenth visit" condition
+     * stays true from the tenth visit onwards, so the obvious sequence
+     * (condition → email) emails a regular EVERY TIME THEY COME, for ever.
+     * Twelve visits produced twelve runs and three sends before the guard
+     * existed, and a venue finds out when a regular asks why they are
+     * congratulated on their tenth visit every week.
+     *
+     * The guard is the tag the sequence writes itself. This test runs the
+     * real engine over a real guest's twelve visits and counts SENDS, not
+     * runs — runs are expected to be one per visit.
+     */
+    $playbook = (int) DB::value(
+        "SELECT id FROM {playbooks} WHERE slug = 'visit-ticketing-automation'"
+    );
+    $automation = (int) DB::value(
+        "SELECT id FROM {automations} WHERE slug = 'visit-ticketing-automation-08'"
+    );
+
+    Assert::greaterThan(0, $automation, 'the milestone automation is seeded');
+
+    $wasPlaybook   = (int) DB::value('SELECT is_active FROM {playbooks} WHERE id = :id', ['id' => $playbook]);
+    $wasAutomation = (int) DB::value('SELECT is_active FROM {automations} WHERE id = :id', ['id' => $automation]);
+
+    // An automation inside a switched-off playbook does not run however
+    // active its own flag is, so both go on.
+    DB::update('playbooks', ['is_active' => 1], 'id = :id', ['id' => $playbook]);
+    DB::update('automations', ['is_active' => 1], 'id = :id', ['id' => $automation]);
+
+    $contactId = DB::insert('contacts', [
+        'first_name'    => 'Milestone',
+        'last_name'     => 'Tester',
+        'email'         => 'milestone.' . bin2hex(random_bytes(4)) . '@example.test',
+        'email_consent' => 1,
+        'source'        => 'seedtest',
+        'created_at'    => now_utc(),
+        'updated_at'    => now_utc(),
+    ]);
+
+    try {
+        for ($day = 0; $day < 12; $day++) {
+            App\Services\VisitRecorder::record([
+                'contact_id'  => $contactId,
+                'visit_date'  => gmdate('Y-m-d', time() - ($day * 86400)),
+                'source'      => 'check_in',
+                'spend_cents' => 2500,
+            ]);
+
+            // Drain, so each visit's run finishes before the next is recorded
+            // — which is what gives the tag time to become the guard.
+            for ($i = 0; $i < 3; $i++) {
+                App\Services\AutomationRunner::tick(100);
+            }
+        }
+
+        $sends = (int) DB::value(
+            "SELECT COUNT(*) FROM {automation_step_log} l
+               JOIN {automation_steps} s ON s.id = l.step_id
+               JOIN {automation_runs} r ON r.id = l.run_id
+              WHERE r.contact_id = :c AND r.automation_id = :a AND s.type = 'send_email'",
+            ['c' => $contactId, 'a' => $automation]
+        );
+
+        Assert::same(1, $sends, 'the milestone email is attempted exactly once across twelve visits');
+
+        // And it really did reach the threshold rather than never firing at
+        // all — a guard that blocks everything would pass the line above.
+        Assert::true(
+            DB::exists(
+                "SELECT tg.tag_id FROM {taggables} tg
+                   JOIN {tags} t ON t.id = tg.tag_id
+                  WHERE tg.entity_type = 'contact' AND tg.entity_id = :c AND t.name = :n",
+                ['c' => $contactId, 'n' => 'milestone 10']
+            ),
+            'the guard tag is written, so the condition really did pass once'
+        );
+
+        Assert::same(
+            12,
+            (int) DB::value('SELECT visit_count FROM {contacts} WHERE id = :c', ['c' => $contactId]),
+            'precondition: all twelve visits were recorded on separate days'
+        );
+    } finally {
+        DB::update('playbooks', ['is_active' => $wasPlaybook], 'id = :id', ['id' => $playbook]);
+        DB::update('automations', ['is_active' => $wasAutomation], 'id = :id', ['id' => $automation]);
+        test_reset_transactional_data();
+    }
 });

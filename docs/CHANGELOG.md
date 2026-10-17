@@ -570,10 +570,508 @@ address.
 
 ---
 
+## [1.0.0-phase3] — unreleased
+
+The diary. A booking record with a derived money ladder and a printable run
+sheet; a pure availability engine with its own I/O half; a calendar in month,
+week and day views with resource lanes and a read-only iCal feed; versioned
+waivers a parent signs on their own phone; a check-in desk the front desk can
+work without being able to re-price a party; and a public enquiry page the
+venue switches on when it is ready.
+
+### What the modules are
+
+- **`AvailabilityEngine`** is pure — no database, no clock, no timezone. It
+  answers one day or one time and returns either slots with the resources that
+  could take them, or a refusal naming one of nine reasons. `BookingRepository`
+  is the half that reads rows and converts timestamps, and **the conversion is
+  where this gets quietly wrong**: `cc_bookings.event_date` and its times are
+  the venue's wall clock, every `cc_booking_resources` DATETIME is UTC like
+  everything else in the schema, and both DST offsets appear in the tests on
+  purpose — a suite written only in July passes against code that hard-codes
+  the summer offset.
+- **`QuoteCalculator`** prices a package. Integer cents throughout, no float
+  anywhere in a money path, and division is half-away-from-zero: `intdiv()`
+  truncates, which under-charges the venue by a cent per rounded line.
+- **The run sheet** is what staff carry: times, room, headcount, the allergy
+  note, the add-ons, the tasks. It reaches a role with no `view_revenue`,
+  because the person setting the room up needs the allergy and not the price.
+- **Waivers are versioned and a published version is immutable.** A signature
+  names its version, so publishing new wording tomorrow does not retroactively
+  change what anybody agreed to, and exactly one version is ever live.
+- **`/book`** turns the engine's refusals into alternative dates or a phone
+  number, which is the whole design. It is **off until the venue turns it on**,
+  an enquiry is taken at `inquiry` so the room is really held, and the exposure
+  that creates is bounded by a per-date allowance of unanswered public
+  enquiries plus a route throttle. Nothing is charged and no card details are
+  collected anywhere in this application.
+
+### Four defects found by driving it, not by testing it
+
+Each of these was found in a real browser or against the seeded venue, after
+the tests for that module were already green.
+
+- **A bowling party was unbookable, on every date, and nothing said why.** The
+  engine places a party in ONE resource with room for it, and `resourceTypeFor()`
+  resolved the pool from the package's main attraction — so the seeded Bowling
+  Birthday package, whose attraction owns twenty-four lanes of six, refused its
+  own default of eight guests with "No room of that type holds 8 guests. The
+  largest holds 6", with no alternative to offer. A ten-guest bowling party is
+  really held in a party room and plays on however many lanes it needs, so the
+  method now falls back to the party rooms when no single resource of the
+  attraction's type could physically take the party. **Capacity only, never
+  availability**: falling back because the arena is booked would quietly put a
+  second laser party in a party room at the same three o'clock. It was
+  duplicated in both booking controllers; it now lives once in
+  `BookingRepository`, which fixed the office form at the same time.
+- **Reading a public page spent its POST allowance.** The throttle keyed its
+  counter on the IP and the PATH, and four paths here answer both verbs — three
+  of them pairing a generous read limit with a tight write one. So browsing
+  `/book` eleven times made the enquiry itself answer 429 for the next ten
+  minutes. Every request was individually well inside its own limit, which is
+  why no suite that posts once per test could see it. The key now includes the
+  method.
+- **A blank catalogued add-on quantity meant "one".** Found while clicking
+  through the office form: it put all fourteen catalogued add-ons on a booking
+  — $5,569 of extras on a $511 party, with the arithmetic perfectly correct.
+- **A booking could be saved with no room, and a roomless booking blocked
+  nothing.** The form's room tick-boxes are an override, not a requirement, and
+  somebody taking a party over the phone will not always touch them. Six
+  roomless parties fitted at two o'clock while the calendar showed every room
+  free. The write now takes the first room the engine has already said is
+  available.
+
+Two smaller ones, both wording: the public page's please-call fallback
+resolved a missing phone number to the words "the venue", producing "please
+give us a ring on the venue" in every refusal on an install that had not filled
+the number in; and the page would offer times for a date beyond the year it
+takes bookings for, then refuse the enquiry once the form was filled in — the
+same "show them the form, then say no" the `?start=` validation exists to
+prevent. Alternatives are clamped to the same limit for the same reason.
+
+### Testing
+
+The suite grew from 610 to **831 tests**. Every guard added in this phase was
+mutation-checked: the public booking page's twenty-three mutations are all
+caught, as are five against the capacity fallback and one restoring the old
+throttle key. Three habits came out of it and are now in `docs/TESTING.md`:
+
+1. A list test that never sets a filter does not test the filter.
+2. Assert on a row LINK, not on the text you searched for — a filter bar echoes
+   the term back into its own input, so a title assertion passes against an
+   empty list.
+3. Every refusal test needs its positive control beside it. A page that
+   answered 404 to everything would satisfy half of them perfectly.
+
+One thing is deliberately **not** tested, and the test file says so rather than
+implying otherwise: the `FOR UPDATE` lock the booking write takes over its
+candidate rooms. A sequential suite cannot interleave two writes inside one
+transaction, so removing the lock leaves every test green — the re-check still
+refuses the second enquiry because the first has already committed. What the
+tests pin is that the re-check happens AT THE WRITE rather than only when the
+page was drawn; the lock is reviewed, not measured.
+
+---
+
+## [1.0.0-phase4] — unreleased
+
+Phase 4 is communications: one inbox for every channel, email and SMS sending
+with the compliance rules in the send path rather than beside it, segments,
+campaigns, and the Text Club.
+
+### The shared inbox
+
+- **Every conversation in one queue** (`#/inbox`), email and text together,
+  with snoozing, canned replies and a first-response clock. A reply to a
+  CLOSED thread reopens it: a closed conversation with an unanswered question
+  in it is the one failure a queue exists to prevent.
+- **Inbound texts arrive through a signed webhook** (`POST /webhooks/sms`),
+  which is also what makes the Text Club possible — see below.
+
+### Email and SMS
+
+- **The rules live in the send path.** `Mailer::send()` and `Sms::send()`
+  refuse, in order, for an invalid address, an empty or over-long body, paused
+  sending, a missing opt-out line on a bulk text, a suppression, a missing
+  contact, do-not-contact, missing consent, a number the guest did not opt in
+  on, the weekly frequency cap, and an unregistered 10DLC sender — then defer
+  for quiet hours, then redirect under Safe Mode. Every caller gets the same
+  answer because there is only one implementation.
+- **Segment counting is where the money is.** A text is 160 characters in
+  GSM-7 and 70 in UCS-2, so one curly apostrophe pasted from a word processor
+  can take a 300-character offer from two segments to five. The cost estimate
+  is computed from the real body, and the page says so before anybody sends.
+
+### Campaigns
+
+- **The page tells the truth before the send**: how many will be reached, how
+  many will not and why, what it will cost, and what is currently blocking it.
+  "400 in the segment, 180 will get this, 220 have not opted in" is the most
+  useful sentence on it — a venue that only ever saw 400 would read 180
+  arrivals as broken sending.
+- **A spend over $20 needs the word SEND typed**, not a second click. A click
+  is what somebody does by reflex.
+- **The audience is frozen when sending starts**, one row per person with a
+  reason for every skip, so the venue can answer "why didn't Dana get it"
+  months later. Cron walks it 50 at a time inside the campaign's own send
+  window; nothing is sent in the web request, because forty thousand
+  recipients is not a web request.
+
+### The Text Club
+
+- **Double opt-in, properly.** A guest texts JOIN (or uses the sign-up page)
+  and is subscribed to nothing until they reply YES. Three cases subscribe
+  NOBODY and each is tested: a YES with no invite outstanding, a YES to an
+  invite older than a week, and a YES after a STOP. The first matters most —
+  "yes" is the most ordinary word in a text message, and a guest answering
+  "yes" to *are you still coming Saturday?* has not joined a marketing list.
+- **A JOIN clears the do-not-text instruction; only a YES grants consent.**
+  These come apart on the rejoin: somebody who texted STOP last summer and
+  texts JOIN today has asked to be texted, so the suppression that would
+  otherwise block even the confirmation has to go — while consent still waits
+  for the YES. Conflating them either blocks every rejoin for ever or treats
+  one word as full consent.
+- **Consent is stored with its evidence**, including the exact disclosure
+  wording as it stood that day. What a venue has to be able to produce is the
+  wording from the day somebody agreed, not whatever the setting says now.
+- **A twelve-month offer calendar**, because an arcade's quiet months are not
+  its busy ones. All twelve shipped offers fit a single GSM-7 text, measured.
+- **The validator blocks the save.** An offer with no opt-out line, or an
+  invite missing its rates disclosure, is refused when it is written — not
+  discovered on the first of the month after it has gone to the whole list.
+
+### Two defects found by driving rather than by testing
+
+Both were invisible to a passing test suite and both broke the feature
+outright:
+
+- **No inbound webhook existed.** `InboxController::receive()` composes the
+  reply — the STOP confirmation, the Text Club invite — and returns it for a
+  caller to deliver, and there was no caller. A guest could text JOIN, be
+  recorded as pending, and never receive the confirmation they were meant to
+  answer. The double opt-in dead-ended there, silently. `POST /webhooks/sms`
+  is that caller: it verifies the provider's own signature (Twilio's
+  HMAC-SHA1, Telnyx's Ed25519, or a shared secret) and REFUSES what it cannot
+  verify, including when nothing is configured to verify against — an
+  endpoint that is open until somebody sets a secret works perfectly in
+  testing and is wide open in production.
+- **A STOP confirmation could never be delivered.** Opting out suppresses the
+  number, and the suppression then blocks every message to it — starting with
+  the one that tells the guest their opt-out worked. Carriers expect that
+  confirmation, and its absence is the most likely moment for somebody to
+  conclude they are being ignored. `Sms::send()` now takes an
+  `ignore_suppression` option that is honoured ONLY for a transactional
+  message, so it can never become a way to put an offer in front of somebody
+  who said stop.
+
+Also fixed: the mailer recorded a message's cost only on the usage ledger and
+not on the message row, so every email campaign reported costing $0.00 however
+the venue had priced email — which reads either as broken sending or as free
+postage.
+
+### Testing
+
+The suite grew from 831 to **1,129 tests**. Everything in this phase was
+mutation-checked, and the sweeps are the reason several tests exist at all:
+
+- The Text Club's rules: 30 mutations, 29 caught. The survivor is an
+  equivalent mutant kept as the record of it.
+- Its pages and the webhook: 28 mutations, 25 caught, 2 of them the two gate
+  layers removed singly — which is unobservable by design, so the case that
+  has to be caught is both at once, and it is.
+- Campaigns: 18 mutations, 16 caught, the same two gate layers aside.
+
+Four Text Club tests were measurably not testing what they claimed until the
+sweep said so. The worst was the one guarding the webhook's most important
+property: it checked that an unconfigured endpoint refuses a request signed
+with *some other* secret, which the arithmetic refuses anyway. The real attack
+is a request signed with the EMPTY secret, and only that version of the test
+fails when the guard is removed.
+
+One habit to add to the three from Phase 3: **a test that changes a global
+setting must change it back.** Settings are shared and the suites run against
+one database, so a leak surfaces as a failure in a different file — this one
+turned Safe Mode off in the campaigns suite and broke a quotes assertion two
+suites later.
+
+---
+
+## [1.0.0-phase7] — unreleased
+
+Phases 5, 6 and 7: the automation engine, the reporting suite, and the two
+machine interfaces — a REST API to read and write from outside, and outbound
+webhooks to be told when something happens inside.
+
+### Automations
+
+- **The automation engine and 111 seeded automations**, across eight
+  playbooks. A trigger is any event the application fires; a step waits,
+  branches on a condition, messages a guest, tags them, moves a deal or calls
+  a URL. Every seeded sequence a venue can switch on is authored, not a stub.
+- **A trigger that can never fire is a build failure.** The test suite walks
+  every seeded automation and refuses one whose trigger nothing fires, one
+  with no steps behind a live trigger, and one scheduled to message a guest
+  with nobody to message — the three shapes of an automation that looks
+  finished and does nothing.
+
+### Reporting
+
+- **Twenty-three reports in six families**, each listed by the question it
+  answers rather than its name, with CSV export and saved reports. A saved
+  report keeps its period by NAME, so "last 30 days" still means the last 30
+  days next month.
+- **Venue-local days.** Every timestamp is stored UTC and every report groups
+  by the venue's own calendar day, so a 9pm Saturday booking is Saturday's.
+- **Money is scrubbed, not hidden**, for a role without `view_revenue` — in
+  the page and in the export, which is a separate endpoint and the easy one to
+  forget.
+
+### Machine interfaces
+
+- **A REST API at `/api/v1`**, bearer-token authenticated, 13 resources.
+  A token never grants more than the person who owns it and its abilities only
+  narrow; a record outside your scope is a 404, not a 403, because a 403
+  confirms the record exists.
+- **Outbound webhooks.** Subscribe to any event or to a namespace wildcard;
+  each call is signed with an HMAC-SHA256 of the raw body, timestamped against
+  replay, and carries a stable delivery id to deduplicate on. Six attempts
+  over about nine hours, a delivery log with the reason in words, manual
+  replay, and a subscription that switches itself off after twenty consecutive
+  failures rather than retrying a dead endpoint for ever.
+- **A webhook carries ids, not records** — no name, no email, no amount. A
+  receiver that needs the record reads it back through the API with a token
+  that can be scoped and revoked. A URL typed into a form should not become a
+  standing export of guest records to somewhere nobody audits.
+- **A URL pointing inside the network is refused when you save it**, including
+  a hostname that resolves inwards, re-checked at delivery time with the
+  approved address pinned for the connection.
+
+### Bringing a venue's history across
+
+- **CSV import for guests and visit history** (Settings → Import a file).
+  Upload, map the columns — guessed from your own headings — check the whole
+  file without writing anything, then import. A big file carries on in the
+  background a batch a minute, so fifty thousand rows works on shared hosting
+  where a web request would time out.
+- **Nothing is written until the check has run**, and the server refuses a
+  commit without one, not just the button. The check reads the real file
+  against the real database, so what it reports is what will happen.
+- **Every row is accounted for, by row number.** A count of refusals tells a
+  venue that guests are missing and nothing about which ones. The report names
+  each one with the reason in words, groups them so it is obvious whether it is
+  one problem or a hundred, and downloads as a CSV to fix and re-upload.
+- **Imported guests are consented to nothing**, whatever the file says — the
+  column that looks like consent is usually a default somebody set once for
+  everybody. A consent column is honoured only if you tick a box affirming you
+  hold the records, which is audited with your name on it. A do-not-contact
+  column is always honoured, and an import can never change a consent that
+  already exists.
+- **A date that could be read two ways is refused, not guessed.** `03/04/2024`
+  is two different birthdays, and one wrong by a month sends the offer to the
+  wrong week every year. The mapping screen asks which order your dates are in.
+- **Re-uploading the same file is safe.** People match on email then phone;
+  visits go through the same recorder the front desk uses, so one guest on one
+  day is one visit however many transactions the file holds, and lifetime value
+  is derived rather than added up.
+- A visit for somebody not in the database is **refused, never used to create
+  them** — otherwise a till export becomes tens of thousands of nameless
+  records whose only field is a card number.
+
+### Fixed
+
+- **An upgrade no longer depends on somebody remembering to edit `VERSION`.**
+  It did, and `VERSION` had not moved in three phases — so three schema files
+  were never applied by an upgrade, and the reporting, API-token and webhook
+  pages would each have met a venue with a bare 500. The upgrade now also
+  triggers on the schema directory's own contents.
+- **A contact added by staff now fires `contact.created`.** It only fired for
+  guests who arrived by themselves — a form, the booking page, a text, an
+  email, the API — so a "welcome a new guest" sequence ran for everybody
+  except the people the front desk typed in. Nothing failed; the sequence
+  simply never started.
+- **No page scrolls sideways on a phone.** An invisible screen-reader label
+  inside a wide table was escaping its scroll container and dragging the whole
+  layout with it, and a one-line ellipsised tagline was setting a floor under
+  the dashboard's width. Measured on all 30 pages at 390px.
+- **A token and a signing secret are shown in a monospace font.** The rule
+  that said so had never applied, so 64 hex characters somebody has to check
+  by eye were rendered in a font where `l`, `1` and `I` are the same picture.
+- **Pressing Test on a webhook no longer queues five more attempts** at an
+  endpoint it has just reported broken.
+
+### Hardening (phase 8)
+
+The full method and every figure are in `docs/AUDIT.md`. What changed:
+
+- **`tests/` and `tools/` were executable over HTTP.** The rewrite rules let a
+  real file through, as they must for the stylesheet and the installer, and
+  those two directories were not in the deny list — so `GET /tests/run.php`
+  returned 500, meaning it ran. That file boots against the configured
+  database and can drop every table in it. Denied by path, guarded in PHP for
+  hosts that never read `.htaccess`, and gated so a new script cannot appear
+  without one.
+- **`/.git/config` was readable**, because the dotfile rule tests a file's own
+  name and `.git/config` is a file called `config`. An install deployed by
+  cloning was publishing its repository history. Now denied by path, with
+  `.well-known` exempt so AutoSSL can still renew a certificate.
+- **26 tables had no caption**, so a screen reader announced each as a grid of
+  cells and started reading. All captioned, and gated.
+- Checked and held: the CSP forbids inline script, a guest whose name is an
+  XSS payload is escaped on every page that draws a name, the CSV export
+  escapes a cell that could be read as a formula, `/api/v1` refuses a session
+  cookie, uploaded import files are unreachable, and no error page leaks a
+  path or a driver message.
+- **Measured at 50,000 contacts and 106,123 visits**: every page under 200ms,
+  every report under 170ms, and the 50,000-row CSV export peaks at 6MB of a
+  128M limit — flat across 100,000 rows, which is what proves it streams.
+- **A real restore drill**: backup, `DROP DATABASE`, restore, and the row
+  counts and money sums match to the penny — then the application was signed
+  into and used, because a restore the application cannot use is not one.
+- **Accessibility measured in a browser**: 124 page loads, two themes, two
+  widths, contrast taken from real pixels wherever a gradient made it
+  uncomputable. Zero findings after the captions.
+
+### Fixed in review (the API)
+
+Five of these are the same mistake in five places: **the API checked that a
+permission was HELD and not what it covered**, so a role an operator can
+build in Settings in one afternoon reached further through `/api/v1` than
+through its own pages. None of them failed visibly, and none of them was
+reachable by accident — which is exactly why they needed finding.
+
+- **Deleting through the API checked the EDIT permission.** This application
+  separates the two everywhere a page does — `contacts_manage` edits a guest
+  and `contacts_delete` removes one, `bookings_manage` edits a party and
+  `bookings_cancel` takes it off the calendar — because the front-desk role
+  holds the first and not the second. A front-desk token could delete exactly
+  what the same person's own pages refuse them. Each resource now names its
+  own delete permission, the discovery endpoint reports `deletable` beside
+  `writable`, and a test states the four that are deletable as data so a new
+  one cannot open an endpoint by existing.
+- **Every write loaded its record under the READ scope.** Scopes are per
+  permission, so "see everyone, edit your own" — ordinary, and buildable in
+  Settings — was honoured on the read and ignored on the write: a token could
+  PATCH, delete, record consent for, or add a visit to somebody else's guest.
+  The permission that governs the call now decides the lookup, and a record
+  outside it is a 404 rather than a 403, so an id space cannot be walked.
+- **A visit took any `contact_id` at all** — no scope, and a soft-deleted
+  guest too, which would have quietly revived them in every report that
+  counts visits.
+- **A deal's stage was a writable column.** Setting it skipped every
+  consequence of a move: the stage clock the velocity report measures, the
+  won/lost date, the SLA deadline, the stage-history row, and the events that
+  start the deposit chase and the thank-you. The board would show a deal in
+  "Won" with no won date and no automation ever running. Moving a deal is now
+  `POST /api/v1/deals/{id}/stage`, by stage name or id, through the same code
+  the board posts to — idempotent, and a stage on another pipeline is refused
+  with a reason. Deals created through the API now also open with the stage
+  clock running and an opening history row, as ones created on the board do.
+- **An empty ability list on a token read as "no restrictions".** Reachable,
+  not theoretical: a token asked for with a renamed or misspelled permission
+  had every entry dropped by the cleaner — correctly — and was then stored as
+  an empty list and read back as full access. The narrowest request anybody
+  could make produced the widest token, with nothing beside it on the page to
+  say so. An empty list now grants nothing, such a token is refused at
+  creation with the names that were not recognised, and a row already holding
+  one says so on the page instead of showing a blank cell.
+- **A delete permission a token could not be given.** The fix above made
+  DELETE check `contacts_delete` / `deals_delete` / `bookings_cancel` — and the
+  token page's ability list is built from each resource's read and write
+  permission only, so there was no box to tick for any of them. A token could
+  be scoped to read and edit guests and never to delete one; an operator who
+  needed that had to leave every box unticked, which mints a token carrying
+  everything its account can do. A narrowing fix whose practical effect is to
+  push people onto the widest available credential has made things worse. The
+  delete permission is now offered beside read and write, and a test asserts
+  that **every permission the API consults can be put on a token** — and that
+  nothing is offered which the API never asks for — so the next permission
+  that splits off cannot become un-mintable the same way.
+- **A deal could be left on a board it had no stage on.** `pipeline_id` is
+  writable and `stage_id` deliberately is not, and those two facts together
+  meant a PATCH naming only the pipeline moved the deal to a new board while
+  its stage still belonged to the old one. Measured: `pipeline_id 2, stage_id
+  1` with stage 1 belonging to pipeline 1 — a state no page renders sensibly
+  and every stage-keyed report mis-attributes. The web's edit form cannot
+  produce it, because there the pipeline follows the chosen stage. Here the
+  caller names the board, so the stage follows it: the deal enters the first
+  stage of the board it is moving to, through the same transition as any other
+  move, with the history row and the events. A pipeline that does not exist is
+  refused rather than applied.
+- **A PATCH can no longer open or close a deal.** Two ways it could. Moving a
+  deal to another board applies the new board's first stage, and that stage's
+  columns follow the stage — so a deal won two minutes earlier came back
+  `status: open` with `won_at` **erased**, from a request that named nothing
+  but a pipeline, with a 200 and no event to say a won deal had stopped being
+  won. That is the date every revenue report keys on. And the mirror image: a
+  board whose first stage an operator has marked won or lost (the stage editor
+  allows it) would have *closed* a deal from the same PATCH, firing `deal.won`
+  or `deal.lost` — and `deal.lost` starts a guest-facing email. Both are
+  refused now, pointing at the stage endpoint, where reopening or closing a
+  deal is the thing being asked for rather than a side effect. Winning and
+  losing are transitions with their own endpoint; that was always the rule,
+  and a field update had found a way around it.
+- **The one permission that records a visit could not be ticked on a token.**
+  The Visits group offered Read and nothing else, because `visits` has an
+  empty writable list on purpose — a visit goes through the recorder, not a
+  plain insert — so the loop that builds the checkboxes skipped its write
+  permission. An operator ticking the only Visits box got a token that cannot
+  do the single thing that endpoint exists for. The box is there now, labelled
+  as the same permission as writing a contact, because it is one. The test
+  that was supposed to catch this asked only whether the slug appeared
+  *somewhere* on the page; it now asks per resource.
+- **A field that names another record now has to be its id — one rule, in one
+  place, instead of a fourth patch.** Three of the fixes above were the same
+  bug wearing different clothes, and it took a third review round to see it:
+  PHP turns `true` into `1` and `"abc"` into `0`, and the API filtered *which*
+  fields a caller could write without ever checking *what shape* they were. So
+  **every** `*_id` field in every resource quietly resolved to "record 1" or
+  "no record" and answered 200 — a deal attached to whichever company happens
+  to be id 1, a guest's visit filed against a stranger's party, a deal
+  relocated to the first board in the list. `ApiResource::writable()` now
+  requires a positive integer, a digit string, or `null` to clear a link, and
+  refuses anything else with a 422 naming the field and the reason. A unit
+  test asserts no writable foreign key escapes the rule, so a field added
+  later is covered the day it is added rather than the day somebody notices.
+- **A stage named by something that is not a name or an id.** `(string) true`
+  is `"1"`, which the resolver reads as stage id 1 — the top of the first
+  board. So a client whose stage field carried a flag rather than a name moved
+  the deal backwards and got a 200 saying it had. An array could not be cast at
+  all, which made this the one write in the API that could answer 500. Only a
+  string or an integer is accepted now, anything else is a 422 that says so,
+  and the move is wrapped like every other write so no input can produce a
+  fatal.
+- **Imported money is parsed by integer arithmetic**, not through a float.
+  The reported half-cent loss did not reproduce — PHP's `round()` compensates,
+  measured over 3,000,001 values — but the correctness of a venue's imported
+  history rested on a rounding helper's fuzz compensation, which no reader can
+  verify by looking. Two real defects fell out of writing it exactly: a
+  figure in scientific notation had its letters stripped like a currency code
+  (`2.5E+3` became $2.53 — $2,500 was meant), and above about $90 trillion a
+  float loses the last cent. Both are now refused and reported against the
+  line they came from, rather than imported as a number nobody typed.
+
+---
+
 ## Unreleased — next
 
-Phase 3 is bookings: availability, run sheets, waivers and check-in. See
-`docs/SPEC.md` §13 for the full plan, and §14 for the fifteen questions that
-need the venue's answers before the work that depends on them can be finished —
-the CenterEdge reporting credentials and the real party prices being the two
-that block the most.
+Phase 8 is done and written up in `docs/AUDIT.md`. **Phases 1–6 and 8 are
+complete. Phase 7 is partly done**, and the part that is missing is the part
+that needs the venue's own systems rather than more code:
+
+- **Built:** the REST API, outbound webhooks, iCal feeds, and CSV import for
+  guests and visit history.
+- **Not built:** the live CenterEdge MSSQL feed and card API, posting a review
+  reply through Google Business Profile (the reputation module records the
+  reply instead — §8.9), and the weather hook. There is no dedicated Slack
+  integration either, though the automation engine's generic `webhook` step
+  takes a Slack incoming-webhook URL today.
+
+**None of that is blocked on code.** `docs/SPEC.md` §14 holds the questions
+it waits on, and two of them have real lead times: whether CenterEdge holds
+usable guest email and phone at all (§14 #3, which the spec calls its most
+important question — near-zero coverage means list-building beats importing),
+whether an MSSQL driver is even reachable from the host (§14 #6 — on cPanel
+shared hosting it probably is not, which makes a venue-side export into the
+CSV importer the permanent answer rather than a stopgap), and a 10DLC brand
+registration for SMS (§14 #8, 2–4 weeks of carrier lead time, and it gates
+the Text Club playbook).

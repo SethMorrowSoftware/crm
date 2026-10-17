@@ -58,6 +58,7 @@ declare(strict_types=1);
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Automations in this playbook</caption>
                 <thead><tr><th scope="col">Automation</th><th scope="col">Trigger</th><th scope="col">State</th></tr></thead>
                 <tbody>
                 <?php foreach ($automations as $automation): ?>

@@ -157,7 +157,16 @@ final class Audit
 
             // Loose comparison on purpose: MySQL hands back "1" where PHP set
             // 1, and recording that as a change would make every diff noise.
-            if ((string) $oldValue === (string) $newValue) {
+            //
+            // COMPARED VIA `scalar()`, because a caller may legitimately pass
+            // a list. `WaiverController::publish()` records which versions it
+            // retired, and casting that array straight to a string raises
+            // "Array to string conversion" — which in debug mode is an
+            // ErrorException, so the publish returned a 500 while still
+            // having done the work. MEASURED: it fired on every publish, 657
+            // times in one local log, and no test noticed because the suite
+            // followed the redirect rather than reading the status.
+            if (self::scalar($oldValue) === self::scalar($newValue)) {
                 continue;
             }
 
@@ -170,10 +179,42 @@ final class Audit
         return $changes;
     }
 
+    /**
+     * A value as a string, for comparison only.
+     *
+     * An array or an object becomes its JSON, so two lists of the same
+     * versions compare equal and two different ones do not — which is the
+     * question `diff()` is asking. A plain cast raises a warning and, in
+     * debug mode, an exception.
+     */
+    private static function scalar(mixed $value): string
+    {
+        if ($value === null || is_scalar($value)) {
+            return (string) $value;
+        }
+
+        return (string) json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
     private static function truncate(mixed $value): mixed
     {
         if (is_string($value) && strlen($value) > 500) {
             return substr($value, 0, 500) . '…';
+        }
+
+        /*
+         * A list is kept as a list rather than stringified: `changes` is a
+         * JSON column, so ["v1","v2"] reads back as the two versions it
+         * retired instead of the word "Array". Bounded, because this ends up
+         * in a row somebody reads — a runaway list is as unhelpful as a
+         * runaway string.
+         */
+        if (is_array($value)) {
+            $trimmed = array_slice($value, 0, 50);
+
+            return count($value) > 50
+                ? array_merge($trimmed, ['…and ' . (count($value) - 50) . ' more'])
+                : $trimmed;
         }
 
         return $value;

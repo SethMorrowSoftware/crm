@@ -19,6 +19,18 @@ declare(strict_types=1);
  *   CC_INSTALL_DB_HOST / _PORT / _NAME / _USER / _PASS
  */
 
+/*
+ * CLI ONLY. This script DELETES `config/config.php` and drives the installer
+ * from nothing — which is exactly what it is for, and exactly why it must not
+ * be reachable by a request. Apache's rewrite lets a real file through, and a
+ * host that ignores the shipped `.htaccess` has nothing else in the way.
+ */
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+
 define('CC_ROOT', dirname(__DIR__, 2));
 
 $config = [
@@ -527,7 +539,7 @@ heading('Installer step 7 — starting data');
 
 $page = $client->get('/install/index.php?step=7');
 check($page['status'] === 200, 'step 7 renders');
-check(str_contains($page['body'], '111 automations'), 'offers the playbook library');
+check(str_contains($page['body'], '112 automations'), 'offers the playbook library');
 check(
     str_contains($page['body'], 'arrives switched off'),
     'states plainly that nothing starts running'
@@ -618,6 +630,25 @@ foreach ($counts as $table => $expected) {
     check($actual === $expected, sprintf('%s: %d (expected %d)', $table, $actual, $expected));
 }
 
+/*
+ * Membership plans arrive as SHAPES, not as prices. The three the venue seed
+ * writes exercise the three branches of the lifecycle (a dated pass runs the
+ * renewal ladder, a punch card ends on its visits, an open-ended membership
+ * never enters the ladder) — but their prices are round numbers nobody at
+ * this venue chose, so none of them may be sellable until somebody has.
+ */
+$plans = (int) $pdo->query('SELECT COUNT(*) FROM cc_membership_plans')->fetchColumn();
+check($plans >= 3, sprintf('membership plans: %d', $plans));
+
+$plansOnSale = (int) $pdo->query('SELECT COUNT(*) FROM cc_membership_plans WHERE is_active = 1')->fetchColumn();
+check($plansOnSale === 0, 'and NONE is on sale before the venue has priced it');
+
+$surveys = (int) $pdo->query('SELECT COUNT(*) FROM cc_surveys')->fetchColumn();
+check($surveys >= 2, sprintf('feedback surveys: %d', $surveys));
+
+$surveysOn = (int) $pdo->query('SELECT COUNT(*) FROM cc_surveys WHERE is_active = 1')->fetchColumn();
+check($surveysOn === 0, 'and neither is running, so nobody is emailed on install day');
+
 $automations = (int) $pdo->query('SELECT COUNT(*) FROM cc_automations')->fetchColumn();
 check($automations >= 100, sprintf('automations: %d', $automations));
 
@@ -625,6 +656,49 @@ $activeAutomations = (int) $pdo->query(
     'SELECT COUNT(*) FROM cc_automations WHERE is_active = 1'
 )->fetchColumn();
 check($activeAutomations === 0, 'NOTHING is active on a fresh install');
+
+/*
+ * THE SEQUENCES, not just the registry.
+ *
+ * An automation with no steps enrols guests and does nothing with them, and
+ * the builder refuses to switch one on — so "112 automations" on a fresh
+ * install means nothing unless the sequences are there too. The playbooks
+ * whose modules exist ship theirs.
+ */
+$steps = (int) $pdo->query('SELECT COUNT(*) FROM cc_automation_steps')->fetchColumn();
+check($steps >= 100, sprintf('automation steps written by the seed: %d', $steps));
+
+$withSteps = (int) $pdo->query(
+    'SELECT COUNT(DISTINCT automation_id) FROM cc_automation_steps'
+)->fetchColumn();
+check($withSteps >= 50, sprintf('automations that arrive ready to switch on: %d', $withSteps));
+
+// Every offer a step hands out has to exist, or the step fails days later on
+// a run nobody is watching.
+$offers = (int) $pdo->query('SELECT COUNT(*) FROM cc_coupons')->fetchColumn();
+check($offers >= 3, sprintf('offers the sequences issue: %d', $offers));
+
+$orphanOffers = (int) $pdo->query(
+    "SELECT COUNT(*) FROM cc_automation_steps s
+      WHERE s.type = 'issue_coupon'
+        AND NOT EXISTS (
+            SELECT 1 FROM cc_coupons c
+             WHERE c.code = JSON_UNQUOTE(JSON_EXTRACT(s.config, '$.code'))
+        )"
+)->fetchColumn();
+check($orphanOffers === 0, 'no seeded step hands out an offer that does not exist');
+
+$orphanTemplates = (int) $pdo->query(
+    "SELECT COUNT(*) FROM cc_automation_steps s
+      WHERE s.type IN ('send_email', 'send_sms')
+        AND NOT EXISTS (
+            SELECT 1 FROM cc_templates t
+             WHERE t.slug = JSON_UNQUOTE(JSON_EXTRACT(s.config, '$.template'))
+               AND t.channel = IF(s.type = 'send_sms', 'sms', 'email')
+               AND t.is_active = 1
+        )"
+)->fetchColumn();
+check($orphanTemplates === 0, 'and none names a template that is not there, on the right channel');
 
 $activePlaybooks = (int) $pdo->query('SELECT COUNT(*) FROM cc_playbooks WHERE is_active = 1')->fetchColumn();
 check($activePlaybooks === 0, 'no playbook is active either');

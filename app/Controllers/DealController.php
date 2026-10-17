@@ -11,6 +11,7 @@ use App\Core\DB;
 use App\Core\Event;
 use App\Core\Request;
 use App\Core\Response;
+use App\Services\DealStage;
 
 /**
  * Sales pipelines and deals.
@@ -208,7 +209,7 @@ final class DealController extends Controller
 
         // The stage decides status, the deadline and the stage clock, exactly
         // as it does on every later move.
-        $row = array_merge($row, $this->stageColumns([], $stage, $now));
+        $row = array_merge($row, DealStage::columns([], $stage, $now));
 
         $dealId = DB::transaction(static function () use ($row, $stage, $now): int {
             $id = DB::insert('deals', $row);
@@ -231,7 +232,7 @@ final class DealController extends Controller
         });
 
         Event::fire('deal.created', ['id' => $dealId, 'pipeline_id' => (int) $stage['pipeline_id']]);
-        $this->fireOutcome($dealId, $stage);
+        DealStage::fireOutcome($dealId, $stage);
 
         // Flash text is escaped where the layout prints it, so it is passed
         // through raw here — escaping it twice turns an apostrophe in a guest's
@@ -289,7 +290,7 @@ final class DealController extends Controller
         // goes through the same transition so the history row cannot be lost
         // down this path.
         if ($moved) {
-            $update = array_merge($update, $this->stageColumns($deal, $stage, $now));
+            $update = array_merge($update, DealStage::columns($deal, $stage, $now));
         }
 
         DB::transaction(function () use ($id, $update, $deal, $moved, $fromId, $stage, $now): void {
@@ -298,7 +299,7 @@ final class DealController extends Controller
             Audit::record('deal.updated', 'deals', $id, $deal, $update);
 
             if ($moved) {
-                $this->recordMove($id, $fromId, (int) $stage['id'], $deal, $now);
+                DealStage::recordMove($id, $fromId, (int) $stage['id'], $deal, $now);
             }
         });
 
@@ -308,7 +309,7 @@ final class DealController extends Controller
                 'from_stage_id' => $fromId,
                 'to_stage_id'   => (int) $stage['id'],
             ]);
-            $this->fireOutcome($id, $stage);
+            DealStage::fireOutcome($id, $stage);
         }
 
         return $this->success($request, 'Deal updated.', '/deals/' . $id);
@@ -362,12 +363,12 @@ final class DealController extends Controller
 
         $now    = now_utc();
         $fromId = (int) $deal['stage_id'];
-        $update = array_merge($this->stageColumns($deal, $stage, $now), ['updated_at' => $now]);
+        $update = array_merge(DealStage::columns($deal, $stage, $now), ['updated_at' => $now]);
 
         DB::transaction(function () use ($id, $update, $deal, $fromId, $stage, $now): void {
             DB::update('deals', $update, 'id = :id', ['id' => $id]);
 
-            $this->recordMove($id, $fromId, (int) $stage['id'], $deal, $now);
+            DealStage::recordMove($id, $fromId, (int) $stage['id'], $deal, $now);
 
             Audit::record('deal.stage_changed', 'deals', $id, $deal, $update);
         });
@@ -377,7 +378,7 @@ final class DealController extends Controller
             'from_stage_id' => $fromId,
             'to_stage_id'   => (int) $stage['id'],
         ]);
-        $this->fireOutcome($id, $stage);
+        DealStage::fireOutcome($id, $stage);
 
         return $this->success(
             $request,
@@ -636,79 +637,15 @@ final class DealController extends Controller
     // Stage transitions
     // =================================================================
 
-    /**
-     * The deal columns a stage decides.
+    /*
+     * THE THREE HELPERS THAT USED TO LIVE HERE NOW LIVE IN `DealStage`.
      *
-     * @param array<string,mixed> $deal  The row as it stands (empty on create).
-     * @param array<string,mixed> $stage The stage being entered.
-     * @return array<string,mixed>
+     * The automation engine moves deals too, and a second copy of "what
+     * entering a stage does" would drift — with the drifting copy being the
+     * one nobody watches. This controller keeps the validation, the
+     * permission checks and the audit trail; the columns, the history row and
+     * the won/lost events are shared.
      */
-    private function stageColumns(array $deal, array $stage, string $now): array
-    {
-        $isWon  = (int) $stage['is_won'] === 1;
-        $isLost = (int) $stage['is_lost'] === 1;
-
-        $sla = $stage['sla_hours'] === null || $stage['sla_hours'] === ''
-            ? null
-            : gmdate('Y-m-d H:i:s', $this->stamp($now) + ((int) $stage['sla_hours'] * 3600));
-
-        return [
-            'stage_id'         => (int) $stage['id'],
-            'stage_entered_at' => $now,
-            'sla_due_at'       => $sla,
-            'status'           => $isWon ? 'won' : ($isLost ? 'lost' : 'open'),
-            // Keep the original timestamp when a deal re-enters a won or lost
-            // stage, so "when did we win this?" is not rewritten by a tidy-up.
-            'won_at'           => $isWon ? ($deal['won_at'] ?? $now) : null,
-            'lost_at'          => $isLost ? ($deal['lost_at'] ?? $now) : null,
-            'last_activity_at' => $now,
-        ];
-    }
-
-    /**
-     * Write the history row for a move.
-     *
-     * @param array<string,mixed> $deal The row BEFORE the move.
-     */
-    private function recordMove(int $dealId, int $fromStageId, int $toStageId, array $deal, string $now): void
-    {
-        $entered = (string) ($deal['stage_entered_at'] ?? '');
-
-        if ($entered === '') {
-            $entered = (string) ($deal['created_at'] ?? $now);
-        }
-
-        $duration = $entered === '' ? null : max(0, $this->stamp($now) - $this->stamp($entered));
-
-        DB::insert('deal_stage_history', [
-            'deal_id'          => $dealId,
-            'from_stage_id'    => $fromStageId > 0 ? $fromStageId : null,
-            'to_stage_id'      => $toStageId,
-            'user_id'          => Auth::id(),
-            'duration_seconds' => $duration,
-            'created_at'       => $now,
-        ]);
-    }
-
-    /** @param array<string,mixed> $stage */
-    private function fireOutcome(int $dealId, array $stage): void
-    {
-        if ((int) $stage['is_won'] === 1) {
-            Event::fire('deal.won', ['id' => $dealId]);
-        }
-
-        if ((int) $stage['is_lost'] === 1) {
-            Event::fire('deal.lost', ['id' => $dealId]);
-        }
-    }
-
-    /** A UTC database timestamp as a unix time. */
-    private function stamp(string $utc): int
-    {
-        $time = strtotime($utc . ' UTC');
-
-        return $time === false ? time() : $time;
-    }
 
     // =================================================================
     // Guards shared by store() and update()

@@ -111,6 +111,7 @@ $expired = $expires !== null && $expires < gmdate('Y-m-d');
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Lines on this quote</caption>
                 <thead>
                     <tr>
                         <th scope="col">Description</th>

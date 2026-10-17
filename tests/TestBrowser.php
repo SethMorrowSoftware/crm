@@ -88,6 +88,12 @@ final class TestBrowser
             CURLOPT_FOLLOWLOCATION => $follow,
             CURLOPT_TIMEOUT        => 20,
             CURLOPT_MAXREDIRS      => 5,
+            // A real browser always sends one, and several things the
+            // application records keep it: a session row, an audit row, a
+            // waiver signature. Without it those columns come back empty in
+            // tests and nowhere else, which is the wrong way round for a
+            // harness that exists to behave like a browser.
+            CURLOPT_USERAGENT      => 'CastleCRM-TestBrowser/1.0 (+tests/TestBrowser.php)',
             CURLOPT_HTTPHEADER     => array_merge(
                 ['X-Forwarded-For: ' . $this->clientIp],
                 $extraHeaders

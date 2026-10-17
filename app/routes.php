@@ -15,7 +15,10 @@ declare(strict_types=1);
  *   csrf            — mutating verbs must carry a valid token
  *   can:<perm>      — the user must hold this permission (checked against the
  *                     Acl catalogue, so a typo throws rather than passing)
- *   throttle:n,m    — at most n requests per m minutes per IP per path
+ *   throttle:n,m    — at most n requests per m minutes per IP, per method and
+ *                     path. The method matters: reading a public page and
+ *                     submitting it carry different limits, and a shared
+ *                     counter would let reads spend the writes' allowance.
  *
  * @var \App\Core\Router $router
  */
@@ -45,6 +48,19 @@ $router->post('/reset-password', ['AuthController', 'resetPassword'], ['guest', 
 $router->get('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], ['throttle:60,5'], 'unsubscribe');
 $router->post('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], ['throttle:60,5']);
 
+// Inbound texts, posted by the SMS provider. CSRF-exempt for the same reason
+// as unsubscribe — there is no session and never will be — but NOT
+// unauthenticated: the controller verifies the provider's own signature and
+// REFUSES a request it cannot verify, including when nothing is configured to
+// verify against. An unsigned endpoint here would let anybody forge a JOIN
+// from a stranger's number (making the venue text them, with its own records
+// saying they consented) or a STOP from a customer's (cutting them off from
+// their booking reminders).
+//
+// Throttled generously: a busy Saturday is a lot of real inbound texts, and
+// the signature check is what keeps the cost of a forged flood at nothing.
+$router->post('/webhooks/sms', ['SmsWebhookController', 'receive'], ['throttle:600,5'], 'webhooks.sms');
+
 // A hosted web form. No login: this is the party enquiry a parent fills in
 // from the venue's website.
 //
@@ -56,6 +72,35 @@ $router->post('/u/{token:[A-Za-z0-9_-]+}', ['PublicController', 'unsubscribe'], 
 // loosely because a page view is cheap and a real guest may reload.
 $router->get('/f/{slug:[a-z0-9-]+}', ['FormController', 'show'], ['throttle:120,5'], 'forms.public');
 $router->post('/f/{slug:[a-z0-9-]+}', ['FormController', 'submit'], ['csrf', 'throttle:15,10']);
+
+// The Text Club sign-up, on the same terms. Throttled harder than the party
+// enquiry because every submission SENDS A TEXT, so an unthrottled form is a
+// way to make the venue pay to message a number somebody else chose. The
+// controller also caps attempts per NUMBER, which is the limit that actually
+// matters: a throttle on the address is shared by a whole phone network.
+$router->get('/text-club/join', ['TextClubController', 'publicForm'], ['throttle:120,5'], 'textclub.public');
+$router->post('/text-club/join', ['TextClubController', 'publicJoin'], ['csrf', 'throttle:10,10']);
+
+// Feedback, from a link in an email or a text. No login: this is a parent on
+// their phone the morning after a party, and the token in the path is the
+// whole of the authorisation — which is why every one of these pages is
+// noindex and uncached (see PublicFeedbackController).
+//
+// `/s/{token}` is the question. The POST is CSRF-protected on the same terms
+// as the party enquiry: rendering the page mints a token into the visitor's
+// own session. Throttled gently on the GET (a guest may reload) and harder on
+// the POST, which writes.
+//
+// `/r/{token}` is a promoter clicking through to leave a public review. It
+// redirects to the venue's OWN configured link for that platform, never to
+// anything in the request, so it cannot be turned into an open redirect.
+//
+// `/reviews` is the review wall, and it is the one public page here that
+// SHOULD be indexed and framed — the venue embeds it on their website.
+$router->get('/s/{token:[a-f0-9]{32}}', ['PublicFeedbackController', 'survey'], ['throttle:60,5'], 'survey.public');
+$router->post('/s/{token:[a-f0-9]{32}}', ['PublicFeedbackController', 'submit'], ['csrf', 'throttle:20,10']);
+$router->get('/r/{token:[a-f0-9]{32}}', ['PublicFeedbackController', 'reviewClick'], ['throttle:60,5'], 'review.click');
+$router->get('/reviews', ['PublicFeedbackController', 'wall'], ['throttle:240,5'], 'reviews.wall');
 
 // ---------------------------------------------------------------------------
 // Dashboard
@@ -93,6 +138,47 @@ $router->group('/settings', ['auth', 'can:settings'], function ($router): void {
     $router->get('/mail', ['MailSettingsController', 'edit'], ['can:integrations_manage'], 'settings.mail');
     $router->post('/mail', ['MailSettingsController', 'save'], ['csrf', 'can:integrations_manage']);
     $router->post('/mail/test', ['MailSettingsController', 'test'], ['csrf', 'can:integrations_manage']);
+
+    // API tokens hand out a credential that reaches guest data from outside
+    // the building, so they sit behind the integrations permission like the
+    // mail settings rather than riding along with general settings.
+    $router->get('/api-tokens', ['ApiTokenController', 'index'], ['can:integrations_manage'], 'settings.api-tokens');
+    $router->post('/api-tokens', ['ApiTokenController', 'store'], ['csrf', 'can:integrations_manage']);
+    $router->post(
+        '/api-tokens/{id:\d+}/revoke',
+        ['ApiTokenController', 'destroy'],
+        ['csrf', 'can:integrations_manage']
+    );
+
+    // Outbound webhooks send the venue's own events to a URL somebody typed,
+    // so they sit behind the same permission as the credential that reads them
+    // back — and for the same reason.
+    $router->get('/webhooks', ['WebhookController', 'index'], ['can:integrations_manage'], 'settings.webhooks');
+    $router->post('/webhooks', ['WebhookController', 'store'], ['csrf', 'can:integrations_manage']);
+    $router->post(
+        '/webhooks/{id:\d+}/toggle',
+        ['WebhookController', 'toggle'],
+        ['csrf', 'can:integrations_manage']
+    );
+    $router->post(
+        '/webhooks/{id:\d+}/delete',
+        ['WebhookController', 'destroy'],
+        ['csrf', 'can:integrations_manage']
+    );
+    // Both of these reach out over the network on a POST a browser made, so
+    // they are throttled: a Test button is a request this app makes to any URL
+    // in the world, and holding it down should not become a way to use this
+    // server to hammer somebody else's.
+    $router->post(
+        '/webhooks/{id:\d+}/test',
+        ['WebhookController', 'test'],
+        ['csrf', 'can:integrations_manage', 'throttle:20,10']
+    );
+    $router->post(
+        '/webhooks/deliveries/{id:\d+}/replay',
+        ['WebhookController', 'replay'],
+        ['csrf', 'can:integrations_manage', 'throttle:60,10']
+    );
 
     // Leaving Safe Mode is its own permission: it is the moment the app starts
     // messaging real guests, so it should not ride along with general settings.
@@ -155,6 +241,37 @@ $router->group('/settings/backups', ['auth', 'can:backup_manage'], function ($ro
 });
 
 // ---------------------------------------------------------------------------
+// CSV import
+//
+// `backup_manage`, the same permission as the export, because importing is the
+// mirror image of exporting: one takes the guest database out of the building
+// and the other puts a file of unknown provenance into it, with consent claims
+// attached. That is a narrower decision than "can change a setting", and it
+// already has a permission that means exactly it.
+// ---------------------------------------------------------------------------
+
+$router->group('/imports', ['auth', 'can:backup_manage'], function ($router): void {
+    $router->get('', ['ImportController', 'index'], [], 'imports');
+    /*
+     * Throttled because each one writes a file to the server's disk — but not
+     * tightly, and the reason matters: a host whose `upload_max_filesize` is
+     * 2MB forces a venue with a decade of guests to SPLIT their export, and a
+     * limit of a dozen turns that into a migration they have to do in
+     * sittings, with a "too many requests" page and no explanation when they
+     * hit it. The real guard on this endpoint is `backup_manage`; this one
+     * exists to bound an accident or a stolen session.
+     */
+    $router->post('', ['ImportController', 'store'], ['csrf', 'throttle:30,10']);
+
+    $router->get('/{id:\d+}', ['ImportController', 'show'], [], 'imports.show');
+    $router->get('/{id:\d+}/export', ['ImportController', 'export'], ['throttle:20,10'], 'imports.export');
+
+    $router->post('/{id:\d+}/start', ['ImportController', 'start'], ['csrf', 'throttle:20,10']);
+    $router->post('/{id:\d+}/cancel', ['ImportController', 'cancel'], ['csrf']);
+    $router->post('/{id:\d+}/delete', ['ImportController', 'destroy'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Audit log
 // ---------------------------------------------------------------------------
 
@@ -182,6 +299,38 @@ $router->group('/playbooks', ['auth', 'can:view_automations'], function ($router
     $router->get('/{slug:[a-z0-9-]+}', ['PlaybookController', 'show'], [], 'playbooks.show');
     $router->post('/{id:\d+}/activate', ['PlaybookController', 'activate'], ['csrf', 'can:playbooks_activate']);
     $router->post('/{id:\d+}/deactivate', ['PlaybookController', 'deactivate'], ['csrf', 'can:playbooks_activate']);
+});
+
+// ---------------------------------------------------------------------------
+// Automations — the builder, and the kill switch
+//
+// Three gates, deliberately separate. Reading is `view_automations`; EDITING a
+// sequence is `automations_manage`; SWITCHING ONE ON is
+// `automations_activate`, because that is the action that starts messaging
+// real families days later. The stop-everything button is on the activate
+// permission too: whoever can start it can stop it.
+//
+// The static routes come before `/{id}` so `pause` is never read as an id.
+// ---------------------------------------------------------------------------
+
+$router->group('/automations', ['auth', 'can:view_automations'], function ($router): void {
+    $router->get('', ['AutomationController', 'index'], [], 'automations');
+
+    $router->post('/pause', ['AutomationController', 'pause'], ['csrf', 'can:automations_activate']);
+    $router->post('/resume', ['AutomationController', 'resume'], ['csrf', 'can:automations_activate']);
+
+    $router->post('/steps/{id:\d+}', ['AutomationController', 'updateStep'], ['csrf', 'can:automations_manage']);
+    $router->post('/steps/{id:\d+}/toggle', ['AutomationController', 'toggleStep'], ['csrf', 'can:automations_manage']);
+    $router->post('/steps/{id:\d+}/delete', ['AutomationController', 'destroyStep'], ['csrf', 'can:automations_manage']);
+    $router->post('/steps/{id:\d+}/move', ['AutomationController', 'moveStep'], ['csrf', 'can:automations_manage']);
+
+    $router->get('/{id:\d+}', ['AutomationController', 'show'], [], 'automations.show');
+    $router->post('/{id:\d+}/activate', ['AutomationController', 'activate'], ['csrf', 'can:automations_activate']);
+    $router->post('/{id:\d+}/deactivate', ['AutomationController', 'deactivate'], ['csrf', 'can:automations_activate']);
+    $router->post('/{id:\d+}/steps', ['AutomationController', 'storeStep'], ['csrf', 'can:automations_manage']);
+    $router->post('/{id:\d+}/test', ['AutomationController', 'test'], ['csrf', 'can:automations_manage']);
+    // Starting one FOR REAL is the activate permission, not the edit one.
+    $router->post('/{id:\d+}/start', ['AutomationController', 'start'], ['csrf', 'can:automations_activate']);
 });
 
 // ---------------------------------------------------------------------------
@@ -349,14 +498,369 @@ $router->group('/tasks', ['auth', 'can:view_tasks'], function ($router): void {
 });
 
 // ---------------------------------------------------------------------------
+// Bookings (replaces the /bookings placeholder)
+//
+// Reading is `view_bookings`. Writing is `bookings_manage`, with two actions
+// split out of it:
+//
+//   * cancelling has its own permission (`bookings_cancel`), because it is the
+//     one action that gives a room back and may owe a family a refund. Front
+//     Desk deliberately does not hold it;
+//   * recording money has its own (`payments_record`), so whoever answers the
+//     phone is not automatically whoever settles the books.
+//
+// Nothing here uses a gate LOWER than `bookings_manage`. Ticking a checklist
+// item was written that way at first, copying the task module's rule that an
+// assignee may close their own work, and it does not transfer: Front Desk and
+// Party Host both already hold `bookings_manage`, so the looser gate bought
+// nobody anything while letting the seeded Read Only role write to a booking.
+//
+// `/bookings/availability` is a JSON read behind `view_bookings`: it reports
+// where the venue has gaps, which is commercial information.
+// ---------------------------------------------------------------------------
+
+$router->group('/bookings', ['auth', 'can:view_bookings'], function ($router): void {
+    $router->get('', ['BookingController', 'index'], [], 'bookings');
+    $router->get('/new', ['BookingController', 'create'], ['can:bookings_manage'], 'bookings.create');
+    $router->post('', ['BookingController', 'store'], ['csrf', 'can:bookings_manage']);
+    $router->get('/availability', ['BookingController', 'availability'], [], 'bookings.availability');
+    $router->get('/{id:\d+}', ['BookingController', 'show'], [], 'bookings.show');
+    $router->get('/{id:\d+}/run-sheet', ['BookingController', 'runSheet'], [], 'bookings.runsheet');
+    $router->get('/{id:\d+}/edit', ['BookingController', 'edit'], ['can:bookings_manage'], 'bookings.edit');
+    $router->post('/{id:\d+}', ['BookingController', 'update'], ['csrf', 'can:bookings_manage']);
+    $router->post('/{id:\d+}/status', ['BookingController', 'status'], ['csrf', 'can:bookings_manage']);
+    $router->post('/{id:\d+}/cancel', ['BookingController', 'cancel'], ['csrf', 'can:bookings_cancel']);
+    $router->post('/{id:\d+}/host', ['BookingController', 'assignHost'], ['csrf', 'can:bookings_manage']);
+
+    $router->post('/{id:\d+}/payments', ['BookingController', 'storePayment'], ['csrf', 'can:payments_record']);
+    $router->post(
+        '/{id:\d+}/payments/delete',
+        ['BookingController', 'destroyPayment'],
+        ['csrf', 'can:payments_record']
+    );
+
+    $router->post('/{id:\d+}/tasks', ['BookingController', 'storeTask'], ['csrf', 'can:bookings_manage']);
+    $router->post(
+        '/{id:\d+}/tasks/toggle',
+        ['BookingController', 'toggleTask'],
+        ['csrf', 'can:bookings_manage']
+    );
+
+    $router->post('/{id:\d+}/guests', ['BookingController', 'storeGuest'], ['csrf', 'can:bookings_manage']);
+    $router->post(
+        '/{id:\d+}/guests/delete',
+        ['BookingController', 'destroyGuest'],
+        ['csrf', 'can:bookings_manage']
+    );
+});
+
+// ---------------------------------------------------------------------------
+// The calendar
+//
+// Month, week and day across every booking, plus the iCal feed.
+//
+// `/calendar/feed.ics` IS NOT BEHIND `auth`, and that is the whole design
+// problem of an iCal feed: a calendar application cannot sign in, so a bearer
+// token in the query string is the only authentication available. The feed
+// therefore carries the time, the room, the headcount and the name on each
+// party and NOT the allergy note, the money or the family's details — see
+// CalendarController's class docblock. It is also rate limited, because an
+// unauthenticated endpoint that reads the diary is worth guessing at, and the
+// token is re-checked against the live user and role on every fetch.
+//
+// Minting and revoking a token are ordinary CSRF-protected posts behind
+// `view_bookings`: a feed shows what its holder may see, so the permission to
+// create one is the permission to read the diary.
+// ---------------------------------------------------------------------------
+
+$router->get(
+    '/calendar/feed.ics',
+    ['CalendarController', 'feed'],
+    ['throttle:60,5'],
+    'calendar.feed'
+);
+
+$router->group('/calendar', ['auth', 'can:view_bookings'], function ($router): void {
+    $router->get('', ['CalendarController', 'index'], [], 'calendar');
+    $router->post('/feed', ['CalendarController', 'createToken'], ['csrf']);
+    $router->post('/feed/revoke', ['CalendarController', 'revokeToken'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
+// Waivers and check-in
+//
+// `/waiver` and `/waiver/{token}` ARE NOT BEHIND `auth`: a parent signing a
+// waiver on their phone at the door has no account, and never will. They are
+// the second and third public pages in the application after the web forms,
+// and they follow the same rules — CSRF-protected (rendering the page mints a
+// token into the visitor's own session), rate limited, never indexed, never
+// cached, and handed only the keys a guest may know.
+//
+// Managing VERSIONS is `waivers_manage`, because the wording is a legal
+// document. Checking guests in is `checkin`, which the Front Desk role holds
+// and which deliberately does not include editing a booking: the person at
+// the counter with a child in front of them should be able to add the name
+// and tick them in without being able to re-price the party.
+// ---------------------------------------------------------------------------
+
+$router->get('/waiver', ['WaiverController', 'sign'], ['throttle:120,5'], 'waiver');
+$router->post('/waiver', ['WaiverController', 'storeSignature'], ['csrf', 'throttle:20,10']);
+$router->get('/waiver/{token:[a-f0-9]{32}}', ['WaiverController', 'receipt'], ['throttle:60,5'], 'waiver.receipt');
+
+$router->group('/waivers', ['auth', 'can:waivers_manage'], function ($router): void {
+    $router->get('', ['WaiverController', 'index'], [], 'waivers');
+    $router->get('/new', ['WaiverController', 'create'], [], 'waivers.create');
+    $router->post('', ['WaiverController', 'store'], ['csrf']);
+    $router->get('/{id:\d+}', ['WaiverController', 'show'], [], 'waivers.show');
+    $router->get('/{id:\d+}/edit', ['WaiverController', 'edit'], [], 'waivers.edit');
+    $router->post('/{id:\d+}', ['WaiverController', 'update'], ['csrf']);
+    $router->post('/{id:\d+}/publish', ['WaiverController', 'publish'], ['csrf']);
+    $router->post('/{id:\d+}/delete', ['WaiverController', 'destroy'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
+// Asking for a party, from the venue's own website
+//
+// `/book` IS NOT BEHIND `auth` either, and is the fourth and last public page.
+// It answers 404 until the venue switches it on (`bookings.public_enabled`),
+// and the same 404 when it is on but no package is active — one answer for
+// every reason it will not serve, so poking at the URL says nothing about the
+// configuration behind it.
+//
+// The GET is throttled because it runs an availability pass per request; the
+// POST is throttled harder because it WRITES, and what it writes holds a room.
+// The daily allowance inside the controller is the second half of that bound:
+// the throttle limits how fast enquiries can arrive, the allowance limits how
+// many one date will take at all.
+// ---------------------------------------------------------------------------
+
+$router->get('/book', ['PublicBookingController', 'show'], ['throttle:120,5'], 'book');
+$router->post('/book', ['PublicBookingController', 'store'], ['csrf', 'throttle:10,10']);
+
+$router->group('/checkin', ['auth', 'can:checkin'], function ($router): void {
+    $router->get('', ['CheckinController', 'index'], [], 'checkin');
+    $router->get('/{id:\d+}', ['CheckinController', 'show'], [], 'checkin.show');
+    $router->post('/{id:\d+}/guest', ['CheckinController', 'toggleGuest'], ['csrf']);
+    $router->post('/{id:\d+}/arrive-all', ['CheckinController', 'arriveAll'], ['csrf']);
+    $router->post('/{id:\d+}/guests', ['CheckinController', 'storeGuest'], ['csrf']);
+    $router->post('/{id:\d+}/waiver', ['CheckinController', 'linkWaiver'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2+ module routes are added as each module lands. The placeholders
 // below give the navigation somewhere real to point in Phase 1, and each
 // renders an honest "coming in Phase N" state rather than a broken link.
 // ---------------------------------------------------------------------------
 
-$router->get('/inbox', ['PlaceholderController', 'inbox'], ['auth', 'can:view_inbox'], 'inbox');
-$router->get('/bookings', ['PlaceholderController', 'bookings'], ['auth', 'can:view_bookings'], 'bookings');
+// ---------------------------------------------------------------------------
+// The unified inbox
+//
+// Three permissions, and they come apart on purpose. `view_inbox` decides
+// which conversations are visible and is scoped like every other read.
+// `inbox_reply` is answering a guest — Front Desk and Party Host both hold it.
+// `inbox_assign` is deciding the QUEUE: handing a conversation to somebody,
+// putting it aside, calling it done. The person on the phone is not
+// automatically the person who decides the queue is clear.
+// ---------------------------------------------------------------------------
+
+$router->group('/inbox', ['auth', 'can:view_inbox'], function ($router): void {
+    $router->get('', ['InboxController', 'index'], [], 'inbox');
+    $router->get('/{id:\d+}', ['InboxController', 'show'], [], 'inbox.show');
+    $router->post('/{id:\d+}/reply', ['InboxController', 'reply'], ['csrf', 'can:inbox_reply']);
+    $router->post('/{id:\d+}/assign', ['InboxController', 'assign'], ['csrf', 'can:inbox_assign']);
+    $router->post('/{id:\d+}/snooze', ['InboxController', 'snooze'], ['csrf', 'can:inbox_assign']);
+    $router->post('/{id:\d+}/close', ['InboxController', 'close'], ['csrf', 'can:inbox_assign']);
+    $router->post('/{id:\d+}/reopen', ['InboxController', 'reopen'], ['csrf', 'can:inbox_assign']);
+});
+// ---------------------------------------------------------------------------
+// Segments — saved questions about the guest list
+//
+// `view_marketing` to look, `campaigns_manage` to build. Counting is NOT
+// sending: permission to contact the people in a segment is `campaigns_send`,
+// checked where the sending happens.
+// ---------------------------------------------------------------------------
+
+$router->group('/segments', ['auth', 'can:view_marketing'], function ($router): void {
+    $router->get('', ['SegmentController', 'index'], [], 'segments');
+    $router->get('/new', ['SegmentController', 'create'], ['can:campaigns_manage'], 'segments.create');
+    $router->post('', ['SegmentController', 'store'], ['csrf', 'can:campaigns_manage']);
+    $router->get('/{id:\d+}', ['SegmentController', 'show'], [], 'segments.show');
+    $router->get('/{id:\d+}/edit', ['SegmentController', 'edit'], ['can:campaigns_manage'], 'segments.edit');
+    $router->post('/{id:\d+}', ['SegmentController', 'update'], ['csrf', 'can:campaigns_manage']);
+    $router->post('/{id:\d+}/refresh', ['SegmentController', 'refresh'], ['csrf', 'can:campaigns_manage']);
+    $router->post('/{id:\d+}/delete', ['SegmentController', 'destroy'], ['csrf', 'can:campaigns_manage']);
+});
+
+// ---------------------------------------------------------------------------
+// Campaigns — one message to a lot of people
+//
+// `view_marketing` to look, `campaigns_manage` to build, and `campaigns_send`
+// to actually CONTACT anybody. That last split is the point: somebody can
+// write and cost a campaign without being able to send it, which is how a
+// venue reviews one before it goes out.
+// ---------------------------------------------------------------------------
+
+$router->group('/campaigns', ['auth', 'can:view_marketing'], function ($router): void {
+    $router->get('', ['CampaignController', 'index'], [], 'campaigns');
+    $router->get('/new', ['CampaignController', 'create'], ['can:campaigns_manage'], 'campaigns.create');
+    $router->post('', ['CampaignController', 'store'], ['csrf', 'can:campaigns_manage']);
+    $router->get('/{id:\d+}', ['CampaignController', 'show'], [], 'campaigns.show');
+    $router->get('/{id:\d+}/edit', ['CampaignController', 'edit'], ['can:campaigns_manage'], 'campaigns.edit');
+    $router->post('/{id:\d+}', ['CampaignController', 'update'], ['csrf', 'can:campaigns_manage']);
+    $router->post('/{id:\d+}/test', ['CampaignController', 'test'], ['csrf', 'can:campaigns_send']);
+    $router->post('/{id:\d+}/send', ['CampaignController', 'send'], ['csrf', 'can:campaigns_send']);
+    $router->post('/{id:\d+}/pause', ['CampaignController', 'pause'], ['csrf', 'can:campaigns_send']);
+    $router->post('/{id:\d+}/resume', ['CampaignController', 'resume'], ['csrf', 'can:campaigns_send']);
+});
+
+// ---------------------------------------------------------------------------
+// Text Club
+//
+// The same three-way split as campaigns, because it is the same kind of
+// power: `view_marketing` to see the list and how it is growing,
+// `campaigns_manage` to write the offer calendar and the opt-in wording, and
+// `campaigns_send` to put an offer in front of actual guests.
+//
+// NOTE the public join routes above are deliberately NOT in this group: they
+// are how a guest who has never heard of this software gets on the list.
+// ---------------------------------------------------------------------------
+
+$router->group('/text-club', ['auth', 'can:view_marketing'], function ($router): void {
+    $router->get('', ['TextClubController', 'index'], [], 'textclub');
+    $router->post('/settings', ['TextClubController', 'saveSettings'], ['csrf', 'can:campaigns_manage']);
+    $router->post('/send', ['TextClubController', 'sendOffer'], ['csrf', 'can:campaigns_send']);
+});
+
+// ---------------------------------------------------------------------------
+// Feedback and reviews
+//
+// Reading is `view_reputation`. The two writes are separate permissions that
+// already exist in the catalogue, and the split is the point: `reviews_respond`
+// is writing something the public will read, while `feedback_resolve` is
+// closing a complaint — a manager's decision about a guest who is owed
+// something. Configuring it is `settings`, because the "who gets asked for a
+// review" switch is a policy choice about the venue's public reputation.
+// ---------------------------------------------------------------------------
+
+$router->group('/reputation', ['auth', 'can:view_reputation'], function ($router): void {
+    $router->get('', ['ReputationController', 'index'], [], 'reputation');
+
+    $router->get('/feedback', ['ReputationController', 'responses'], [], 'reputation.feedback');
+    $router->get('/feedback/{id:\d+}', ['ReputationController', 'showResponse'], [], 'reputation.feedback.show');
+    $router->post('/feedback/{id:\d+}/resolve', ['ReputationController', 'resolve'], ['csrf', 'can:feedback_resolve']);
+
+    $router->get('/reviews', ['ReputationController', 'reviews'], [], 'reputation.reviews');
+    $router->post('/reviews/import', ['ReputationController', 'import'], ['csrf', 'can:reviews_respond']);
+    $router->post('/reviews/{id:\d+}/reply', ['ReputationController', 'reply'], ['csrf', 'can:reviews_respond']);
+    $router->post('/reviews/{id:\d+}/feature', ['ReputationController', 'feature'], ['csrf', 'can:reviews_respond']);
+
+    $router->get('/requests', ['ReputationController', 'requests'], [], 'reputation.requests');
+
+    $router->get('/surveys', ['ReputationController', 'surveys'], [], 'reputation.surveys');
+    $router->post('/surveys/{id:\d+}', ['ReputationController', 'saveSurvey'], ['csrf', 'can:settings']);
+    $router->post('/settings', ['ReputationController', 'saveSettings'], ['csrf', 'can:settings']);
+});
+
 $router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
-$router->get('/reputation', ['PlaceholderController', 'reputation'], ['auth', 'can:view_reputation'], 'reputation');
-$router->get('/memberships', ['PlaceholderController', 'memberships'], ['auth', 'can:view_memberships'], 'memberships');
-$router->get('/reports', ['PlaceholderController', 'reports'], ['auth', 'can:view_reports'], 'reports');
+// ---------------------------------------------------------------------------
+// Memberships and season passes
+//
+// Two permissions, and the split is the point: `memberships_manage` sells a
+// pass, freezes one and cancels one — counter work. `plans_manage` decides
+// what a pass COSTS and what it includes, which is not. A front desk that can
+// enrol a family must not be able to invent a twelve-pound season pass.
+// ---------------------------------------------------------------------------
+
+$router->group('/memberships', ['auth', 'can:view_memberships'], function ($router): void {
+    $router->get('', ['MembershipController', 'index'], [], 'memberships');
+    $router->post('', ['MembershipController', 'store'], ['csrf', 'can:memberships_manage']);
+
+    $router->get('/plans', ['MembershipController', 'plans'], [], 'memberships.plans');
+    $router->post('/plans', ['MembershipController', 'savePlan'], ['csrf', 'can:plans_manage']);
+    $router->post('/plans/{id:\d+}', ['MembershipController', 'savePlan'], ['csrf', 'can:plans_manage']);
+
+    $router->get('/{id:\d+}', ['MembershipController', 'show'], [], 'memberships.show');
+    $router->post('/{id:\d+}/members', ['MembershipController', 'addMember'], ['csrf', 'can:memberships_manage']);
+    $router->post('/{id:\d+}/members/remove', ['MembershipController', 'removeMember'], ['csrf', 'can:memberships_manage']);
+    $router->post('/{id:\d+}/freeze', ['MembershipController', 'freeze'], ['csrf', 'can:memberships_manage']);
+    $router->post('/{id:\d+}/unfreeze', ['MembershipController', 'unfreeze'], ['csrf', 'can:memberships_manage']);
+    $router->post('/{id:\d+}/cancel', ['MembershipController', 'cancel'], ['csrf', 'can:memberships_manage']);
+    $router->post('/{id:\d+}/renew', ['MembershipController', 'renew'], ['csrf', 'can:memberships_manage']);
+});
+// ---------------------------------------------------------------------------
+// Reports
+//
+// `{report}` is a catalogue id (`revenue_by_day`), matched loosely here and
+// checked against `Reports::CATALOG` in the controller — the pattern decides
+// what a URL may contain, the catalogue decides what exists, and conflating
+// the two means adding a report means editing a regex.
+// ---------------------------------------------------------------------------
+
+$router->group('/reports', ['auth', 'can:view_reports'], function ($router): void {
+    $router->get('', ['ReportController', 'index'], [], 'reports');
+
+    $router->post('/saved', ['ReportController', 'save'], ['csrf']);
+    $router->get('/saved/{id:\d+}', ['ReportController', 'open'], [], 'reports.saved');
+    $router->post('/saved/{id:\d+}/delete', ['ReportController', 'deleteSaved'], ['csrf']);
+
+    $router->get('/{report:[a-z0-9_]+}', ['ReportController', 'show'], [], 'reports.show');
+    $router->get(
+        '/{report:[a-z0-9_]+}/export',
+        ['ReportController', 'export'],
+        ['can:reports_export'],
+        'reports.export'
+    );
+});
+
+// ---------------------------------------------------------------------------
+// REST API v1
+//
+// `api` REPLACES `auth` rather than sitting beside it, and there is no `csrf`
+// here. Both are deliberate and they are the same decision: the API accepts
+// exactly one credential, a bearer token, and never a session cookie. A route
+// that accepted both would be reachable from any logged-in tab on the
+// internet with no CSRF token to stop it, because the API has no form to put
+// one in.
+//
+// Permissions are NOT on the routes. One controller serves every resource and
+// each resource names its own read and write permission in
+// `ApiResource::RESOURCES`, which the controller checks — putting `can:` here
+// would mean one permission for twelve different resources, which is either
+// too loose or too tight for eleven of them.
+//
+// The throttle is per IP per path per method, like everywhere else. 600 reads
+// a minute is generous for an integration and still a bound.
+// ---------------------------------------------------------------------------
+
+$router->group('/api/v1', ['api'], function ($router): void {
+    $router->get('', ['ApiController', 'index'], ['throttle:120,1'], 'api.index');
+
+    // The non-CRUD endpoints come FIRST: `/contacts/{id}/consent` would
+    // otherwise be matched by nothing and `/visits` by the generic store,
+    // and route order is what decides.
+    $router->post(
+        '/contacts/{id:\d+}/consent',
+        ['ApiController', 'consent'],
+        ['throttle:120,1'],
+        'api.consent'
+    );
+
+    // Moving a deal is a transition, not a field: it stamps the stage clock,
+    // may close the deal, writes the history row the pipeline report reads
+    // and fires the events that start the follow-up. `stage_id` is therefore
+    // not writable through PATCH, and this goes through the same
+    // `DealStage::move()` the board posts to.
+    $router->post(
+        '/deals/{id:\d+}/stage',
+        ['ApiController', 'moveDealStage'],
+        ['throttle:300,1'],
+        'api.deal.stage'
+    );
+
+    $router->get('/{resource:[a-z-]+}', ['ApiController', 'list'], ['throttle:600,1'], 'api.list');
+    $router->post('/{resource:[a-z-]+}', ['ApiController', 'store'], ['throttle:300,1'], 'api.store');
+    $router->get('/{resource:[a-z-]+}/{id:\d+}', ['ApiController', 'show'], ['throttle:600,1'], 'api.show');
+    $router->patch('/{resource:[a-z-]+}/{id:\d+}', ['ApiController', 'update'], ['throttle:300,1'], 'api.update');
+    $router->put('/{resource:[a-z-]+}/{id:\d+}', ['ApiController', 'update'], ['throttle:300,1']);
+    $router->delete('/{resource:[a-z-]+}/{id:\d+}', ['ApiController', 'destroy'], ['throttle:120,1'], 'api.destroy');
+});

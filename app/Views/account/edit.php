@@ -134,6 +134,7 @@ declare(strict_types=1);
 
     <div class="table-wrap">
         <table class="table">
+            <caption class="sr-only">Where you are signed in</caption>
             <thead><tr><th scope="col">Device</th><th scope="col">IP</th><th scope="col">Last used</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <tbody>
             <?php foreach ($sessions as $session): ?>

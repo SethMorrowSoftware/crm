@@ -43,7 +43,7 @@ $seeds = $state['seeds'] ?? ['venue' => true, 'playbooks' => true, 'demo' => fal
             <input type="checkbox" id="seed_playbooks" name="seed_playbooks" value="1"
                 <?= !empty($seeds['playbooks']) ? 'checked' : '' ?>>
             <div>
-                <label for="seed_playbooks">The 8 revenue playbooks and 111 automations</label>
+                <label for="seed_playbooks">The 8 revenue playbooks and 112 automations</label>
                 <p class="hint">
                     Birthday &amp; Celebration Sales, Group &amp; Corporate Events, Visit &amp;
                     Ticketing, Reputation Protection, Membership &amp; Season Pass, Text Club &amp;

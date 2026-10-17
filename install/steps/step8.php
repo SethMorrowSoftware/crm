@@ -92,8 +92,17 @@ endif;
             <?php endif; ?>
             <?php if (isset($summary['seeds']['playbooks'])): ?>
                 <li><?= (int) $summary['seeds']['playbooks']['playbooks'] ?> revenue playbooks with
-                    <?= (int) $summary['seeds']['playbooks']['automations'] ?> automations
+                    <?= (int) $summary['seeds']['playbooks']['automations'] ?> automations<?php
+                    ?><?= (int) ($summary['seeds']['playbooks']['steps'] ?? 0) > 0
+                        ? ', ' . (int) $summary['seeds']['playbooks']['steps']
+                            . ' of their steps already written'
+                        : '' ?>
                     &mdash; all inactive until you switch them on</li>
+                <?php if ((int) ($summary['seeds']['playbooks']['offers'] ?? 0) > 0): ?>
+                    <li><?= (int) $summary['seeds']['playbooks']['offers'] ?> starter offers for the
+                        sequences that hand one out &mdash; change the values before you switch
+                        those on</li>
+                <?php endif; ?>
             <?php endif; ?>
             <?php if (isset($summary['seeds']['templates'])): ?>
                 <li><?= (int) $summary['seeds']['templates']['templates'] ?> email templates,

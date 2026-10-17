@@ -23,20 +23,19 @@ declare(strict_types=1);
  * @var string                    $thanks
  * @var string                    $venueName
  * @var array<string,string>      $utm
- * @var array<string,list<string>> $errors
  */
 
-$errorBag = is_array($errors ?? null) ? $errors : [];
-
-$errorFor = static function (string $field) use ($errorBag): ?string {
-    $list = $errorBag[$field] ?? null;
-
-    if (is_array($list) && $list !== []) {
-        return (string) $list[0];
-    }
-
-    return is_string($list) && $list !== '' ? $list : null;
-};
+/**
+ * The per-field message.
+ *
+ * `error_for()` reads what the controller flashed before it redirected, which
+ * is the only way a message survives to the request that renders the form
+ * again. This view used to read an `$errors` variable that nothing passed, so
+ * every per-field message was silently empty and a guest saw only the single
+ * flash at the top of the page. The messages themselves were always being
+ * produced; nothing was showing them.
+ */
+$errorFor = static fn (string $field): ?string => error_for($field);
 
 $heading = $form['title'] !== '' ? $form['title'] : $form['name'];
 

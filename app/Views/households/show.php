@@ -59,6 +59,7 @@ $address = array_filter([
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">People in this household</caption>
                 <thead>
                 <tr>
                     <th scope="col">Name</th>
@@ -154,6 +155,7 @@ $address = array_filter([
         </div>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">This household’s visits</caption>
                 <thead>
                 <tr>
                     <th scope="col">Name</th>

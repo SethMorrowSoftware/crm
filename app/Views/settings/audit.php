@@ -72,6 +72,7 @@ declare(strict_types=1);
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Audit log</caption>
                 <thead>
                 <tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">Action</th><th scope="col">Record</th><th scope="col">Changes</th><th scope="col">IP</th></tr>
                 </thead>
@@ -101,9 +102,31 @@ declare(strict_types=1);
                                             <li>
                                                 <strong><?= e($field) ?></strong>
                                                 <?php if (is_array($change) && array_key_exists('from', $change)): ?>
-                                                    <span class="muted"><?= e(str_truncate((string) ($change['from'] ?? ''), 40)) ?></span>
+                                                    <?php
+                                                    /*
+                                                     * A VALUE MAY BE STRUCTURED, and casting one
+                                                     * to a string is a fatal — "Array to string
+                                                     * conversion" took the whole audit page to a
+                                                     * 500 the first time a settings save recorded
+                                                     * a nested value. The audit viewer must never
+                                                     * be the thing that breaks because something
+                                                     * was logged: it is what you go to when
+                                                     * everything else is already confusing.
+                                                     */
+                                                    $readable = static function (mixed $value): string {
+                                                        if ($value === null || is_scalar($value)) {
+                                                            return (string) $value;
+                                                        }
+
+                                                        return (string) json_encode(
+                                                            $value,
+                                                            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+                                                        );
+                                                    };
+                                                    ?>
+                                                    <span class="muted"><?= e(str_truncate($readable($change['from'] ?? ''), 40)) ?></span>
                                                     &rarr;
-                                                    <span><?= e(str_truncate((string) ($change['to'] ?? ''), 40)) ?></span>
+                                                    <span><?= e(str_truncate($readable($change['to'] ?? ''), 40)) ?></span>
                                                 <?php endif; ?>
                                             </li>
                                         <?php endforeach; ?>

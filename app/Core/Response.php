@@ -26,6 +26,18 @@ final class Response
     private bool $sent = false;
 
     /**
+     * Headers an application-wide default must not add back.
+     *
+     * See `removeHeader()`. Held separately from `$headers` because the thing
+     * being recorded is an ABSENCE, and an absence cannot be expressed as a
+     * value: `X-Frame-Options` has no "allow anybody" setting, so the only
+     * way to permit framing is to not send the header at all.
+     *
+     * @var array<string,true>
+     */
+    private array $suppressed = [];
+
+    /**
      * A body produced at send time rather than held in memory.
      *
      * A database backup or a full contacts export can be larger than the whole
@@ -223,12 +235,48 @@ final class Response
         return $this;
     }
 
-    /** @param array<string,string> $headers */
-    public function headers(array $headers): self
+    /**
+     * Add several headers at once.
+     *
+     * `$overwrite` false leaves a header the response has already set alone,
+     * which is how a single route can opt out of an application-wide default.
+     * `bootstrap.php` applies the security headers that way: almost every
+     * page wants `frame-ancestors 'self'`, and the one page that exists to be
+     * embedded on the venue's own website cannot have it — so that route sets
+     * its own policy and this leaves it standing. Overwriting is still the
+     * default, because a caller merging in headers it just computed normally
+     * means them.
+     *
+     * @param array<string,string> $headers
+     */
+    public function headers(array $headers, bool $overwrite = true): self
     {
         foreach ($headers as $name => $value) {
+            if (!$overwrite && (isset($this->headers[$name]) || isset($this->suppressed[$name]))) {
+                continue;
+            }
+
             $this->headers[$name] = $value;
         }
+
+        return $this;
+    }
+
+    /**
+     * Drop a header, and refuse to have it added back by a later default.
+     *
+     * The only caller is the public review wall, which must be frameable by
+     * the venue's own website: `X-Frame-Options: SAMEORIGIN` forbids that and
+     * the header has no value that permits it, so it has to be absent. The
+     * page still constrains framing — through `Content-Security-Policy:
+     * frame-ancestors`, which browsers honour in preference to
+     * X-Frame-Options when both are present, and which this one page sets
+     * itself.
+     */
+    public function removeHeader(string $name): self
+    {
+        unset($this->headers[$name]);
+        $this->suppressed[$name] = true;
 
         return $this;
     }

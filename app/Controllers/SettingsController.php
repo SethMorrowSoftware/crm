@@ -34,7 +34,94 @@ final class SettingsController extends Controller
             ],
             'mailDriverLabel' => $this->mailDriverLabel(),
             'backupLabel'     => $this->backupLabel(),
+            'apiTokenLabel'   => $this->apiTokenLabel(),
+            'webhookLabel'    => $this->webhookLabel(),
+            'importLabel'     => $this->importLabel(),
         ]);
+    }
+
+    /**
+     * The tile answers "is anything still in flight?"
+     *
+     * A running import is the state worth surfacing from a settings index: it
+     * is the only thing in the application that changes guest records while
+     * nobody is looking at the page that started it.
+     */
+    private function importLabel(): string
+    {
+        $running = (int) DB::value(
+            "SELECT COUNT(*) FROM {imports} WHERE status IN ('dry_run','importing')"
+        );
+
+        if ($running > 0) {
+            return $running === 1 ? 'One import is running now.' : $running . ' imports are running now.';
+        }
+
+        $waiting = (int) DB::value(
+            "SELECT COUNT(*) FROM {imports} WHERE status IN ('mapping','dry_run_done')"
+        );
+
+        if ($waiting > 0) {
+            return $waiting === 1
+                ? 'One uploaded file is waiting for you.'
+                : $waiting . ' uploaded files are waiting for you.';
+        }
+
+        $done = (int) DB::value("SELECT COUNT(*) FROM {imports} WHERE status = 'done'");
+
+        return $done === 0
+            ? 'Bring guests and visit history in from a spreadsheet.'
+            : $done . ' file' . ($done === 1 ? '' : 's') . ' imported.';
+    }
+
+    /**
+     * The tile answers "is anything being told about what happens here, and is
+     * it working?"
+     *
+     * A subscription that has switched itself off after an outage is the whole
+     * reason this sentence names a state rather than just a count: it is the
+     * failure a venue otherwise discovers months later, when somebody asks why
+     * the spreadsheet stopped filling in.
+     */
+    private function webhookLabel(): string
+    {
+        $total = (int) DB::value('SELECT COUNT(*) FROM {webhooks}');
+
+        if ($total === 0) {
+            return 'Nothing outside this application is being told anything.';
+        }
+
+        $off = (int) DB::value('SELECT COUNT(*) FROM {webhooks} WHERE is_active = 0');
+        $on  = $total - $off;
+
+        return $on . ' sending'
+            . ($off > 0 ? ', ' . $off . ' switched off' : '') . '.';
+    }
+
+    /**
+     * The tile answers "is anything outside this application reaching it?"
+     *
+     * A count of LIVE tokens, with expired ones named separately — a venue
+     * reading "3 tokens" wants to know that one of them stopped working in
+     * March rather than discovering it when an integration goes quiet.
+     */
+    private function apiTokenLabel(): string
+    {
+        $total = (int) DB::value('SELECT COUNT(*) FROM {api_tokens}');
+
+        if ($total === 0) {
+            return 'Nothing outside this application can reach it.';
+        }
+
+        $expired = (int) DB::value(
+            'SELECT COUNT(*) FROM {api_tokens} WHERE expires_at IS NOT NULL AND expires_at <= :now',
+            ['now' => gmdate('Y-m-d H:i:s')]
+        );
+
+        $live = $total - $expired;
+
+        return $live . ' live ' . ($live === 1 ? 'token' : 'tokens')
+            . ($expired > 0 ? ', ' . $expired . ' expired' : '') . '.';
     }
 
     /** The tile subtitle should answer "is this configured?", not just name the page. */

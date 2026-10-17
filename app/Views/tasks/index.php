@@ -145,6 +145,7 @@ $withView = static function (string $target) use ($filters): string {
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Tasks</caption>
                 <thead>
                 <tr>
                     <th scope="col">Task</th>

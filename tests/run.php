@@ -18,6 +18,23 @@ declare(strict_types=1);
  *   CC_TEST_SKIP_HTTP=1                               skip the HTTP suite
  */
 
+/*
+ * CLI ONLY, and this is not belt-and-braces for its own sake.
+ *
+ * Apache's rewrite rules let a real file through untouched, so every `.php`
+ * in this directory is directly executable over HTTP unless something stops
+ * it. The shipped `.htaccess` denies `tests/` — but a host serving this
+ * behind nginx, or from a vhost whose `AllowOverride` is off, never reads
+ * that file. MEASURED before this: `GET /tests/run.php` returned 500, which
+ * means it ran. This runner boots against the CONFIGURED database and with
+ * `--fresh` calls `test_drop_all()`.
+ */
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+
 $options = getopt('', [
     'unit', 'no-http', 'no-db', 'filter::', 'stop', 'junit::', 'help',
     'require-db', 'require-http', 'min-tests::',

@@ -106,6 +106,14 @@ $stats = [
     'automations' => 0,
     'triggers'    => 0,
     'rollups'     => 0,
+    'woken'       => 0,
+    'campaign_sends' => 0,
+    'club_sends'     => 0,
+    'auto_steps'     => 0,
+    'auto_scanned'   => 0,
+    'surveys'        => 0,
+    'memberships'    => 0,
+    'webhooks'       => 0,
     'maintenance' => 0,
     'errors'      => 0,
 ];
@@ -125,10 +133,12 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Advance waiting automation runs
+// 2. Count what is due, for the log
 //
-// Phase 5 implements the engine. Until then the query is harmless and proves
-// the wiring, so the cron line can be set up on day one and verified.
+// The engine itself runs at step 7. This is one indexed count, printed so the
+// tick's own log line says how much work was waiting BEFORE it started —
+// which is the figure you want when a venue says "automations seem slow":
+// the difference between 4 due and 4,000 due is the whole diagnosis.
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft()) {
@@ -140,10 +150,6 @@ if ($budgetLeft()) {
         );
 
         $stats['automations'] = $due;
-
-        if ($due > 0) {
-            cron_out('  ' . $due . ' automation run(s) due — engine arrives in Phase 5.');
-        }
     } catch (Throwable $e) {
         $stats['errors']++;
         Log::error('Cron: automation sweep failed', ['error' => $e->getMessage()]);
@@ -151,7 +157,338 @@ if ($budgetLeft()) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Nightly maintenance — once a day, not every minute
+// 3. Wake the snoozed conversations whose time has come
+//
+// EVERY TICK, not nightly. A snooze is somebody saying "remind me at nine" —
+// a sweep that only ran once a day would hold a guest's message until the
+// small hours of the following morning, which is worse than not offering the
+// button at all. The step is deliberately dumb and idempotent: anything due
+// goes back in the queue unread, and the next tick finds nothing.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $woken = App\Controllers\InboxController::wakeSnoozed();
+
+        $stats['woken'] = $woken;
+
+        if ($woken > 0) {
+            cron_out('  ' . $woken . ' snoozed conversation(s) back in the queue.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: waking snoozed conversations failed', ['error' => $e->getMessage()]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 4. Walk any sending campaign forward by one chunk
+//
+// Forty thousand recipients is not a web request. The send button freezes the
+// audience and leaves the campaign in `sending`; this moves it along a batch
+// at a time, so a big send proceeds at a rate the provider and the venue's
+// hosting can both take, and a browser tab closing cannot interrupt it.
+//
+// Every recipient still goes through Mailer::send() / Sms::send() with their
+// contact id attached, so consent, the suppression list, do-not-contact, the
+// weekly cap and quiet hours apply per person exactly as they would to a
+// reply typed in the inbox.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $sentThisTick = 0;
+
+        foreach (App\Controllers\CampaignController::dueCampaigns() as $campaignId) {
+            if (!$budgetLeft()) {
+                // Out of time rather than out of work. The next tick picks up
+                // where this one stopped — which is the whole point of
+                // freezing the audience rather than re-deriving it.
+                break;
+            }
+
+            $sentThisTick += App\Controllers\CampaignController::sendChunk($campaignId);
+        }
+
+        $stats['campaign_sends'] = $sentThisTick;
+
+        if ($sentThisTick > 0) {
+            cron_out('  ' . $sentThisTick . ' campaign message(s) attempted.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: campaign send failed', ['error' => $e->getMessage()]);
+        cron_out('  ! campaign send: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 5. Walk this month's Text Club offer forward by one chunk
+//
+// The same shape as a campaign, and for the same reason: the list runs to
+// tens of thousands and a monthly offer is not a web request. The difference
+// is that nothing freezes an audience here — the list IS the audience, and it
+// is re-read each tick so somebody who confirmed this morning is included and
+// somebody who texted STOP an hour ago is not.
+//
+// What stops it sending twice is the per-subscriber frequency cap:
+// `last_offer_sent_at` is stamped only on a message that really went, and the
+// query only returns subscribers whose stamp is older than the floor. So this
+// runs every minute of every day and does nothing at all for the other 29.
+// There is no "has this month's offer been sent" flag to get out of step with
+// what was actually delivered.
+//
+// Quiet hours are enforced inside Sms::send() like everywhere else, so an
+// offer that becomes due at eleven at night waits for the morning rather than
+// waking the list.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        // Cheap enough to check every tick: one indexed row, and it returns
+        // false outright in a month with no offer written.
+        if (App\Controllers\TextClubController::offerPending()) {
+            $clubSent = 0;
+
+            while ($budgetLeft()) {
+                $attempted = App\Controllers\TextClubController::sendOfferChunk();
+
+                if ($attempted === 0) {
+                    break;
+                }
+
+                $clubSent += $attempted;
+            }
+
+            $stats['club_sends'] = $clubSent;
+
+            if ($clubSent > 0) {
+                cron_out('  ' . $clubSent . ' Text Club offer(s) attempted.');
+            }
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: Text Club send failed', ['error' => $e->getMessage()]);
+        cron_out('  ! Text Club send: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 6. Look for the triggers nothing fires
+//
+// Nobody fires "the party is in fourteen days" — it becomes true one morning,
+// and something has to notice. Of the 111 seeded automations, 45 wait on one
+// of these: the T-minus booking reminders, the birthday run-ups, the lapse
+// and idle thresholds, and the cron schedules.
+//
+// Each scanner is a bounded query for the rows that have JUST crossed their
+// threshold, and each enrols at most once per entity — so a family with two
+// parties gets two reminders and the same party is never reminded twice.
+// Runs BEFORE the advance below, so anything enrolled here takes its first
+// step on the same tick rather than waiting for the next one.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $scanned = App\Services\AutomationTriggers::scan();
+
+        $stats['auto_scanned'] = $scanned;
+
+        if ($scanned > 0) {
+            cron_out('  ' . $scanned . ' automation(s) started by a time-based trigger.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: automation scan failed', ['error' => $e->getMessage()]);
+        cron_out('  ! automation scan: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Advance automation runs that are due
+//
+// A nine-touch nurture is nine passes over nine days, not one pass that
+// sleeps. Each tick picks up the runs whose next step has come due and walks
+// each one as far as it goes without waiting — so a step with a real delay
+// schedules itself and the run is put down again until then.
+//
+// Every message a step sends goes through Mailer::send() / Sms::send() with
+// the contact attached, so consent, the suppression list, do-not-contact, the
+// weekly frequency cap and quiet hours apply exactly as they do to a reply
+// typed in the inbox. There is no automation-only path to a guest's phone.
+//
+// Bounded by AutomationRunner::BATCH rather than drained, so one busy
+// automation cannot starve the rest of this tick.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $steps = 0;
+
+        while ($budgetLeft()) {
+            $advanced = App\Services\AutomationRunner::tick();
+
+            if ($advanced === 0) {
+                break;
+            }
+
+            $steps += $advanced;
+        }
+
+        $stats['auto_steps'] = $steps;
+
+        if ($steps > 0) {
+            cron_out('  ' . $steps . ' automation step(s) executed.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: automation tick failed', ['error' => $e->getMessage()]);
+        cron_out('  ! automation tick: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 8. Ask the guests whose turn it is for feedback
+//
+// Two halves in one pass: write a row for every party or visit that has just
+// crossed its survey delay, then attempt every invitation not yet sent. The
+// row comes FIRST and is the de-duplication record, so a guest cannot be
+// asked twice — and it is also the work item, so an invitation refused for a
+// reason that will pass (quiet hours) is tried again next tick rather than
+// lost. See ReputationController's class comment.
+//
+// Bounded three ways: the lookback window (a venue switching feedback on must
+// not email twenty years of guests), the per-tick batch, and this budget.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $invited = App\Services\Feedback::dispatchDue($budgetLeft);
+
+        $stats['surveys'] = $invited;
+
+        if ($invited > 0) {
+            cron_out('  ' . $invited . ' feedback invitation(s) sent.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: feedback invitations failed', ['error' => $e->getMessage()]);
+        cron_out('  ! feedback invitations: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 9. Advance every membership to where today says it should be
+//
+// The state machine from spec §8.10, applied once a tick. It is cheap (one
+// bounded read, a write only where something actually changed) and
+// idempotent, so running it every minute rather than nightly costs almost
+// nothing and means a pass that starts this morning works this morning
+// rather than tomorrow.
+//
+// The renewal LADDER is stamped here too. The notices themselves are sent by
+// the seeded renewal automations, which trigger on `membership.expiring`;
+// this records which rung each membership has reached so a restarted job
+// cannot ask the same family to renew twice.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $swept = App\Services\MembershipLifecycle::sweep($budgetLeft);
+
+        $stats['memberships'] = $swept['changed'];
+
+        if ($swept['changed'] > 0) {
+            cron_out('  ' . $swept['changed'] . ' membership(s) advanced: '
+                . $swept['started'] . ' started, ' . $swept['expired'] . ' expired, '
+                . $swept['lapsed'] . ' lapsed.');
+        }
+
+        App\Services\MembershipLifecycle::stampRenewalNotices();
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: membership sweep failed', ['error' => $e->getMessage()]);
+        cron_out('  ! membership sweep: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 10. Send the webhook deliveries that are due
+//
+// EVERY TICK, not nightly. A webhook that told an integration about a booking
+// six hours after it happened is worse than one that never fired: the
+// integration acts on it, and acts late.
+//
+// Queueing happens in the request that fired the event; this is the only
+// place anything is actually sent, so a dead endpoint costs a cron tick
+// rather than a member of staff waiting at the front desk.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $hooks = App\Services\WebhookDispatcher::send($budgetLeft);
+
+        $stats['webhooks'] = $hooks['delivered'];
+
+        if ($hooks['attempted'] > 0) {
+            cron_out('  Webhooks: ' . $hooks['attempted'] . ' attempted, '
+                . $hooks['delivered'] . ' delivered, ' . $hooks['failed'] . ' to retry, '
+                . $hooks['gave_up'] . ' given up on.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: webhook delivery failed', ['error' => $e->getMessage()]);
+        cron_out('  ! webhooks: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 11. Walk any running CSV import forward by one batch
+//
+// A venue migrating off a previous system arrives with one file of every guest
+// they have ever had. Fifty thousand rows is not a web request on shared
+// hosting — `max_execution_time` is commonly 30 seconds and the browser tab
+// will be closed halfway through — so the job records a byte offset and this
+// moves it along a batch at a time. A resumed job seeks rather than re-reading,
+// so it can neither double-write nor lose its place.
+//
+// Both passes come through here: the dry run reads the real file against the
+// real database and writes nothing, so what it reports is what will happen
+// rather than an estimate of it.
+// ---------------------------------------------------------------------------
+
+if ($budgetLeft()) {
+    try {
+        $importRows = 0;
+
+        foreach (App\Services\ImportRunner::dueJobs() as $importId) {
+            if (!$budgetLeft()) {
+                break;
+            }
+
+            $result = App\Services\ImportRunner::work($importId, $budgetLeft);
+            $importRows += $result['rows'];
+
+            if ($result['error'] !== null) {
+                $stats['errors']++;
+                cron_out('  ! import ' . $importId . ': ' . $result['error']);
+            }
+        }
+
+        $stats['import_rows'] = $importRows;
+
+        if ($importRows > 0) {
+            cron_out('  ' . $importRows . ' import row(s) processed.');
+        }
+    } catch (Throwable $e) {
+        $stats['errors']++;
+        Log::error('Cron: import failed', ['error' => $e->getMessage()]);
+        cron_out('  ! imports: ' . $e->getMessage());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 12. Nightly maintenance — once a day, not every minute
 // ---------------------------------------------------------------------------
 
 if ($budgetLeft() && cron_shouldRunDaily()) {
@@ -167,7 +504,7 @@ if ($budgetLeft() && cron_shouldRunDaily()) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Heartbeat
+// 13. Heartbeat
 // ---------------------------------------------------------------------------
 
 Settings::set('system.cron_last_run', gmdate('Y-m-d H:i:s'));
@@ -182,11 +519,22 @@ if (Settings::has('system.cron_test_requested_at')) {
 $elapsed = round(microtime(true) - CC_START, 2);
 
 cron_out(sprintf(
-    'Done in %ss. Jobs: %d, automations due: %d, maintenance tasks: %d, errors: %d.',
+    'Done in %ss. Jobs: %d, automations due: %d, conversations woken: %d, '
+        . 'campaign messages: %d, Text Club offers: %d, automations started: %d, '
+        . 'automation steps: %d, feedback asks: %d, memberships advanced: %d, '
+        . 'maintenance tasks: %d, errors: %d.',
     $elapsed,
     $stats['jobs'],
     $stats['automations'],
+    $stats['woken'],
+    $stats['campaign_sends'],
+    $stats['club_sends'],
+    $stats['auto_scanned'],
+    $stats['auto_steps'],
+    $stats['surveys'],
+    $stats['memberships'],
     $stats['maintenance'],
+    $stats['webhooks'],
     $stats['errors']
 ));
 
@@ -384,6 +732,21 @@ function cron_dailyMaintenance(): int
         Log::warning('Maintenance: reset purge failed', ['error' => $e->getMessage()]);
     }
 
+    // --- API tokens that expired long ago, and old webhook deliveries
+    //
+    // Neither is a security measure — both are refused on use — but a
+    // settings page that lists a museum of dead keys is one nobody reads,
+    // and a delivery log that never shrinks buries this week's failure.
+    try {
+        App\Core\ApiToken::purgeExpired();
+        App\Services\WebhookDispatcher::prune(
+            (int) Settings::get('system.webhook_keep_days', App\Services\Webhooks::KEEP_DAYS)
+        );
+        $done++;
+    } catch (Throwable $e) {
+        Log::warning('Maintenance: token and delivery purge failed', ['error' => $e->getMessage()]);
+    }
+
     // --- Completed jobs, kept a week for inspection
     try {
         DB::delete('jobs', "status = 'done' AND updated_at < :cutoff", [
@@ -410,6 +773,54 @@ function cron_dailyMaintenance(): int
         $done++;
     } catch (Throwable $e) {
         Log::warning('Maintenance: audit purge failed', ['error' => $e->getMessage()]);
+    }
+
+    // --- The daily reporting rollup
+    //
+    // BEFORE the backup, so a slow backup cannot starve it, and before any
+    // pruning that might one day trim the detail it is built from. It
+    // recomputes a trailing window rather than accumulating, so running it
+    // twice in a night is a no-op and a night it did not run is repaired by
+    // the next one — see ReportRollup's note on permanent holes.
+    //
+    // Its own try, like everything else here: the reports read the real rows
+    // and do not depend on this, so a failed rollup is a warning in the log
+    // rather than a venue with no figures.
+    try {
+        $budget = static fn (): bool => (microtime(true) - CC_START) < 180.0;
+
+        // The one-time backfill first, and only while it has not finished.
+        // The trailing window fills FORWARD a day a night and never
+        // backward, so a venue that imported five years of history would
+        // otherwise have a rollup covering the fortnight since they
+        // installed this — and every long-range figure would read as though
+        // they opened last month.
+        $backfill = App\Services\ReportRollup::backfill($budget);
+
+        if ($backfill['ran']) {
+            cron_out('  Rollup backfill: ' . $backfill['days'] . ' day(s) from '
+                . $backfill['from'] . ' — ' . $backfill['reason'] . '.');
+        }
+
+        $rollup = App\Services\ReportRollup::refresh($budget);
+
+        Settings::set('system.rollup_last_run', gmdate('Y-m-d H:i:s'));
+        Settings::set('system.rollup_covered_through', $rollup['to']);
+
+        cron_out('  Rollup: ' . $rollup['days'] . ' day(s), ' . $rollup['rows'] . ' figure(s)'
+            . ($rollup['stopped'] ? ' — STOPPED on the time budget, the rest is next run.' : '.'));
+
+        if ($rollup['stopped']) {
+            // Said out loud rather than left to be inferred from a short
+            // table. A venue whose rollup never finishes needs to know.
+            Log::warning('Rollup ran out of time', $rollup);
+        }
+
+        App\Services\ReportRollup::prune((int) Settings::get('system.rollup_keep_days', 1460));
+        $done++;
+    } catch (Throwable $e) {
+        Log::warning('Maintenance: rollup failed', ['error' => $e->getMessage()]);
+        cron_out('  ! rollup: ' . $e->getMessage());
     }
 
     // --- Nightly database backup

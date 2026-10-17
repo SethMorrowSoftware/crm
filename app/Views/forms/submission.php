@@ -43,6 +43,7 @@ $utm = is_array($utm) ? $utm : [];
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Answers</caption>
                 <thead>
                     <tr>
                         <th scope="col">Question</th>
@@ -109,6 +110,7 @@ $utm = is_array($utm) ? $utm : [];
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">What happened to this submission</caption>
                 <thead>
                     <tr>
                         <th scope="col">When</th>

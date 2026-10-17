@@ -61,6 +61,7 @@ $badge = static function (string $value): string {
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Quotes</caption>
                 <thead>
                     <tr>
                         <th scope="col">Number</th>

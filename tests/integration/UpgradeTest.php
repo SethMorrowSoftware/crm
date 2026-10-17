@@ -493,3 +493,158 @@ Harness::test('the suite leaves the version marker describing the shipped releas
         'later suites read this, and a lie here is invisible until something else breaks'
     );
 });
+
+// -------------------------------------------- what actually triggers a run
+
+Harness::test('the schema marker changes when a file is added and not otherwise', function (): void {
+    $before = Upgrade::schemaMarker();
+
+    Assert::same($before, Upgrade::schemaMarker(), 'it is stable across calls');
+    Assert::same(16, strlen($before));
+
+    $moved = with_pending_migration(
+        "-- nothing to apply, this file only has to exist\n",
+        static fn (): string => Upgrade::schemaMarker()
+    );
+
+    Assert::notSame($before, $moved, 'a new schema file moves it');
+    Assert::same($before, Upgrade::schemaMarker(), 'and removing it moves it back');
+
+    /*
+     * NAMES, NOT MTIMES. An unzip or a checkout rewrites every mtime, so a
+     * marker built from those would differ after a deploy that changed no
+     * schema at all — and then every deploy would take the upgrade lock.
+     */
+    $path = CC_ROOT . '/install/schema/001_core.sql';
+    $was  = filemtime($path);
+
+    touch($path, time() + 500);
+    clearstatcache(true, $path);
+
+    Assert::same($before, Upgrade::schemaMarker(), 'touching a file does not move it');
+
+    touch($path, (int) $was);
+    clearstatcache(true, $path);
+});
+
+Harness::test('A NEW SCHEMA FILE IS APPLIED EVEN WHEN VERSION DOES NOT MOVE', function (): void {
+    /*
+     * THE BUG THIS EXISTS FOR, and it was live.
+     *
+     * `cc_apply_pending_upgrade()` compared the shipped `VERSION` against the
+     * stored marker and returned if they matched. `VERSION` sat at
+     * `1.0.0-phase1` for three phases, so it always matched, so three schema
+     * files were never applied by any upgrade. Found by opening the webhooks
+     * page on a real install path: HTTP 500, and `Unknown column 'd.status'`
+     * in the log. The reporting and API-token pages were in the same state.
+     *
+     * The whole point of `Upgrade` is that an operator never has to run a
+     * migration. Hanging it on a constant somebody has to remember to edit put
+     * a human back in the one loop there was supposed not to be one in.
+     *
+     * So: pin the version, add a file, and assert it applies anyway.
+     */
+    $pinned = 'upgrade-test-fixed-version';
+
+    $originalVersion = (string) Settings::get('system.version', '');
+    $originalSchema  = (string) Settings::get('system.schema_files', '');
+
+    try {
+        with_pending_migration(
+            "CREATE TABLE IF NOT EXISTS `{prefix}upgrade_probe` (\n"
+            . "    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,\n"
+            . "    `note` VARCHAR(40) DEFAULT NULL,\n"
+            . "    PRIMARY KEY (`id`)\n"
+            . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+            static function (string $filename) use ($pinned): void {
+                // The state right after an unzip by somebody who did not touch
+                // VERSION: the version marker already says what is shipped.
+                Settings::set('system.version', $pinned);
+                Settings::set('system.schema_files', 'a-marker-from-before');
+
+                Assert::true(
+                    in_array($filename, (new Migration())->pending(), true),
+                    'precondition: the new file is pending'
+                );
+
+                // Exactly what bootstrap does.
+                $schema = Upgrade::schemaMarker();
+
+                $versionMoved = $pinned !== (string) Settings::get('system.version', '');
+                $schemaMoved  = $schema !== (string) Settings::get('system.schema_files', '');
+
+                Assert::false($versionMoved, 'the version has NOT moved — this is the trap');
+                Assert::true($schemaMoved, 'but the schema directory has');
+
+                $result = Upgrade::run($pinned, $schema);
+
+                Assert::true($result['ran']);
+                Assert::null($result['error']);
+                Assert::true(
+                    in_array($filename, $result['applied'], true),
+                    'the file was applied without the version moving'
+                );
+                Assert::same([], (new Migration())->pending(), 'and nothing is left pending');
+
+                Assert::true(
+                    DB::pdo()->query("SHOW TABLES LIKE 'cc_upgrade_probe'")->fetch() !== false,
+                    'the table it creates really exists'
+                );
+
+                Assert::same(
+                    $schema,
+                    (string) Settings::get('system.schema_files', ''),
+                    'and the marker is recorded, so the next request does nothing'
+                );
+            }
+        );
+    } finally {
+        Settings::set('system.version', $originalVersion);
+        Settings::set('system.schema_files', $originalSchema);
+    }
+});
+
+Harness::test('a failed upgrade leaves BOTH markers alone so the next request retries', function (): void {
+    $originalVersion = (string) Settings::get('system.version', '');
+    $originalSchema  = (string) Settings::get('system.schema_files', '');
+
+    try {
+        Settings::set('system.version', 'before-the-failure');
+        Settings::set('system.schema_files', 'before-the-failure');
+
+        with_pending_migration(
+            // Valid enough to be read, invalid enough to fail.
+            "CREATE TABLE `{prefix}upgrade_probe` (this is not SQL);",
+            static function (string $filename): void {
+                $result = Upgrade::run('after-the-failure', 'after-the-failure');
+
+                Assert::notNull($result['error'], 'it reports the failure');
+
+                /*
+                 * A marker advanced past a failure is the worst outcome
+                 * available: the next request believes the work is done, and
+                 * the missing table is never created. Both markers have to
+                 * stay put, not just the version — otherwise the schema check
+                 * added above would itself paper over the failure.
+                 */
+                Assert::same(
+                    'before-the-failure',
+                    (string) Settings::get('system.version', ''),
+                    'the version marker did not move'
+                );
+                Assert::same(
+                    'before-the-failure',
+                    (string) Settings::get('system.schema_files', ''),
+                    'and neither did the schema marker'
+                );
+                Assert::true(
+                    in_array($filename, (new Migration())->pending(), true),
+                    'so it is still pending and will be retried'
+                );
+            }
+        );
+    } finally {
+        Settings::set('system.version', $originalVersion);
+        Settings::set('system.schema_files', $originalSchema);
+    }
+});

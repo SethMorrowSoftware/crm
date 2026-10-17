@@ -32,15 +32,16 @@ handoffs:
 | 0 | [Specification](docs/SPEC.md) | ✅ |
 | 1 | Foundation: installer, 99-table schema, auth, RBAC, settings, cron, UI shell | ✅ |
 | 2 | Contacts, households, pipelines, deals, quotes, forms, tasks | ✅ |
-| 3 | Bookings: availability, packages, run sheets, waivers, check-in | next |
-| 4 | Email and SMS, inbox, segments, campaigns, Text Club | |
-| 5 | The automation engine and the 111 seeded automations | |
-| 6 | Reputation, memberships, the reporting suite | |
+| 3 | Bookings: availability, packages, run sheets, waivers, check-in | ✅ |
+| 4 | Email and SMS, inbox, segments, campaigns, Text Club | ✅ |
+| 5 | The automation engine and the 112 seeded automations | ✅ |
+| 6 | Reputation, memberships, the reporting suite | ✅ |
 | 7 | CenterEdge import, Google Business Profile, webhooks, REST API | |
 | 8 | Hardening: security review, accessibility audit, load test, backup/restore | |
 
-Phases 1 and 2 are verified end to end against real MySQL 8.0, MariaDB 10.11 and MySQL
-5.7: **610 tests** plus a full installer walk-through. See [docs/TESTING.md](docs/TESTING.md).
+Everything shipped so far is verified end to end against real MySQL 8.0, MariaDB 10.11
+and MySQL 5.7: **1,594 tests** plus a full installer walk-through. See
+[docs/TESTING.md](docs/TESTING.md).
 
 ## Install
 
@@ -63,7 +64,7 @@ The installer checks each one and names the cPanel screen that fixes it.
 ### Nothing will message a guest by accident
 
 A finished install is in **Safe Mode**: every email and text is redirected to
-the owner's own address, every seeded playbook is off, and all 111 automations
+the owner's own address, every seeded playbook is off, and all 112 automations
 are inactive. Leaving Safe Mode requires a distinct permission and typing the
 venue name to confirm. There is also a global sending pause reachable in two
 clicks from any page.
@@ -83,6 +84,14 @@ reports — activated as one unit.
 | 06 | Text Club & Repeat Visits | A guest opts in to SMS |
 | 07 | Sales Accountability | A lead has gone quiet |
 | 08 | Fundraising, Donations & Referrals | A nonprofit, school or guest asks |
+
+**105 of the 112 automations arrive with their sequences written**, so a
+playbook can be read, previewed against a real guest, and switched on rather
+than opened to find nothing in it. The other seven are honest gaps: their
+triggers are catalogued but nothing fires them yet — online ticketing, the
+donation workflow and the referral programme are their own modules — and each
+automation's page says exactly what it is waiting on. A test fails the build
+if that ever stops being true in either direction.
 
 ## How it relates to CEplay
 

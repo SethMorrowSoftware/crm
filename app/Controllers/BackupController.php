@@ -277,21 +277,15 @@ final class BackupController extends Controller
         return $counts;
     }
 
+    /**
+     * Kept as a thin pass-through to `bytes_human()`.
+     *
+     * The body used to live here, and then the import screens needed the same
+     * thing — at which point one of the two would have drifted and the same
+     * file would have read as 12.3 MB on one page and 12 MB on another.
+     */
     private function humanBytes(int $bytes): string
     {
-        if ($bytes < 1024) {
-            return $bytes . ' B';
-        }
-
-        $units = ['KB', 'MB', 'GB'];
-        $value = $bytes / 1024;
-        $unit = 0;
-
-        while ($value >= 1024 && $unit < count($units) - 1) {
-            $value /= 1024;
-            $unit++;
-        }
-
-        return round($value, $value < 10 ? 1 : 0) . ' ' . $units[$unit];
+        return bytes_human($bytes);
     }
 }

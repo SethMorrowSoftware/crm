@@ -10,10 +10,10 @@ use App\Core\Response;
 /**
  * Honest placeholders for modules that land in later phases.
  *
- * A page here is deleted as its module ships — contacts, deals and tasks have
- * gone, with Phase 2. A placeholder left behind after the real thing exists is
- * worse than a broken link: it tells the reader a feature is still coming when
- * it is already on the nav above it.
+ * A page here is deleted as its module ships — contacts, deals and tasks went
+ * with Phase 2, bookings with Phase 3. A placeholder left behind after the
+ * real thing exists is worse than a broken link: it tells the reader a feature
+ * is still coming when it is already on the nav above it.
  *
  * The navigation shows the whole application from day one so the venue can see
  * the shape of what is coming, but a nav item that 404s is worse than one that
@@ -22,28 +22,6 @@ use App\Core\Response;
  */
 final class PlaceholderController extends Controller
 {
-
-    public function inbox(Request $request): Response
-    {
-        return $this->placeholder('Inbox', 4, 'inbox', [
-            'One thread per guest across email, SMS, web chat and internal notes',
-            'Assignment, snooze, canned replies and @mentions',
-            'First-response-time tracking per team member',
-            'A composer that cannot message anyone who replied STOP',
-        ], 'Needs the email and SMS drivers, which arrive with Phase 4.');
-    }
-
-
-    public function bookings(Request $request): Response
-    {
-        return $this->placeholder('Bookings', 3, 'bookings', [
-            'Availability that understands seasonal attractions and the 7-day notice rule',
-            'Party rooms, lanes and karts allocated as real resources',
-            'Printable run sheets with allergies and cake timing',
-            'Waiver tracking per guest, with guardian signatures for minors',
-        ], 'Mirrors the POS reservation rather than replacing it.');
-    }
-
     public function marketing(Request $request): Response
     {
         return $this->placeholder('Marketing', 4, 'marketing', [
@@ -54,36 +32,20 @@ final class PlaceholderController extends Controller
         ], 'SMS needs a registered 10DLC brand, which carries a 2–4 week carrier lead time.');
     }
 
-    public function reputation(Request $request): Response
-    {
-        return $this->placeholder('Reputation', 6, 'reputation', [
-            'Post-visit feedback with a promoter / detractor split',
-            'Happy guests routed to Google; unhappy ones routed to a manager',
-            'Review inbox with reply drafting',
-            'An embeddable review wall for the website',
-        ], 'A low score never produces a public review request — it produces a manager alert.');
-    }
+    // Reputation was a placeholder until Phase 6. It is now
+    // `ReputationController`, and its method is gone from here rather than
+    // left behind pointing at a page that exists — an unreachable "coming
+    // soon" for a module that shipped is the sort of thing that survives
+    // three releases.
 
-    public function memberships(Request $request): Response
-    {
-        return $this->placeholder('Memberships', 6, 'memberships', [
-            'Season passes, memberships and multi-visit cards',
-            'Renewal reminders at 30, 14 and 3 days',
-            'Unused-pass nudges and lapsed win-back ladders',
-            'Retention and utilisation reporting by plan and cohort',
-        ], 'Shared with CenterEdge: the card and its privileges live there, the lifecycle lives here.');
-    }
+    // Memberships was a placeholder until Phase 6. It is now
+    // `MembershipController` — the method is gone rather than left pointing
+    // at a page that exists.
 
-
-    public function reports(Request $request): Response
-    {
-        return $this->placeholder('Reports', 6, 'reports', [
-            'Revenue by day, package and attraction, with year-over-year',
-            'Funnel conversion, velocity and win/loss by reason',
-            'Campaign attribution and cost per booking by channel',
-            'Guest cohorts, RFM segmentation and lifetime value by source',
-        ], 'Reports state their data grain: anything from the POS Sales table is day-grain only.');
-    }
+    // Reports was a placeholder until Phase 6. It is now `ReportController`,
+    // backed by `Services\Reports` (the catalogue) and
+    // `Services\ReportRunner` (the queries) — 23 reports across six
+    // families, so the method is gone rather than left behind.
 
     /**
      * @param list<string> $features

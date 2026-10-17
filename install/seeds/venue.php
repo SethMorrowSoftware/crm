@@ -413,11 +413,64 @@ return static function (): array {
         ]);
     }
 
+    // ------------------------------------------------------------------
+    // Membership plans
+    //
+    // THE PRICES ARE A STARTING POINT AND THE NAMES ARE NOT. Unlike the
+    // attractions and packages above — which are the Castle's own, confirmed
+    // against their website — this venue's pass tiers were not available
+    // when this was written. So the three SHAPES spec §8.10 names are
+    // seeded, with round numbers the venue is expected to change, and they
+    // ship OFF SALE: a plan a venue has not priced must not be sellable at
+    // the counter the moment the installer finishes.
+    //
+    // The shapes matter more than the prices, because each exercises a
+    // different branch of the lifecycle: a dated season pass runs the
+    // renewal ladder, a punch card ends when its visits are used, and an
+    // open-ended membership has no expiry date at all and so never enters
+    // the ladder.
+    // ------------------------------------------------------------------
+
+    $planCount = 0;
+    $planSort  = 0;
+
+    $plans = [
+        // name, slug, type, price, days, visits, family, max members
+        ['Season Pass', 'season-pass', 'season_pass', 9900, 365, null, 0, null],
+        ['Family Season Pass', 'family-season-pass', 'season_pass', 29900, 365, null, 1, 5],
+        ['Ten Visit Card', 'ten-visit-card', 'multi_visit', 7500, null, 10, 0, null],
+    ];
+
+    foreach ($plans as [$name, $slug, $type, $price, $days, $visits, $family, $maxMembers]) {
+        if (DB::exists('SELECT id FROM {membership_plans} WHERE slug = :slug', ['slug' => $slug])) {
+            continue;
+        }
+
+        DB::insert('membership_plans', [
+            'name'            => $name,
+            'slug'            => $slug,
+            'type'            => $type,
+            'price_cents'     => $price,
+            'billing_period'  => 'one_time',
+            'duration_days'   => $days,
+            'visit_allowance' => $visits,
+            'is_family_plan'  => $family,
+            'max_members'     => $maxMembers,
+            'is_active'       => 0,
+            'sort_order'      => $planSort += 10,
+            'created_at'      => $now,
+            'updated_at'      => $now,
+        ]);
+
+        $planCount++;
+    }
+
     return [
         'attractions' => $attractionCount,
         'packages'    => $packageCount,
         'addons'      => $addonCount,
         'resources'   => $resourceCount,
         'pipelines'   => $pipelineCount,
+        'plans'       => $planCount,
     ];
 };

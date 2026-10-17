@@ -41,6 +41,8 @@ $nav = [
             ['Contacts', '/contacts', 'view_contacts', 'users'],
             ['Pipelines', '/deals', 'view_deals', 'trending'],
             ['Bookings', '/bookings', 'view_bookings', 'calendar'],
+            ['Calendar', '/calendar', 'view_bookings', 'calendar'],
+            ['Check-in', '/checkin', 'checkin', 'check'],
             ['Memberships', '/memberships', 'view_memberships', 'card'],
         ],
     ],
@@ -48,7 +50,11 @@ $nav = [
         'label' => 'Growth',
         'items' => [
             ['Marketing', '/marketing', 'view_marketing', 'megaphone'],
+            ['Campaigns', '/campaigns', 'view_marketing', 'megaphone'],
+            ['Segments', '/segments', 'view_marketing', 'target'],
+            ['Text Club', '/text-club', 'view_marketing', 'message'],
             ['Playbooks', '/playbooks', 'view_automations', 'book'],
+            ['Automations', '/automations', 'view_automations', 'power'],
             ['Reputation', '/reputation', 'view_reputation', 'star'],
         ],
     ],
@@ -92,7 +98,7 @@ $isCurrent = static function (string $href) use ($path): bool {
         <div class="sidebar-brand">
             <a href="<?= e(url('/')) ?>" class="brand-link">
                 <span class="brand-mark" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true" focusable="false">
                         <path d="M3 21V9l3-2v3l3-2V5l3-2 3 2v3l3-2v3l3 2v12H3zm6-2h2v-5H9v5zm4 0h2v-5h-2v5z"/>
                     </svg>
                 </span>
@@ -132,9 +138,18 @@ $isCurrent = static function (string $href) use ($path): bool {
                 </ul>
             <?php endforeach; ?>
 
-            <?php if (can_any(['settings', 'users_manage', 'roles_manage', 'view_logs'])): ?>
+            <?php if (can_any(['settings', 'users_manage', 'roles_manage', 'view_logs', 'waivers_manage'])): ?>
                 <p class="nav-heading">Admin</p>
                 <ul class="nav-list">
+                    <?php if (can('waivers_manage')): ?>
+                        <li>
+                            <a href="<?= e(url('/waivers')) ?>"
+                               class="nav-link<?= $isCurrent('/waivers') ? ' is-current' : '' ?>">
+                                <?= icon('shield') ?>
+                                <span>Waivers</span>
+                            </a>
+                        </li>
+                    <?php endif; ?>
                     <?php if (can('settings')): ?>
                         <li><a href="<?= e(url('/settings')) ?>"
                                class="nav-link<?= $isCurrent('/settings') ? ' is-current' : '' ?>">
@@ -198,6 +213,13 @@ $isCurrent = static function (string $href) use ($path): bool {
                     <span class="pill pill-bad" title="All outbound sending is paused.">
                         <?= icon('pause') ?> Sending paused
                     </span>
+                <?php endif; ?>
+
+                <?php if (($automationsPaused ?? false) && can('view_automations')): ?>
+                    <a href="<?= e(url('/automations')) ?>" class="pill pill-bad"
+                       title="No automation is enrolling anybody or advancing.">
+                        <?= icon('pause') ?> Automations stopped
+                    </a>
                 <?php endif; ?>
             </div>
         </header>

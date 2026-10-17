@@ -67,7 +67,7 @@ jobs:
 
       - name: Unit and static suites
         # --min-tests guards against a green run that tested nothing.
-        run: php tests/run.php --unit --min-tests=160 --junit=tests/junit-unit.xml
+        run: php tests/run.php --unit --min-tests=670 --junit=tests/junit-unit.xml
 
       - name: Upload unit results
         if: always()
@@ -163,7 +163,7 @@ jobs:
           php tests/run.php \
             --require-db \
             --require-http \
-            --min-tests=600 \
+            --min-tests=1720 \
             --junit=tests/junit.xml
 
       - name: Show the application log on failure

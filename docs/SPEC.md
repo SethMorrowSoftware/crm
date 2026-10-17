@@ -1040,6 +1040,40 @@ first-touch and last-touch views in reporting.
 Reported: NPS trend, CSAT by attraction and by party host, detractor resolution time,
 review velocity and rating trend, request→review conversion rate.
 
+**As built (Phase 6).** Three classes: `Services\Reputation` holds the rules and
+touches nothing; `Services\Feedback` sends, records and escalates; `ReputationController`
+is the venue's screens. Five decisions worth recording, because each one could
+reasonably have gone the other way:
+
+1. **The invitation is a row first and a message second.** It is written with
+   `invited_at` NULL and stamped on a successful send, so the row is both the
+   de-duplication record and the work item — a guest cannot be asked twice, a
+   refusal that will pass (quiet hours) is retried, and one that never will (no
+   consent, no address) is recorded *with its reason* so the page can say "we
+   could not ask 12 guests" instead of reporting a low response rate.
+2. **The sweep is bounded by a lookback window** (`reputation.invite_lookback_days`,
+   14 days). Without it, switching feedback on would email every family who has
+   ever had a party here — on an install carrying imported history, tens of
+   thousands of messages about visits nobody remembers.
+3. **A detractor's task is raised by the module, not by the playbook**, so a
+   complaint reaches somebody whether or not the reputation automations are
+   switched on. The seeded sequence therefore adds notifications and
+   deliberately raises no second task.
+4. **`reputation.ask_everyone`** widens the ask to passives, off by default.
+   Selectively soliciting only happy guests is against Google's review policy,
+   so the choice is the venue's and the settings page says so in words. A
+   detractor is never asked either way: a review link in the same breath as
+   "sorry about your visit" invites the review nobody wants.
+5. **Replies are logged, not posted.** Castle CRM cannot post to Google or Yelp
+   without each platform's API (Phase 7), so the page records the reply, offers
+   a seeded draft and links straight to the review — and says plainly that
+   posting it is still done there.
+
+The `send_survey` automation step hands the ask to the module, so a venue can
+make it conditional (only parties over twenty, only once the balance is paid)
+by setting the survey's own trigger to "never" and driving it from a sequence.
+Both paths share the same de-duplication.
+
 ### 8.10 Memberships & season passes
 
 Lifecycle state machine with automated transitions:
@@ -1057,6 +1091,38 @@ pending → active → expiring(T-30) → expired → lapsed(+60d) → [winback]
 - Upgrade/cross-sell: single → family, pass-holder → party booking
 - Reports: active count, retention and renewal rate by plan and cohort, revenue per member,
   usage distribution, churn reasons, pass utilisation vs break-even
+
+**As built (Phase 6).** `Services\Membership` is the state machine above, pure
+and tested over every boundary; `Services\MembershipLifecycle` enrols, records
+usage, freezes, renews and sweeps; `MembershipController` is the pages. Six
+decisions worth recording:
+
+1. **A pass sold at the counter works at the counter.** Enrolment decides
+   `active` or `pending` itself rather than waiting for the nightly sweep —
+   otherwise a guest stands there with a pass the system says has not started.
+2. **A visit records ONE use per membership per day.** A family is checked in
+   one child at a time, which is several writes for one afternoon; five
+   punches off a ten-visit card is the kind of error a venue hears about from
+   an angry guest. Usage arrives through the event seam (`visit.recorded`),
+   so `VisitRecorder` knows nothing about memberships.
+3. **Freezing gives the time back.** Unfreezing moves the end date on by
+   however long it was frozen. The alternative — pausing the status while the
+   calendar runs — hands somebody back a pass with three days left on it.
+4. **Renewing starts at the end of the current term, not today**, so renewing
+   early costs a guest nothing. Renewing after expiry starts today: they do
+   not get back the weeks they were away.
+5. **A blank member limit means one person**, not unlimited, unless the plan
+   is marked a family plan. Reading a blank as unlimited would let a counter
+   add a whole family to a pass sold for one.
+6. **The ladders are three sequences each, not one with three waits.**
+   `membership.expiring` is a scanned trigger with its own `days`, so each
+   rung enrols the people who crossed it that morning — a venue can reword or
+   switch off one rung without touching the others, and a pass renewed after
+   the first notice simply never crosses the second.
+
+The seeded plans ship OFF SALE: their prices are round numbers nobody at this
+venue chose, and a plan that could be sold before it was priced is a plan sold
+at the wrong price.
 
 ### 8.11 Forms & landing pages
 
@@ -1255,7 +1321,7 @@ Eight steps, each independently re-runnable until completion.
 | 4 Schema | Runs numbered `schema/*.sql` in a transaction per file with a live progress log; records each in `migrations`. |
 | 5 Venue profile | Name (default "The Castle Fun Center"), address (Chester, NY), phone, email, timezone (`America/New_York`), currency, tax rate, logo upload, brand colours. |
 | 6 Owner account | Name, email, password (zxcvbn-style strength meter, 12-char minimum), optional MFA enrolment. |
-| 7 Seed data | Checkboxes, all on by default: Attractions (§3.1) · Party packages (§3.3) · Add-ons · Resources · Operating hours · Pipelines & stages · 8 Playbooks · ~40 templates · 8 forms · 111 automations (inactive) · Membership plan examples · Default dashboards · Demo contacts/bookings (**off** by default). |
+| 7 Seed data | Checkboxes, all on by default: Attractions (§3.1) · Party packages (§3.3) · Add-ons · Resources · Operating hours · Pipelines & stages · 8 Playbooks · ~40 templates · 8 forms · 112 automations (inactive) · Membership plan examples · Default dashboards · Demo contacts/bookings (**off** by default). |
 | 8 Finish | Writes `config/config.php` with a generated `APP_KEY`; drops `install/.lock`; shows (a) the **exact cron line** to paste into cPanel › Cron Jobs, (b) the SPF/DKIM/DMARC records for Zone Editor, (c) a reminder that **Safe Mode is on**, (d) a "delete the `install/` directory" instruction with a one-click self-delete attempt, (e) the login link. |
 
 **Cron line shown:**
@@ -1388,14 +1454,28 @@ delivery log and manual replay.
 | Phase | Scope | State |
 |---|---|---|
 | **0** | This specification | ✅ |
-| **1** | Foundation: installer, full schema, auth/RBAC, routing, UI shell, dashboard, settings, cron, job queue, audit | **in progress** |
-| **2** | Capture & Convert: contacts, households, companies, pipelines, deals, quotes, forms, tasks | |
-| **3** | Bookings: attractions, packages, availability engine, quote calculator, bookings, calendar, run sheets, waivers, check-in | |
-| **4** | Communicate: mail/SMS drivers, templates, inbox, segments, campaigns, Text Club, usage ledger | |
-| **5** | Automate: engine, builder UI, 111 seeded automations, playbook registry and activation | |
-| **6** | Improve: surveys, review routing, review inbox, review wall, memberships, full reporting suite | |
-| **7** | Integrate: CenterEdge MSSQL import, card API, GBP, Slack, webhooks, REST API, iCal, weather | |
-| **8** | Harden: security review, accessibility audit, load test at 50k contacts, docs, backup/restore, update channel | |
+| **1** | Foundation: installer, full schema, auth/RBAC, routing, UI shell, dashboard, settings, cron, job queue, audit | ✅ |
+| **2** | Capture & Convert: contacts, households, companies, pipelines, deals, quotes, forms, tasks | ✅ |
+| **3** | Bookings: attractions, packages, availability engine, quote calculator, bookings, calendar, run sheets, waivers, check-in | ✅ |
+| **4** | Communicate: mail/SMS drivers, templates, inbox, segments, campaigns, Text Club, usage ledger | ✅ |
+| **5** | Automate: engine, builder UI, 112 seeded automations, playbook registry and activation | ✅ |
+| **6** | Improve: surveys, review routing, review inbox, review wall, memberships, full reporting suite | ✅ |
+| **7** | Integrate: CenterEdge MSSQL import, card API, GBP, Slack, webhooks, REST API, iCal, weather | **partly** — see below |
+| **8** | Harden: security review, accessibility audit, load test at 50k contacts, docs, backup/restore, update channel | ✅ |
+
+**Phase 7 is the only incomplete one, and what is left needs the venue rather
+than more code.** Built: the REST API, outbound webhooks, iCal feeds, and CSV
+import for guests and visit history. Not built: the live CenterEdge MSSQL feed
+and card API, posting a review reply through Google Business Profile (§8.9
+records the reply instead), and the weather hook; there is no dedicated Slack
+integration either, though the automation engine's generic `webhook` step takes
+a Slack incoming-webhook URL today.
+
+Each of those waits on an answer in §14 rather than on development time —
+most of all #3 (does CenterEdge hold usable guest email and phone?) and #6 (is
+an MSSQL driver reachable from the host at all?). If #6 is no, which is likely
+on cPanel shared hosting, a venue-side export into the CSV importer is the
+permanent shape of the POS feed and not a stopgap.
 
 > **Phasing risk.** Phase 7 carries the CenterEdge integration, but open questions 3 and 6
 > (§14) could invert the plan. If guest email/phone coverage in the POS turns out to be

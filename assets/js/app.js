@@ -319,6 +319,51 @@
         relative: relative
     };
 
+    // ------------------------------------------------- Step config fields
+
+    /**
+     * Show only the fields the chosen kind of automation step uses.
+     *
+     * PROGRESSIVE, NOT REQUIRED. Without this every field is visible with its
+     * own label saying which steps use it, and the form still saves correctly
+     * — the server reads the fields the step type declares and ignores the
+     * rest. A builder that cannot be used without JavaScript is a builder
+     * that cannot be used on the till's old browser at the front desk.
+     */
+    function initStepFields() {
+        document.querySelectorAll('[data-step-form]').forEach(function (form) {
+            var select = form.querySelector('[data-step-type]');
+
+            if (!select) {
+                return;
+            }
+
+            var groups = form.querySelectorAll('[data-for]');
+
+            function apply() {
+                var chosen = select.value;
+
+                groups.forEach(function (group) {
+                    var types = (group.getAttribute('data-for') || '').split(' ');
+                    var wanted = types.indexOf(chosen) !== -1;
+
+                    group.hidden = !wanted;
+
+                    // A hidden required field would block the submit with a
+                    // message pointing at something nobody can see.
+                    group.querySelectorAll('input, select, textarea').forEach(function (field) {
+                        if (field.hasAttribute('data-required')) {
+                            field.required = wanted;
+                        }
+                    });
+                });
+            }
+
+            select.addEventListener('change', apply);
+            apply();
+        });
+    }
+
     // ---------------------------------------------------------------- Boot
 
     function boot() {
@@ -328,6 +373,7 @@
         initSubmitGuard();
         initShortcuts();
         initLiveTimes();
+        initStepFields();
     }
 
     if (document.readyState === 'loading') {

@@ -73,7 +73,7 @@ the guest list?" an answerable question.
 
 ## 2. Where guest data comes from — and what that implies
 
-Three routes, with very different consequences.
+Four routes, with very different consequences.
 
 **1. A guest gave it to you.** A booking form, a waiver, a text-club sign-up.
 The guest knows you have it. If the form said what you would use it for, you
@@ -91,6 +91,31 @@ So **POS-derived contacts arrive with no consent**, and Castle CRM will not
 market to them. They can be called, and they can be sent transactional mail
 about something they bought, but they cannot be put in a campaign until
 consent is recorded.
+
+**4. It was imported from a spreadsheet.** A list from whatever you used
+before Castle CRM. **This is the one with the least evidence attached**, and it
+is treated accordingly.
+
+A file exported from another system says nothing about whether those people
+agreed to be emailed. The column that looks like it does — `Opt-In`,
+`Subscribed`, `Newsletter` — is very often a default somebody set once, years
+ago, for everybody in the database. So:
+
+- **Imported contacts arrive consented to nothing**, whatever the file says.
+- A consent column IS honoured, but only if you tick a box affirming that you
+  hold records of those people agreeing. That tick is audited with your name
+  and the time, because "who said these people agreed?" is the question a
+  complaint turns into.
+- Even then, only a row whose consent column actually says yes is consented,
+  the date comes from the file where there is one, and **no date is invented**
+  — a consent with no date is recorded as a consent with no date, because the
+  date is what a complaint is answered with.
+- A `Do Not Contact` column is **always** honoured, ticked or not. Those
+  guests are imported and never messaged.
+- Importing cannot change a consent that already exists, in either direction.
+  The record here was made with evidence — a form, a double opt-in text — that
+  a spreadsheet does not have, so a file can neither grant one nor take one
+  away.
 
 This is why the dashboard's headline growth number is **identified and
 consented guests**, not total contacts. A contact list that cannot be

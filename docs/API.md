@@ -1,15 +1,11 @@
 # Castle CRM — machine interfaces
 
-What is callable from outside a browser today, and what is planned.
+What is callable from outside a browser.
 
-This document distinguishes the two honestly, because a reference that
-describes endpoints which do not exist is worse than no reference: somebody
-builds against it, and finds out at integration time.
-
-- **§1–§4 exist now** and are covered by the test suite.
-- **§5 is the planned REST API.** The schema for it (`api_tokens`,
-  `webhooks`) ships, and nothing is routed yet. Treat the shapes as a
-  proposal, not a contract.
+Everything described here is built and covered by the test suite. A reference
+that describes endpoints which do not exist is worse than no reference —
+somebody builds against it and finds out at integration time — so where this
+document and `app/routes.php` disagree, the file is right (§8).
 
 ---
 
@@ -150,50 +146,256 @@ application has.
 
 ---
 
-## 5. Planned: the REST API
+## 5. The REST API
 
-**Not implemented.** The tables exist; no routes do. Written down here so the
-shape is agreed before anything depends on it.
+`/api/v1/*`. Implemented, routed and covered by the test suite.
 
 ### Authentication
 
-A bearer token, created per user, hashed at rest (`api_tokens.token_hash`),
-with optional abilities and an expiry:
+A bearer token, created per user in **Settings → API tokens**, hashed at rest
+(`api_tokens.token_hash` holds a SHA-256; the plaintext is shown once and
+never stored):
 
 ```
 Authorization: Bearer cc_live_8f3a...
 ```
 
-A token never grants more than the user who owns it. The permission system is
-the same one the web interface uses, so an API token held by a front-desk
-account can look up one guest and cannot export the list — the API surface
-cannot become a way around the roles.
+`X-Api-Key: cc_live_...` is accepted as well, for hosts that strip
+`Authorization`. The token never appears in a query string: a credential in a
+URL ends up in access logs, in the `Referer` of every outbound link, and in
+browser history.
+
+**A token never grants more than the user who owns it, and its abilities only
+narrow.** The permission system is the one the web interface uses, so a token
+held by a front-desk account looks up one guest and cannot export the list.
+Ticking abilities when you create a token narrows it further — the
+intersection, never the union. An owner minting a read-only token really does
+get a read-only token, which is asserted by a test precisely because the owner
+bypasses every other permission check in the codebase.
+
+A token stops working the moment it is revoked, the moment it expires, and the
+moment its owner is deactivated or deleted. Nobody has to remember to revoke
+the tokens of somebody who leaves.
+
+**No session cookie authenticates this API.** A route that accepted both would
+be forgeable from any logged-in tab, because the API has no form to carry a
+CSRF token in. A static gate asserts the `api` and `auth` middleware never
+appear on the same route.
+
+**On cPanel**, Apache does not pass the `Authorization` header to PHP unless
+told to. The shipped `.htaccess` tells it to, two ways. If every token comes
+back "not valid" while you can see you sent one, a host overriding that file
+is the usual cause.
+
+### Discovery
+
+```bash
+curl https://crm.example.com/api/v1 \
+  -H "Authorization: Bearer cc_live_..."
+```
+
+```json
+{
+  "version": "v1",
+  "resources": {
+    "contacts": { "path": "/api/v1/contacts", "readable": true, "writable": true,
+                  "deletable": false,
+                  "fields": ["id", "first_name", "..."] }
+  },
+  "you": { "user_id": 1, "name": "Owner", "role": "owner", "revenue": true }
+}
+```
+
+It lists only what THIS token can reach, resolved against the owner's current
+role — so an integration can check itself rather than guessing, and a token
+that lost access because its user was demoted says so.
+
+`writable` and `deletable` are reported **separately because they are
+separate permissions** — see below. A front-desk token commonly comes back
+`"writable": true, "deletable": false`, and an integration can see that here
+rather than discovering it from a 403.
 
 ### Resources
 
-Read and write, mirroring the modules:
-
 | Resource | Methods | Notes |
 |---|---|---|
-| `/api/v1/contacts` | GET, POST, PATCH | consent fields are writable only with evidence |
-| `/api/v1/contacts/{id}` | GET, PATCH, DELETE | DELETE is a soft delete |
-| `/api/v1/deals` | GET, POST, PATCH | |
-| `/api/v1/bookings` | GET, POST, PATCH | |
-| `/api/v1/bookings/{id}/payments` | GET, POST | an opaque reference only; never card data |
-| `/api/v1/availability` | GET | the query a website booking widget needs |
-| `/api/v1/messages` | GET, POST | POST goes through the same consent and Safe Mode checks |
+| `/api/v1/contacts` | GET, POST, PATCH, DELETE | DELETE is a soft delete |
+| `/api/v1/contacts/{id}/consent` | POST | consent with its evidence — see below |
+| `/api/v1/households` | GET, POST, PATCH | |
+| `/api/v1/companies` | GET, POST, PATCH, DELETE | |
+| `/api/v1/deals` | GET, POST, PATCH, DELETE | won/lost are transitions, not a column |
+| `/api/v1/deals/{id}/stage` | POST | move a deal — see below |
+| `/api/v1/bookings` | GET, POST, PATCH, DELETE | money is derived from the payment ledger |
+| `/api/v1/visits` | GET, POST | POST goes through the visit recorder |
+| `/api/v1/memberships` | GET | read-only: every change is a lifecycle transition |
 | `/api/v1/tasks` | GET, POST, PATCH | |
-| `/api/v1/reports/{slug}` | GET | |
+| `/api/v1/conversations` | GET | |
+| `/api/v1/messages` | GET | read-only; bodies on the single-record read only |
+| `/api/v1/form-submissions` | GET | |
+| `/api/v1/reviews` | GET | |
 
-Two rules that will not be relaxed:
+A resource that refuses a write answers **405** with the reason, not 500.
 
-1. **Writing a consent flag requires the evidence with it** — the source and
-   the disclosure wording. An API that lets a caller set `email_consent = 1`
-   with no record of what the guest agreed to is a liability, not a feature.
-2. **`POST /messages` is not a bypass.** It goes through `Mailer::send()`, so
-   suppression, consent, the frequency cap, quiet hours and Safe Mode all
-   still apply. An integration cannot send what the application would refuse
-   to send.
+### A field that names another record has to be its id
+
+Any field ending in `_id` — `contact_id`, `company_id`, `household_id`,
+`owner_id`, `pipeline_id`, `booking_id` — must be a **positive integer**, or a
+string of digits, or `null` to clear the link. Anything else is a **422** that
+names the field and says what was wrong with it:
+
+```json
+{
+  "error": "These fields name another record, so each has to be its id: household_id (true and false are not record ids).",
+  "invalid": { "household_id": "true and false are not record ids" }
+}
+```
+
+This is strict on purpose, and the strictness is the feature. PHP turns `true`
+into `1` and `"abc"` into `0`, so a field sent wrong used to resolve silently
+to "record 1" or "no record" and answer **200** — a deal attached to whichever
+company happens to be id 1, a visit filed against a stranger's party. A
+refusal that names the field is the only version of that a caller can act on.
+
+### Which permission each method needs
+
+Reading, writing and deleting are **three different permissions**, exactly as
+they are on the pages — this application separates them because the
+front-desk role an operator actually builds creates and edits guests without
+being able to remove them.
+
+| Resource | GET | POST / PATCH | DELETE |
+|---|---|---|---|
+| contacts | `view_contacts` | `contacts_manage` | `contacts_delete` |
+| companies | `view_contacts` | `contacts_manage` | `contacts_delete` |
+| households | `view_contacts` | `contacts_manage` | — not deletable |
+| visits | `view_contacts` | `contacts_manage` — POST only, through the visit recorder | — not deletable |
+| deals | `view_deals` | `deals_manage` (a stage move too) | `deals_delete` |
+| bookings | `view_bookings` | `bookings_manage` | `bookings_cancel` |
+| tasks | `view_tasks` | `inbox_assign` | — not deletable |
+| memberships, messages, conversations, form-submissions, reviews | the matching `view_*` | — read-only | — not deletable |
+
+"Not deletable" means exactly that: DELETE answers **405** before any
+permission is consulted, so granting one changes nothing.
+
+A refused call answers **403** and names the permission it wanted
+(`{"error": "...", "permission": "contacts_delete"}`), so an integration can
+report something a venue can act on.
+
+**DELETE on a booking is a soft delete, not the cancellation workflow.** It
+takes `bookings_cancel` because that is what removing a party from the
+calendar needs, but it stamps `deleted_at` and stops there — it does not
+record a reason, warn about a deposit, or fire the cancellation
+notifications. Cancelling a party properly is a page, not an endpoint.
+
+**Each ability is its own tick when you create a token** (Settings → API
+tokens), delete included. A token scoped to read and write contacts cannot
+delete one unless the delete box is ticked.
+
+**And each permission's SCOPE applies to the call it governs.** A role can
+hold `view_contacts` at *everyone* and `contacts_manage` at *their own* —
+"see everyone, edit your own" — and then a PATCH, a DELETE, a consent write
+or a visit on somebody else's guest answers **404**, not 403: a caller who
+may not touch a record is not told it exists.
+
+### Examples
+
+List, newest first:
+
+```bash
+curl "https://crm.example.com/api/v1/contacts?per_page=25" \
+  -H "Authorization: Bearer cc_live_..."
+```
+
+Search, and sync incrementally:
+
+```bash
+curl "https://crm.example.com/api/v1/contacts?q=byrne" -H "Authorization: Bearer ..."
+curl "https://crm.example.com/api/v1/contacts?updated_since=2026-10-16T00:00:00Z" \
+  -H "Authorization: Bearer ..."
+```
+
+`updated_since` is what an incremental sync needs; without it every poll is a
+full table read. An unparseable value is **422**, never silently ignored — an
+ignored filter returns the whole table and the integration re-imports
+everything on every poll without knowing why.
+
+Create and update:
+
+```bash
+curl -X POST https://crm.example.com/api/v1/contacts \
+  -H "Authorization: Bearer ..." -H "Content-Type: application/json" \
+  -d '{"first_name":"Dana","last_name":"Byrne","email":"dana@example.test","source":"Website"}'
+
+curl -X PATCH https://crm.example.com/api/v1/contacts/4182 \
+  -H "Authorization: Bearer ..." -H "Content-Type: application/json" \
+  -d '{"city":"Chester","state":"NY"}'
+```
+
+A field that cannot be written is **refused with a 422 naming it**, and
+nothing is written — not quietly dropped. Dropping silently is how an
+integration spends a morning wondering why its PATCH had no effect.
+
+Record a visit:
+
+```bash
+curl -X POST https://crm.example.com/api/v1/visits \
+  -H "Authorization: Bearer ..." -H "Content-Type: application/json" \
+  -d '{"contact_id":4182,"visit_date":"2026-10-15","source":"check_in","spend_cents":4200}'
+```
+
+**Idempotent by the day.** A guest already recorded on that date comes back
+`201`→`200` with `"recorded": false`, the same visit id, and a note. A family
+checked in one child at a time is one visit, and a retried batch does not give
+anybody eleven.
+
+### Moving a deal
+
+`stage_id` is **not** a writable field. A stage is not a column, it is a
+move — entering one starts the stage clock the velocity report measures,
+sets won or lost and stamps the date, computes the SLA deadline, writes the
+stage-history row, and fires the events that start the deposit chase and the
+thank-you. A PATCH that set the column would do none of it, and the board
+would show a deal in "Won" with no won date and no automation ever running.
+
+```bash
+curl -X POST https://crm.example.com/api/v1/deals/812/stage \
+  -H "Authorization: Bearer ..." -H "Content-Type: application/json" \
+  -d '{"stage":"Deposit Paid"}'
+```
+
+By **name** or by `stage_id` — a name is matched inside the deal's own
+pipeline first, because two boards may both have a "Confirmed". Needs
+`deals_manage`.
+
+**Idempotent**, like a visit: a deal already in that stage comes back `200`
+with `"moved": false` and a note, and no second history row — re-entering
+would reset the stage clock. A stage that does not exist, or one belonging to
+another pipeline, is a `422` that says which.
+
+```json
+{
+  "data": { "id": 812, "stage_id": 6, "status": "open", "...": "..." },
+  "moved": true, "from": "Quote Sent", "to": "Deposit Paid", "note": null
+}
+```
+
+### Consent
+
+The one write that is not a PATCH, because a consent flag with no record of
+what the guest agreed to is a liability rather than a feature:
+
+```bash
+curl -X POST https://crm.example.com/api/v1/contacts/4182/consent \
+  -H "Authorization: Bearer ..." -H "Content-Type: application/json" \
+  -d '{"channel":"email","granted":true,"source":"Party enquiry form",
+       "disclosure":"I agree to receive email from The Castle Fun Center."}'
+```
+
+**Granting needs the disclosure, word for word. Withdrawing needs nothing** —
+a guest saying stop is honoured unconditionally, and refusing to record that
+because a field was missing would be the worst possible reading of a
+compliance rule. Both write `consent_log` with the evidence, the IP and the
+token that did it.
 
 ### Shapes
 
@@ -203,56 +405,216 @@ Money is always **integer cents**, never a float and never a formatted string:
 {
   "id": 4182,
   "total_cents": 54900,
-  "currency": "USD",
   "event_date": "2026-11-14",
-  "created_at": "2026-10-15T14:03:11+00:00"
+  "created_at": "2026-10-15T14:03:11Z"
 }
 ```
 
-Timestamps are UTC ISO 8601. Dates with no time are `YYYY-MM-DD`. Lists are
-cursor-paginated:
+Timestamps are UTC ISO 8601 **with the Z**: without a zone, most client
+libraries read them as local time, which puts every timestamp four or five
+hours out at this venue — consistently enough that nobody notices for a while.
+Dates with no time are `YYYY-MM-DD`. Ids are integers, not strings.
+
+**Money follows `view_revenue`**, as on every page. A token whose user cannot
+see revenue gets the money fields PRESENT and `null`, with
+`meta.money_hidden: true` — the key stays, because a key that vanishes reads
+as "this record has no total" and a null reads as "you were not shown one".
+
+Lists are cursor-paginated:
 
 ```json
 {
   "data": [ ... ],
-  "meta": { "next_cursor": "eyJpZCI6NDE4Mn0", "has_more": true }
+  "meta": { "has_more": true, "next_cursor": "NDE4Mg", "per_page": 25,
+            "money_hidden": false }
 }
 ```
 
-Cursors, not page numbers: a venue's contact list changes while you are
-paging through it, and an offset silently skips rows when one is inserted
-above the window.
+Cursors, not page numbers: a venue's contact list changes while you page
+through it, and an offset silently skips rows when one is inserted above the
+window. Treat the cursor as opaque. `per_page` is capped at 100 — asking for
+100000 gets you 100, not an outage.
+
+### What is deliberately NOT exposed
+
+| Absent | Why |
+|---|---|
+| Message bodies in the **listing** | A paginated listing is a bulk export of a venue's correspondence wearing a different hat. The single-message read returns the body. |
+| Form answers, IPs, user agents | The guest's own words and their network identity. |
+| `payment_reference` | An opaque processor reference with no use outside the application. |
+| Password hashes, PINs, tokens | A unit test fails the build if a field whose name looks like a credential ever appears in a resource definition. |
+| Derived figures as WRITABLE | `visit_count`, lifetime value, a booking's totals. Writing one puts a number on the page that no record supports, and the next recalculation contradicts the caller. |
+
+Every resource declares an **allowlist** of fields. A column added by a future
+migration is not published until somebody adds it to that list — which is the
+whole reason the list exists.
+
+### Errors and limits
+
+`401` no or bad token (always JSON, never a redirect to a login page), `403`
+the token lacks a permission (and says which), `404` unknown resource or a
+record outside the caller's scope, `405` write to a read-only resource, `422`
+validation or a refused field, `429` rate limited.
+
+**A record outside your scope is a 404, not a 403.** A 403 confirms the record
+exists, which is how an id space gets walked.
+
+Reads are throttled at 600/minute per IP, writes at 300, deletes at 120.
 
 ### Webhooks
 
-Outbound, one row per event subscription (`webhooks`), with deliveries and
-their responses recorded (`webhook_deliveries`). Signed with an HMAC of the
-body in a header, so a receiver can verify the call came from the venue's
-install:
-
-```
-X-Castle-Signature: sha256=...
-X-Castle-Event: booking.deposit_paid
-X-Castle-Delivery: 01JAV...
-```
-
-Retried with backoff; the delivery log is what makes "did that fire?"
-answerable.
-
-### What will not be in the API
-
-- No endpoint that returns a password hash, an API token, or a provider
-  credential. Not even to an owner.
-- No endpoint that returns card data, because none is stored.
-- No endpoint that disables Safe Mode. That is a decision a person makes in
-  the interface, with the confirmation and the audit entry.
+The other direction — Castle CRM calling you when something happens — is
+§6 below.
 
 ---
 
-## 6. Alongside the API: the existing exports
+## 6. Outbound webhooks
 
-While §5 is unbuilt, two routes already move data out, and for an integration
-that only needs a periodic copy they may be enough.
+The API is how something outside asks Castle CRM a question. A webhook is how
+Castle CRM tells it something happened, the moment it happens, so nothing has
+to poll for changes.
+
+Subscriptions live at **Settings → Webhooks** (`/settings/webhooks`, permission
+`integrations_manage`). A subscription is an event pattern and a URL.
+
+### 6.1 What a call contains
+
+```http
+POST /your/endpoint HTTP/1.1
+Content-Type: application/json
+X-Castle-Event: booking.created
+X-Castle-Delivery: whd_4f1c8a9b2e7d0516
+X-Castle-Timestamp: 1763300000
+X-Castle-Signature: v1=6c1f…
+
+{
+  "id": "whd_4f1c8a9b2e7d0516",
+  "event": "booking.created",
+  "occurred_at": "2026-11-16T14:53:20+00:00",
+  "data": { "booking_id": 4711, "status": "confirmed" },
+  "version": "v1"
+}
+```
+
+**It carries ids, not records, and that is a decision rather than an
+oversight.** A webhook target is a URL typed into a form, fetched over the
+public internet, and logged at the far end by software this venue does not
+control. If a name, an email or an amount could reach it, every subscription
+would be a standing export of guest records to somewhere nobody audits — and
+it would get there not by anybody deciding so, but because some future event
+payload happened to include one.
+
+So `data` is filtered to an **allow-list**: `id`, anything ending `_id`, and
+the small set of branch labels `status`, `type`, `channel`, `event`, `source`,
+`reason`. Anything else — including anything added later — is dropped. A
+receiver that needs the record reads it back through `/api/v1` (§5) with a
+token that can be scoped to one resource and revoked on its own.
+
+### 6.2 Verifying a call
+
+```
+signed  = "v1." + timestamp + "." + raw_request_body
+expected = "v1=" + hmac_sha256(signed, your_signing_secret)
+```
+
+Compare `expected` against `X-Castle-Signature` with a constant-time
+comparison (`hash_equals` in PHP, `hmac.compare_digest` in Python,
+`crypto.timingSafeEqual` in Node).
+
+Four things to get right, each of which is a real failure if you do not:
+
+- **Verify the bytes you received**, not a re-encoded copy. JSON key order and
+  unicode escaping are not stable between languages, so a receiver that parses
+  and re-serialises before checking computes a different string and *every*
+  signature fails.
+- **Check the timestamp** and reject anything more than about five minutes
+  old. The timestamp is inside the signed string, so a captured call cannot be
+  replayed tomorrow with a fresh one — but only your clock can close the
+  window on a replay sent a second later.
+- **Deduplicate on `X-Castle-Delivery`.** It is stable across every retry and
+  across a manual replay. A receiver that is not idempotent will double-count
+  an event the first time a retry happens, which is the first time your
+  endpoint has a bad minute.
+- **Use a constant-time comparison.** A comparison that returns on the first
+  wrong byte leaks, over enough requests, how much of a guess was right.
+
+A worked example in PHP:
+
+```php
+$body      = file_get_contents('php://input');
+$timestamp = (int) ($_SERVER['HTTP_X_CASTLE_TIMESTAMP'] ?? 0);
+$signature = $_SERVER['HTTP_X_CASTLE_SIGNATURE'] ?? '';
+
+if (abs(time() - $timestamp) > 300) {
+    http_response_code(400);
+    exit;
+}
+
+$expected = 'v1=' . hash_hmac('sha256', 'v1.' . $timestamp . '.' . $body, $secret);
+
+if (!hash_equals($expected, $signature)) {
+    http_response_code(401);
+    exit;
+}
+```
+
+The signing secret is shown **once**, when the subscription is created. It
+cannot be hashed at rest the way an API token is, because every delivery has
+to be signed with it — so "no page ever prints it a second time" is the whole
+of its protection. Lost it? Delete the subscription and make another.
+
+### 6.3 What to answer, and what happens if you do not
+
+Answer `2xx` as soon as you have **stored** the call, and do the work
+afterwards. The sender waits a few seconds at most.
+
+| Your answer | What happens |
+|---|---|
+| `2xx` | Delivered. The subscription's failure count resets. |
+| `408`, `429`, any `5xx`, or no answer at all | Retried: six attempts in all, after 1, 5, 30, 120 and 360 minutes — about nine hours. |
+| Any other `4xx` | **Not retried.** You read the request and rejected it, so sending the identical body five more times would be rejected five more times. |
+
+After **20 consecutive failed deliveries** the subscription switches itself off
+and records why, rather than retrying a dead endpoint for ever. Switching it
+back on clears the count.
+
+Every attempt is logged with the response code, the reason in words, and how
+long it took, on the same page. A finished delivery can be replayed by hand;
+a replay is a new attempt carrying the **same** delivery id.
+
+### 6.4 Which events
+
+Everything in `App\Core\Event::CATALOG` that is deliverable, plus two kinds
+of wildcard:
+
+- `*` — everything;
+- `booking.*` — everything in that namespace, **including events added
+  later**, which is usually what an integration wants. The dot is required:
+  `booking.*` does not match a future `bookings.created`.
+
+The picker on the page is generated from the catalogue, so it cannot offer an
+event nothing fires — and a subscription to one is refused at save time rather
+than sitting there never delivering.
+
+### 6.5 The target URL
+
+Refused when you save it, not quietly at four in the morning:
+
+- anything but `http`/`https`;
+- a literal address inside the network — loopback, link-local (`169.254.*`,
+  which is where cloud metadata services live), and the RFC 1918 ranges;
+- **a hostname that resolves to any of those**, checked at save time and again
+  at delivery time, with the approved address pinned for the connection so a
+  name whose answer changes in between cannot be used to reach inwards.
+
+Redirects are not followed, for the same reason.
+
+---
+
+## 7. Alongside the API: the existing exports
+
+Two routes already move data out in bulk, and for an integration that only
+needs a periodic copy they are simpler than paging the API.
 
 ```
 GET /settings/backups/export?table=contacts
@@ -278,7 +640,7 @@ formula on a staff machine.
 
 ---
 
-## 7. Reading the authoritative list
+## 8. Reading the authoritative list
 
 `app/routes.php` is the route table, and it is written to be read: every URL
 the application answers, with the permission that guards it and the rate limit

@@ -94,6 +94,7 @@ $selectedDeal = (string) (old('deal_id') ?: ($quote['deal_id'] ?? ''));
 
     <div class="table-wrap">
         <table class="table">
+            <caption class="sr-only">Lines on this quote</caption>
             <thead>
                 <tr>
                     <th scope="col">Description</th>

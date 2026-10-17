@@ -675,6 +675,43 @@ Harness::test('a route behind the throttle answers 429 once the limit is passed'
     Assert::matches('/Retry-After:\s*\d+/i', $response['headers'], 'a 429 must say when to come back');
 });
 
+Harness::test('READING a public page does not spend its POST allowance', function (): void {
+    // MEASURED in a browser walk, and it silently kills a public page in
+    // production. Four paths in this application answer both GET and POST, and
+    // three of them pair a generous read limit with a tight write one — a web
+    // form, the waiver, the booking page. The throttle used to key its counter
+    // on the IP and the PATH alone, so those two limits shared one bucket and
+    // reading the page spent the allowance for sending it: a family comparing
+    // packages and dates makes a dozen GETs of /book before they type
+    // anything, and the eleventh made the enquiry itself answer 429 for the
+    // next ten minutes.
+    //
+    // Every request below is individually well inside its own limit, which is
+    // exactly why this never showed up in a suite that posts once per test.
+    $browser = new TestBrowser(getenv('CC_TEST_BASE_URL') ?: '', 'throttle-method', '198.51.100.249');
+
+    // /waiver is GET throttle:120,5 and POST throttle:20,10. Twenty-five
+    // reads is comfortably inside the read limit and well past the write one.
+    for ($read = 1; $read <= 25; $read++) {
+        $status = $browser->get('/waiver')['status'];
+
+        Assert::notSame(429, $status, 'read ' . $read . ' of 25 is inside the 120-per-5-minute read limit');
+    }
+
+    // The POST will be refused on its merits — there may be no published
+    // waiver, and the agreement box is not ticked — but it must not be
+    // refused for having been read at.
+    $response = $browser->post('/waiver', [
+        '_token' => $browser->csrfToken('/waiver'),
+    ]);
+
+    Assert::notSame(
+        429,
+        $response['status'],
+        'and the first POST still has its own allowance; got ' . $response['status']
+    );
+});
+
 Harness::test('the throttle is per client address, not global', function (): void {
     // The property every other HTTP suite depends on. If this ever stops being
     // true, those suites start failing in the middle with 429s that look like

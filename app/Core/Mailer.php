@@ -220,6 +220,7 @@ final class Mailer
             ];
 
             self::markSent($messageId, 'captured', null);
+            self::announce($messageId, $message, true, 'captured');
 
             return ['sent' => true, 'reason' => 'captured', 'message_id' => $messageId, 'redirected' => $redirected];
         }
@@ -229,18 +230,21 @@ final class Mailer
         } catch (Throwable $e) {
             Log::error('Mail delivery threw', ['error' => $e->getMessage(), 'to' => $to]);
             self::markFailed($messageId, $e->getMessage());
+            self::announce($messageId, $message, false, 'driver_error');
 
             return ['sent' => false, 'reason' => 'driver_error', 'message_id' => $messageId, 'redirected' => $redirected];
         }
 
         if (!$result['ok']) {
             self::markFailed($messageId, $result['error']);
+            self::announce($messageId, $message, false, (string) $result['error']);
 
             return ['sent' => false, 'reason' => $result['error'], 'message_id' => $messageId, 'redirected' => $redirected];
         }
 
         self::markSent($messageId, self::driver(), $result['provider_id'] ?? null);
         self::meter($messageId);
+        self::announce($messageId, $message, true, 'sent');
 
         return ['sent' => true, 'reason' => 'sent', 'message_id' => $messageId, 'redirected' => $redirected];
     }
@@ -1028,6 +1032,15 @@ final class Mailer
                 'status'            => 'queued',
                 'provider'          => self::driver(),
                 'error_message'     => $redirected ? 'Safe Mode: redirected to the owner' : null,
+                // The price goes on the MESSAGE as well as the usage ledger,
+                // because a campaign's actual cost is summed from these rows.
+                // Recording it only in the ledger left every email campaign
+                // reporting $0.00 beside its estimate however the venue had
+                // priced email, which reads either as broken sending or as
+                // free postage. The column is DECIMAL(10,4), so a tenth of a
+                // cent per email survives to be summed rather than rounding
+                // to nothing forty thousand times.
+                'cost_cents'        => self::unitCostCents(),
                 'created_at'        => now_utc(),
             ]);
         } catch (Throwable $e) {
@@ -1055,6 +1068,59 @@ final class Mailer
         }
     }
 
+    /**
+     * Tell the application an email went out, or did not.
+     *
+     * Fired from the four ends of `send()` rather than from `markSent()` and
+     * `markFailed()`, because the message array is here and the status
+     * writers only have an id — and a listener reading the row back before
+     * the status is written would see the wrong one.
+     *
+     * A REFUSAL IS NOT A FAILURE. Nothing is fired for a message the compliance
+     * checks stopped: no row was recorded, no provider was called, and an
+     * automation on `message.failed` means "the provider could not deliver
+     * this", not "we correctly declined to send it". Those refusals have
+     * their own counters and their own reasons.
+     *
+     * The payload carries `automation_run_id` when an automation sent it. That
+     * is deliberately not a reason to suppress the event — an automation
+     * whose text failed is exactly the case a venue wants a task for — and the
+     * guard against a loop is the same one the `add_tag` step relies on:
+     * enrolment is once per guest per automation unless the venue says
+     * otherwise.
+     *
+     * @param array<string,mixed> $message
+     */
+    private static function announce(?int $messageId, array $message, bool $sent, string $reason): void
+    {
+        if ($messageId === null) {
+            return;
+        }
+
+        $contactId = isset($message['contact_id']) && (int) $message['contact_id'] > 0
+            ? (int) $message['contact_id']
+            : null;
+
+        $runId = isset($message['automation_run_id']) && (int) $message['automation_run_id'] > 0
+            ? (int) $message['automation_run_id']
+            : null;
+
+        Event::fire($sent ? 'message.sent' : 'message.failed', [
+            'message_id'        => $messageId,
+            'contact_id'        => $contactId,
+            'channel'           => 'email',
+            // Normalised the same way the send path normalises it, so a
+            // condition on the kind reads what was actually sent rather than
+            // whatever the caller happened to pass.
+            'kind'              => ($message['kind'] ?? self::MARKETING) === self::TRANSACTIONAL
+                ? self::TRANSACTIONAL
+                : self::MARKETING,
+            'campaign_id'       => isset($message['campaign_id']) ? (int) $message['campaign_id'] : null,
+            'automation_run_id' => $runId,
+            'reason'            => $reason,
+        ]);
+    }
+
     private static function markFailed(?int $messageId, string $error): void
     {
         if ($messageId === null) {
@@ -1071,6 +1137,19 @@ final class Mailer
         }
     }
 
+    /**
+     * What one email costs, in cents.
+     *
+     * Already cents, unlike the SMS setting's thousandths — so it is used as
+     * it stands. Negative is refused: a provider that pays the venue to send
+     * mail does not exist, and a negative price would make a campaign's cost
+     * fall as it reached more people.
+     */
+    private static function unitCostCents(): float
+    {
+        return max(0.0, (float) Settings::get('mail.cost_per_email_cents', 0));
+    }
+
     /** Record the send against the usage ledger, so cost is visible. */
     private static function meter(?int $messageId): void
     {
@@ -1079,7 +1158,7 @@ final class Mailer
                 'channel'         => 'email',
                 'direction'       => 'outbound',
                 'units'           => 1,
-                'unit_cost_cents' => (float) Settings::get('mail.cost_per_email_cents', 0),
+                'unit_cost_cents' => self::unitCostCents(),
                 'entity_type'     => 'messages',
                 'entity_id'       => $messageId,
                 'provider'        => self::driver(),

@@ -349,11 +349,55 @@ body.bare { display: grid; place-items: center; min-height: 100vh; padding: 1rem
 
 .breadcrumbs { font-size: .85rem; color: var(--faint); margin-bottom: .75rem; }
 
+/*
+ * A row of filter links that reads as a set of tabs.
+ *
+ * The selected one is marked by a SOLID BACKGROUND and bolder text, not by
+ * colour alone — `.is-active` has to be legible to somebody who cannot tell
+ * this blue from this grey, and on the Text Club list it is the only thing
+ * saying which slice of the list is on screen.
+ */
+.tab-bar {
+    display: flex; flex-wrap: wrap; gap: .25rem;
+    padding: .2rem; border-radius: var(--radius-sm);
+    background: var(--bg); border: 1px solid var(--line);
+}
+.tab {
+    padding: .3rem .7rem; border-radius: calc(var(--radius-sm) - .1rem);
+    font-size: .82rem; font-weight: 600; color: var(--muted);
+    white-space: nowrap; text-decoration: none;
+}
+.tab:hover { background: var(--panel-soft); color: var(--text); text-decoration: none; }
+.tab.is-active { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+.tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+
 .grid-2 { display: grid; gap: var(--gap); align-items: start; }
 @media (min-width: 60rem) { .grid-2 { grid-template-columns: 1.15fr .85fr; } }
 
 .stack { display: flex; flex-direction: column; gap: var(--gap); }
 .stack-lg { display: flex; flex-direction: column; gap: var(--gap); }
+
+/*
+ * A COLUMN MAY BE NARROWER THAN ITS WIDEST UNBREAKABLE LINE.
+ *
+ * A grid or flex item's automatic minimum size is its content's min-content
+ * width, and `white-space: nowrap` has no soft wrap opportunities — so its
+ * min-content width is the WHOLE line. One such line anywhere inside a column
+ * therefore sets a floor under the column, the column sets one under the grid,
+ * and the page scrolls sideways. `overflow: hidden` and `text-overflow:
+ * ellipsis` do not change that: they need a width to ellipsize against, and
+ * the floor is why they never get one.
+ *
+ * MEASURED on the dashboard at 390px: scrollWidth 487, traced by hiding
+ * elements one at a time to `.playbook-tagline` — a one-line, ellipsised
+ * tagline inside a card inside `.grid-2`. `min-width: 0` on the item removes
+ * the floor, the card takes the track's width, and the ellipsis finally has
+ * something to work with.
+ *
+ * It is set on the containers' children rather than on that one tagline
+ * because the next nowrap line somebody adds will be somewhere else.
+ */
+.grid-2 > *, .stack > *, .stack-lg > * { min-width: 0; }
 
 .empty { color: var(--faint); font-style: italic; padding: .5rem 0; }
 
@@ -376,6 +420,38 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
 .stat-value { font-size: 1.6rem; font-weight: 650; letter-spacing: -.02em; line-height: 1.1; }
 .stat-note { font-size: .78rem; color: var(--muted); }
 .stat-pending .stat-value { color: var(--faint); }
+/*
+ * A count that is a finding rather than a fact — refusals in an import.
+ *
+ * The LABEL carries the colour, not the number: a figure in red reads as an
+ * error in the figure itself, where what is being said is "this many rows need
+ * your attention". The number stays in the ordinary ink so it is still the
+ * most legible thing in the tile.
+ */
+.stat-warn .stat-label { color: var(--warn); }
+.stat-warn { border-color: var(--warn); }
+
+/*
+ * A progress bar for work that runs in the background.
+ *
+ * No percentage is drawn inside it: the caller prints the figure beside it in
+ * words, because a bar with text in it is unreadable at the width a phone
+ * gives it. `role="img"` with an aria-label is how the value reaches a screen
+ * reader — a div has no implicit value, and `role="progressbar"` would need
+ * aria-valuenow kept in step by script this app does not run.
+ */
+.bar {
+    height: .5rem; border-radius: 999px; overflow: hidden;
+    background: var(--bg); border: 1px solid var(--line);
+    margin: .6rem 0 .3rem;
+}
+.bar-fill {
+    height: 100%; background: var(--brand);
+    transition: width .3s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+    .bar-fill { transition: none; }
+}
 
 /* -------------------------------------------------------------- Checklist */
 
@@ -517,7 +593,8 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
 
 .field input[type=text], .field input[type=email], .field input[type=password],
 .field input[type=number], .field input[type=date], .field input[type=time],
-.field input[type=tel], .field select, .field textarea {
+.field input[type=tel], .field input[type=url], .field input[type=search],
+.field select, .field textarea {
     width: 100%; padding: .5rem .65rem;
     border: 1px solid var(--field-border); border-radius: var(--radius-sm);
     background: var(--panel); color: var(--ink); font: inherit; font-size: .9rem;
@@ -584,7 +661,17 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
 
 /* ----------------------------------------------------------------- Tables */
 
-.table-wrap { overflow-x: auto; margin: 0 -1.25rem; padding: 0 1.25rem; }
+/*
+ * `position: relative` for the reason spelled out on `.table-scroll` below:
+ * without it a `.sr-only` caption or action label inside a table wider than
+ * the phone escapes this scroll container and drags the whole page sideways.
+ * MEASURED on `/settings/users` at 390px — scrollWidth 424 — AFTER the same
+ * fix had been made to `.table-scroll` and this second wrapper was missed.
+ */
+.table-wrap {
+    overflow-x: auto; position: relative;
+    margin: 0 -1.25rem; padding: 0 1.25rem;
+}
 
 .table { width: 100%; border-collapse: collapse; font-size: .87rem; }
 
@@ -604,6 +691,42 @@ body[data-density="comfortable"] .table td { padding: .8rem .6rem; }
 .td-sub { display: block; font-size: .78rem; color: var(--muted); }
 .td-right { text-align: right; }
 .row-muted td { opacity: .6; }
+
+/*
+ * A cell holding something long and unbreakable — a URL, a token prefix.
+ *
+ * `anywhere` rather than `break-all`: it breaks only when the line genuinely
+ * will not fit, so a URL that does fit is left whole and readable.
+ */
+.cell-wrap { word-break: break-word; overflow-wrap: anywhere; max-width: 22rem; }
+
+/*
+ * A cell of buttons. They wrap on a narrow screen rather than stretching the
+ * table past the viewport, because `.table-scroll` scrolls horizontally and a
+ * row whose actions are off to the right is a row whose actions are invisible.
+ */
+.cell-actions { display: flex; flex-wrap: wrap; gap: .35rem; justify-content: flex-end; }
+
+.card-actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.placeholder-actions { margin: 1rem 0 0; }
+
+/*
+ * One condition in a segment's rule builder.
+ *
+ * A bordered block rather than a run of loose fields: a segment with six
+ * conditions is otherwise eighteen controls in a column with nothing saying
+ * which three belong together. The fields lay out in a row where there is
+ * room and stack on a phone.
+ */
+.segment-rule {
+    border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: .75rem; margin: 0 0 .6rem;
+    display: flex; flex-wrap: wrap; gap: .6rem; align-items: flex-end;
+}
+.segment-rule .field { flex: 1 1 11rem; margin: 0; }
+
+/* The plain-English rendering of a segment's rules, in a table cell. */
+.segment-rules { font-size: .84rem; color: var(--muted); max-width: 28rem; }
 
 .change-list { list-style: none; margin: .4rem 0 0; padding: 0; font-size: .78rem; }
 .change-list li { padding: .1rem 0; }
@@ -758,20 +881,264 @@ ul.checks li:last-child { border-bottom: 0; }
 .error-detail { text-align: left; margin: 1.5rem 0; font-size: .8rem; }
 .error-detail pre {
     background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
-    padding: .75rem; overflow-x: auto; max-height: 20rem;
+    padding: .75rem; overflow-x: auto; position: relative; max-height: 20rem;
 }
 .error-actions { margin-top: 1rem; }
 
 /* ----------------------------------------------------------------- Code */
 
+/*
+ * ONE DEFINITION. There were two, 500 lines apart, differing only in padding
+ * and whether they set a margin — so what a code block actually looked like
+ * was whichever cascaded last, and editing the first one changed nothing.
+ */
 .code-block {
     background: var(--bg); border: 1px solid var(--line);
-    border-radius: var(--radius-sm); padding: .75rem;
-    overflow-x: auto; margin: .5rem 0; font-size: .82rem;
+    border-radius: var(--radius-sm); padding: .8rem;
+    overflow-x: auto; position: relative; margin: .5rem 0; font-size: .82rem;
 }
 .code-inline {
     background: var(--bg); border: 1px solid var(--line);
     padding: .05rem .3rem; border-radius: 3px; font-size: .8em; color: var(--muted);
+}
+
+/* -------------------------------------------------------------- Calendar */
+
+/* Month and week are real tables — a calendar IS tabular data, and a screen
+   reader announces "Saturday 11 July, 3 bookings" from one while it announces
+   nothing useful from a grid of divs. These rules only lay the table out. */
+
+.cal-month, .cal-week { table-layout: fixed; }
+.cal-month th, .cal-week th { text-align: left; font-size: .78rem; }
+
+.cal-cell {
+    vertical-align: top; height: 6.5rem; padding: .35rem;
+    border: 1px solid var(--line);
+}
+.cal-week .cal-cell { height: 18rem; }
+
+.cal-outside { background: var(--panel-soft); }
+.cal-outside .cal-date { color: var(--faint); }
+
+.cal-today { outline: 2px solid var(--brand); outline-offset: -2px; }
+
+.cal-date {
+    display: inline-block; font-size: .8rem; font-weight: 700;
+    color: var(--muted); text-decoration: none; margin-bottom: .2rem;
+}
+.cal-date:hover, .cal-date:focus-visible { color: var(--brand-dark); }
+
+.cal-chip {
+    display: block; font-size: .74rem; line-height: 1.25;
+    padding: .18rem .35rem; margin-bottom: .18rem; border-radius: var(--radius-sm);
+    background: var(--brand-light); color: var(--brand-dark);
+    text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cal-chip:hover, .cal-chip:focus-visible { background: var(--brand); color: var(--on-accent); }
+
+/* The status colours double up with the badge palette on purpose: a venue
+   learns one vocabulary, not two. */
+.cal-inquiry, .cal-held           { background: var(--warn-bg); color: var(--warn); }
+.cal-confirmed, .cal-deposit_paid { background: var(--ok-bg);   color: var(--ok); }
+.cal-paid, .cal-completed         { background: var(--ok-bg);   color: var(--ok); }
+.cal-cancelled, .cal-no_show      { background: var(--bad-bg);  color: var(--bad); }
+
+/* Struck through AND in the failure colour: colour alone is not a signal, and
+   a cancelled party must not read as a live one to somebody who cannot tell
+   red from green. */
+.cal-off del { text-decoration-thickness: 1px; }
+
+.cal-more { display: block; font-size: .72rem; color: var(--muted); padding: 0 .35rem; }
+
+.cal-lanes th[scope="row"] { width: 14rem; vertical-align: top; }
+.cal-lanes .cal-chip { display: inline-block; margin-right: .3rem; white-space: normal; }
+
+/* ------------------------------------------------------------------- Inbox */
+
+.inbox-tabs { margin-bottom: var(--gap); }
+
+/* An unread row has to be findable at a glance down a list of forty, and
+   weight is the signal rather than colour: the queue is read by whoever is on
+   shift, and a tint alone fails for anyone who cannot distinguish it. The left
+   edge carries it too, so the cue survives a greyscale print. */
+.inbox-unread > th,
+.inbox-unread > td { font-weight: 600; }
+.inbox-unread > th:first-child { box-shadow: inset 3px 0 0 0 var(--brand); }
+
+.inbox-preview { color: var(--muted); max-width: 32rem; }
+
+.inbox-thread { list-style: none; display: flex; flex-direction: column; gap: .75rem; }
+
+.inbox-msg {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: .85rem 1rem; box-shadow: var(--shadow);
+    /* Outbound sits to the right of centre, inbound to the left — the shape
+       every messaging app has taught people to read without a legend. */
+    margin-left: 2.5rem;
+}
+.inbox-msg.is-inbound { margin-left: 0; margin-right: 2.5rem; border-left: 3px solid var(--brand); }
+
+/* A note is staff talking to each other, and it must not be mistaken for
+   something the guest can see. Dashed, because a solid tint reads as another
+   kind of message. */
+.inbox-msg.is-note {
+    background: var(--panel-soft); border-style: dashed;
+    border-left: 3px solid var(--warn);
+}
+
+.inbox-msg-meta {
+    display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap;
+    font-size: .82rem; margin-bottom: .35rem;
+}
+
+.inbox-msg-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.inbox-list { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
+.inbox-list > li { display: flex; flex-direction: column; gap: .1rem; font-size: .9rem; }
+
+/* The canned replies are reference text, so they scroll rather than pushing
+   the composer off the screen. */
+.inbox-canned { max-height: 14rem; overflow-y: auto; font-size: .85rem; }
+
+@media (max-width: 38rem) {
+    .inbox-msg { margin-left: 0; }
+    .inbox-msg.is-inbound { margin-right: 0; }
+}
+
+/* ------------------------------------------------------------- Text Club */
+
+/* The honeypot. Positioned off-screen rather than `display: none`, because
+   the simpler bots check for that and skip the field — which is exactly the
+   behaviour this is trying to catch. It is also `aria-hidden` with
+   `tabindex="-1"` in the markup, so a screen reader never announces it and
+   a keyboard user cannot land in it: a labelled field somebody is asked to
+   fill in is a trap for the wrong person. */
+.honeypot {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+/* The disclosure a guest agrees to. Deliberately not small print: this is
+   the wording their consent rests on, and the whole reason the venue may
+   text them. */
+.club-consent {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-sunk);
+    padding: .85rem 1rem;
+    margin-bottom: var(--gap);
+    font-size: .82rem;
+    color: var(--muted);
+}
+
+.club-consent p { margin: 0 0 .5rem; }
+.club-consent p:last-child { margin-bottom: 0; }
+.club-consent strong { color: var(--ink); }
+
+.club-wording {
+    font-style: italic;
+    padding-left: .75rem;
+    border-left: 2px solid var(--line);
+}
+
+/* An offer as it will land on a phone, shown at a phone's width so the line
+   breaks are the real ones. */
+.club-preview {
+    max-width: 22rem;
+    padding: .7rem .85rem;
+    border-radius: 1rem;
+    background: var(--accent-soft, var(--bg-sunk));
+    border: 1px solid var(--line);
+    font-size: .88rem;
+    line-height: 1.45;
+}
+
+.club-month { border-top: 1px solid var(--line); padding: .6rem 0; }
+.club-month:first-of-type { border-top: 0; }
+.club-month > summary { cursor: pointer; font-weight: 600; font-size: .88rem; }
+.club-month[open] > summary { margin-bottom: .75rem; }
+.club-month .field:last-child { margin-bottom: 0; }
+
+.club-calendar { list-style: none; margin: 0; padding: 0; font-size: .85rem; }
+.club-calendar li {
+    display: flex;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: .4rem 0;
+    border-bottom: 1px solid var(--line);
+}
+.club-calendar li:last-child { border-bottom: 0; }
+
+/* --------------------------------------------------------- Public booking */
+
+/* The only `bare` page that needs two columns' worth of room: a package
+   picker, a slot grid and a price breakdown do not fit the 24rem card that
+   sign-in was designed around. Opt-in, so sign-in and the error pages are
+   untouched. */
+.bare-main.is-wide { max-width: 46rem; }
+
+.book-step { margin-bottom: var(--gap-lg); }
+.book-step + .book-step { border-top: 1px solid var(--line); padding-top: var(--gap-lg); }
+
+.book-step-title { font-size: 1rem; margin-bottom: .75rem; }
+
+.book-packages { list-style: none; display: grid; gap: .5rem; }
+
+.book-package > a {
+    display: flex; gap: .75rem; align-items: baseline; justify-content: space-between;
+    padding: .7rem .85rem; border: 1px solid var(--line-strong);
+    border-radius: var(--radius); text-decoration: none; color: var(--ink);
+}
+.book-package > a:hover, .book-package > a:focus-visible { border-color: var(--brand); }
+
+/* The chosen package carries a thick left edge as well as the brand colour:
+   colour alone is not a signal, and this is the answer to "which party" that
+   every figure further down the page depends on. */
+.book-package.is-chosen > a {
+    border-color: var(--brand); border-left-width: 4px;
+    background: var(--brand-light); color: var(--brand-dark);
+}
+
+.book-package-price { font-size: .85rem; color: var(--muted); white-space: nowrap; }
+.book-package-price small { display: block; font-size: .78rem; }
+.book-package.is-chosen .book-package-price { color: var(--brand-dark); }
+
+.book-package-note { font-size: .88rem; color: var(--muted); margin-top: .6rem; }
+
+.book-includes { margin: .6rem 0 0 1.1rem; font-size: .85rem; color: var(--muted); }
+
+.book-day-form .form-actions { margin-top: .25rem; }
+
+.book-avail-note { font-size: .9rem; margin-bottom: .6rem; }
+.book-avail-note.is-refused { color: var(--warn); }
+
+.book-slots {
+    list-style: none; display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .6rem;
+}
+
+.book-slot {
+    display: inline-block; padding: .45rem .7rem; border-radius: var(--radius-sm);
+    border: 1px solid var(--field-border); text-decoration: none;
+    color: var(--ink); font-size: .9rem; min-height: 2.75rem; line-height: 1.8;
+}
+.book-slot:hover, .book-slot:focus-visible { border-color: var(--brand); }
+.book-slot small { display: block; font-size: .75rem; color: var(--muted); line-height: 1.2; }
+
+/* Ticked as well as filled, for the same reason as the package above. */
+.book-slot.is-chosen {
+    background: var(--brand); border-color: var(--brand); color: var(--on-accent);
+    font-weight: 700;
+}
+.book-slot.is-chosen small { color: var(--on-accent); }
+
+.book-quote { margin-bottom: .6rem; }
+
+@media (max-width: 38rem) {
+    .book-package > a { flex-direction: column; gap: .2rem; }
+    .book-package-price { white-space: normal; }
 }
 
 /* ------------------------------------------------------------- Responsive */
@@ -796,6 +1163,419 @@ ul.checks li:last-child { border-bottom: 0; }
     .permission-row select { grid-column: 2; justify-self: start; }
     .timeline-when { flex-basis: 5rem; }
 }
+
+/* ------------------------------------------------------- Automation steps */
+
+/*
+ * The step list is the automation builder's main surface: a numbered sequence
+ * with its controls beside each step and the edit form folded away under it.
+ * Numbered because the ORDER is the thing being edited, and a list that only
+ * implies its order makes "move this up" a guess.
+ */
+.step-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+
+.step-item {
+    border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: .75rem .9rem; background: var(--surface-2, transparent);
+}
+.step-item.is-off { opacity: .6; }
+
+.step-head { display: flex; gap: .75rem; align-items: flex-start; }
+
+.step-number {
+    flex: 0 0 auto; width: 1.6rem; height: 1.6rem; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--accent-soft, var(--line)); color: var(--text);
+    font-size: .8rem; font-weight: 700;
+}
+
+.step-text { display: grid; gap: .15rem; min-width: 0; }
+
+.step-actions {
+    display: flex; gap: .35rem; flex-wrap: wrap; align-items: center;
+    margin: .6rem 0 0; padding-left: 2.35rem;
+}
+.step-actions form { margin: 0; }
+
+.step-edit { margin: .5rem 0 0; padding-left: 2.35rem; }
+.step-edit > summary {
+    cursor: pointer; font-size: .82rem; color: var(--muted);
+    padding: .2rem 0;
+}
+.step-edit > summary:hover { color: var(--text); }
+
+.stacked-form { display: grid; gap: .25rem; margin: .75rem 0 0; }
+.stacked-form .field { margin: 0 0 .75rem; }
+
+.form-inline { display: flex; gap: .75rem; align-items: flex-start; flex-wrap: wrap; }
+.form-inline .field { margin: 0; }
+
+.fieldset {
+    border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: .75rem 1rem; margin: 0 0 .9rem;
+}
+.fieldset legend {
+    padding: 0 .4rem; font-size: .78rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .05em; color: var(--faint);
+}
+
+.list-plain { margin: .35rem 0 0; padding-left: 1.1rem; display: grid; gap: .3rem; }
+
+/*
+ * An automation's dry-run result.
+ *
+ * Capped and scrollable: a preview of a long sequence is twenty lines, and
+ * without this the button that produced it is pushed off the screen, so the
+ * obvious next move — change something and run it again — is the one that
+ * cannot be seen.
+ */
+.preview-result { margin-top: .75rem; max-height: 22rem; overflow-y: auto; }
+
+.rule { border: 0; border-top: 1px solid var(--line); margin: 1rem 0; }
+
+@media (max-width: 38rem) {
+    /* The indent under the step number costs more than it gives on a phone. */
+    .step-actions, .step-edit { padding-left: 0; }
+}
+
+/* ------------------------------------------------------------- Reputation */
+
+/* A definition list written as bare dt/dd pairs rather than with the wrapper
+   div `.definition-list > div` expects. Both spellings read the same, so both
+   get the same separators instead of one of them quietly losing them. */
+.definition-list > dd { padding-bottom: .6rem; border-bottom: 1px solid var(--line); margin-bottom: .6rem; }
+.definition-list > dd:last-child { border-bottom: 0; margin-bottom: 0; }
+
+/* Stars. The off state is a real element rather than a lighter colour on the
+   same glyphs, so the rating is legible at a glance and still readable by a
+   screen reader through the aria-label on the wrapper. --faint clears 4.5:1,
+   which matters because these ARE the content on the review wall. */
+.rating { color: #b8860b; letter-spacing: .05em; white-space: nowrap; }
+.rating-off { color: var(--line-strong); }
+.rating-lg { font-size: 1.3rem; }
+
+.is-overdue td { background: var(--bad-bg); }
+
+/* Chips: a filter bar of links, one of them current. */
+.chip-bar { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: var(--gap); }
+
+.chip {
+    display: inline-flex; align-items: center; gap: .35rem;
+    padding: .3rem .7rem; border-radius: 999px;
+    border: 1px solid var(--field-border); background: var(--panel);
+    font-size: .82rem; font-weight: 600; color: var(--ink-soft);
+}
+.chip:hover { background: var(--bg); text-decoration: none; color: var(--ink); }
+.chip.is-on { background: var(--brand); border-color: var(--brand); color: var(--on-accent); }
+.chip-count { font-size: .74rem; opacity: .75; font-variant-numeric: tabular-nums; }
+
+/* A review, in the inbox and on the wall. */
+.review-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .9rem; }
+
+.review-item {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: .85rem 1rem; background: var(--panel-soft);
+}
+.review-item > p { margin: .4rem 0 .6rem; }
+
+.review-meta { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; font-size: .86rem; }
+
+.review-reply {
+    margin: .5rem 0 0; padding: .6rem .85rem;
+    border-left: 3px solid var(--brand); background: var(--panel);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.review-reply p { margin: 0 0 .25rem; font-size: .88rem; }
+.review-reply footer { font-size: .78rem; }
+
+.review-actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.review-actions form { margin: 0; }
+
+.review-write { margin-top: .6rem; }
+.review-write > summary { cursor: pointer; font-size: .85rem; font-weight: 600; color: var(--brand); }
+
+/* The NPS chart: one stacked column per day or week. No library, no canvas —
+   three divs whose heights are percentages of the day's answers. */
+.nps-chart {
+    display: flex; align-items: flex-end; gap: .25rem;
+    overflow-x: auto; position: relative; padding: .5rem 0 0;
+}
+
+.nps-col { display: grid; gap: .2rem; justify-items: center; min-width: 2.1rem; }
+
+.nps-bar {
+    display: flex; flex-direction: column-reverse; justify-content: flex-start;
+    width: 1.5rem; height: 7rem;
+    background: var(--bg); border-radius: var(--radius-sm); overflow: hidden;
+}
+
+.nps-seg { display: block; width: 100%; }
+.nps-promoter  { background: var(--ok); }
+.nps-passive   { background: var(--warn); }
+.nps-detractor { background: var(--bad); }
+
+.nps-score { font-size: .8rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.nps-label { font-size: .68rem; color: var(--faint); white-space: nowrap; }
+
+/* One settings block per survey. */
+.setting-block { padding: .9rem 0; border-bottom: 1px solid var(--line); }
+.setting-block:last-child { border-bottom: 0; }
+.setting-block h3 { margin: 0 0 .2rem; font-size: 1rem; }
+
+.inline-weight { display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem; color: var(--muted); }
+.inline-weight input { width: 4.5rem; }
+
+/* ------------------------------------------- The guest's feedback page */
+
+/* Tap targets first: this is answered on a phone, one-handed, by somebody
+   who is doing something else. Every button clears 44px in both directions
+   even at the 0-10 scale's eleven columns. */
+.survey-form { margin: 1.25rem 0 0; }
+.survey-scale { border: 0; margin: 0; padding: 0; }
+
+.survey-buttons {
+    display: grid; gap: .4rem;
+    grid-template-columns: repeat(auto-fit, minmax(2.75rem, 1fr));
+}
+
+/* Six across on a phone, so the eleven answers of an NPS scale fall as 0-5
+   and 6-10 rather than 0-4, 5-9 and a lone 10 on a third row — MEASURED at
+   390px, where auto-fit chose five and the "Extremely likely" label ended up
+   over empty space. */
+@media (max-width: 30rem) {
+    .survey-buttons { grid-template-columns: repeat(6, 1fr); }
+    .survey-btn { padding: .5rem .1rem; }
+}
+
+.survey-btn {
+    min-height: 2.9rem; padding: .5rem .2rem;
+    font-size: 1rem; font-weight: 700;
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--field-border); border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+.survey-btn:hover { background: var(--brand-light); border-color: var(--brand); }
+.survey-btn:focus-visible { outline: 3px solid var(--brand-ring); outline-offset: 2px; }
+
+.survey-buttons.is-stars { grid-template-columns: 1fr; }
+.survey-buttons.is-stars .survey-btn { color: #b8860b; font-size: 1.15rem; letter-spacing: .1em; }
+
+.survey-ends {
+    display: flex; justify-content: space-between; gap: 1rem;
+    margin-top: .45rem; font-size: .76rem; color: var(--muted);
+}
+
+.survey-cta { margin: 1.25rem 0; }
+.btn-lg { padding: .7rem 1.2rem; font-size: 1rem; }
+.survey-comment { margin-top: 1.25rem; }
+
+/* ------------------------------------------------- The public review wall */
+
+.review-wall-head { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; font-size: .9rem; }
+
+.review-wall-list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: 1rem; }
+@media (min-width: 48rem) { .review-wall-list { grid-template-columns: 1fr 1fr; } }
+
+.review-wall-item {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 1rem; background: var(--panel);
+}
+.review-wall-item blockquote { margin: .5rem 0; }
+.review-wall-item blockquote p { margin: 0; }
+.review-wall-item footer { font-size: .82rem; display: flex; flex-wrap: wrap; gap: .4rem; }
+
+/* The embed layout: transparent, so the widget takes the colour of the page
+   it is dropped into rather than painting a white box on a dark site. */
+body.embed { background: transparent; padding: 0; }
+body.embed .review-wall { padding: .25rem; }
+
+/* ------------------------------------------------------------- API tokens */
+
+/* The one-shot reveal. Monospaced and selectable in one gesture: a token is
+   64 hex characters and the only thing anybody does with it is copy it. */
+/*
+ * A credential shown once, to be read and copied by eye.
+ *
+ * `.field input.token-reveal`, NOT `.token-reveal` — which is what this was,
+ * and it never applied. `.field input[type=text]` sets `font: inherit`, a
+ * shorthand that resets family along with everything else, and it outranks a
+ * single class. So every API token and every signing secret this application
+ * has ever shown was rendered in the proportional UI font, where `l`, `1` and
+ * `I` are the same picture and so are `0` and `O`. For 64 hex characters that
+ * somebody is checking against another screen, that is the one thing the
+ * styling had to get right. MEASURED in a browser, not read off the file.
+ */
+.field input.token-reveal {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .85rem; letter-spacing: .02em;
+}
+
+.ability-groups {
+    display: grid; gap: .9rem; margin: .5rem 0 0;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+}
+.ability-group h3 {
+    margin: 0 0 .3rem; font-size: .78rem; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--muted);
+}
+.ability-group .check { display: flex; gap: .4rem; align-items: flex-start; font-size: .88rem; }
+
+.code-block code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+/* ---------------------------------------------------------------- Reports */
+
+/* The picker. A report is listed by the QUESTION it answers, with the name
+   above it in the role of a label — "Lead time" means nothing to a new
+   manager, "How far ahead do people book?" means something to everybody. */
+.report-list { list-style: none; margin: 0; padding: 0; }
+
+.report-list > li {
+    display: flex; align-items: center; gap: .75rem;
+    padding: .55rem 0; border-bottom: 1px solid var(--line);
+}
+.report-list > li:last-child { border-bottom: 0; }
+
+.report-link { flex: 1 1 auto; display: grid; gap: .1rem; text-decoration: none; }
+.report-link:hover .report-name { text-decoration: underline; }
+.report-name { font-weight: 600; color: var(--text); }
+.report-question { font-size: .85rem; color: var(--muted); }
+
+.saved-reports { list-style: none; margin: 0; padding: 0; }
+.saved-reports > li {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+    padding: .45rem 0; border-bottom: 1px solid var(--line);
+}
+.saved-reports > li:last-child { border-bottom: 0; }
+.saved-reports form { margin: 0 0 0 auto; }
+.saved-report-dead { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+
+/* The period picker. A row on a desktop, a stack on a phone; no inline
+   handler anywhere, because the CSP forbids inline script and a select that
+   submits on change cannot be used with a keyboard. */
+.report-window {
+    display: flex; flex-wrap: wrap; gap: .75rem; align-items: flex-end;
+    padding: .75rem 0; border-bottom: 1px solid var(--line); margin-bottom: .75rem;
+}
+.report-window .field { margin: 0; flex: 0 1 11rem; }
+.report-window .field-actions { flex: 1 1 14rem; }
+.report-window .field-hint { margin: .25rem 0 0; }
+
+.report-period { display: flex; align-items: center; gap: .4rem; font-size: .88rem; color: var(--muted); }
+.report-period svg { flex: 0 0 auto; }
+
+/* The trend: one bar per day, same approach as the NPS chart — a div whose
+   height is a percentage. No library, no canvas, no third-party request.
+
+   The columns GROW to fill the card. Twelve bars at a fixed width left a
+   chart hugging the left third of a wide card with two thirds of white space
+   beside it, which reads as a rendering fault rather than as a short month. */
+.report-chart {
+    display: flex; align-items: flex-end; gap: .2rem;
+    overflow-x: auto; position: relative; padding: .5rem 0 0;
+}
+
+/* The baseline. Without a track behind each bar, this is what a day with
+   almost nothing on it sits on. */
+.report-chart .report-bar { border-bottom: 1px solid var(--line); }
+
+/* The COLUMN grows to fill the card; the BAR inside it is capped and
+   centred. Capping the column instead left twelve bars occupying the left
+   half of a wide card, which reads as a chart that failed to draw rather
+   than as a month with twelve trading days in it. */
+.report-col {
+    display: grid; gap: .2rem; justify-items: center;
+    flex: 1 1 0; min-width: 1.5rem;
+}
+
+/* NO TRACK BEHIND THE BAR. A filled column above each bar reads as a target
+   the day fell short of, which is a claim this chart is not making and the
+   opposite of the ACTUALS ONLY rule; at ninety bars it also turned the panel
+   into stripes. The baseline under the chart is what gives a near-zero day
+   something to sit on. */
+.report-bar {
+    display: flex; flex-direction: column-reverse;
+    width: 100%; max-width: 2.2rem; height: 7rem;
+    background: transparent;
+}
+.report-fill {
+    display: block; width: 100%; background: var(--brand);
+    border-radius: 2px 2px 0 0;
+}
+.report-bar-label {
+    font-size: .66rem; color: var(--faint); white-space: nowrap;
+    min-height: 1em;
+}
+
+/* Figures right-aligned and tabular so a column of money lines up on the
+   decimal point, which is the only way a column of money can be scanned. */
+.table-report .num-col { text-align: right; }
+.table-report .num { font-variant-numeric: tabular-nums; }
+.table-report tfoot th,
+.table-report tfoot td { font-weight: 700; border-top: 2px solid var(--line); }
+
+/* A wide table scrolls inside its card rather than pushing the page sideways.
+   The fade on the right edge is the only thing that says so on a phone, where
+   there is no scrollbar until you touch it. */
+.table-scroll {
+    overflow-x: auto;
+    /*
+     * A CONTAINING BLOCK, and it is load-bearing.
+     *
+     * `.sr-only` is `position: absolute`, and a `<caption class="sr-only">`
+     * or an `<span class="sr-only">Actions</span>` inside a table that is
+     * wider than the phone is laid out at its static position — out past the
+     * right edge. Without a positioned ancestor here, the nearest one is the
+     * page, so that 1px span joins the PAGE's scrollable overflow and the
+     * whole layout scrolls sideways: MEASURED at 390px, scrollWidth 482
+     * against a 390 viewport, with every row button pushed off screen at
+     * x=623 and up. The table itself was contained correctly the whole time;
+     * it was the invisible label that escaped.
+     */
+    position: relative;
+    -webkit-overflow-scrolling: touch;
+    background:
+        linear-gradient(to right, var(--panel) 30%, transparent) left / 2rem 100% no-repeat,
+        linear-gradient(to left, var(--panel) 30%, transparent) right / 2rem 100% no-repeat,
+        radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, .12), transparent) left / .6rem 100% no-repeat,
+        radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, .12), transparent) right / .6rem 100% no-repeat;
+    background-attachment: local, local, scroll, scroll;
+}
+
+.delta-up   { color: var(--ok); }
+.delta-down { color: var(--bad); }
+.delta-flat { color: var(--muted); }
+
+@media (max-width: 40rem) {
+    .report-window .field,
+    .report-window .field-actions { flex: 1 1 100%; }
+
+    /* MEASURED at 390px: "$26,326.64" at the full stat size overflowed its
+       own card. Money is the longest thing these tiles ever hold. */
+    .report-page .stat-value,
+    .stat-row .stat-value { font-size: 1.15rem; overflow-wrap: anywhere; }
+
+    .report-chart { gap: .1rem; }
+    .report-col { min-width: .9rem; }
+}
+
+/* The ninety-day strip on the picker. A sparkline of divs, same approach as
+   the NPS chart — no library, no canvas, no third-party request. */
+.pulse-row {
+    display: grid; gap: .75rem;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
+.pulse { display: grid; gap: .15rem; }
+.pulse-label { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.pulse-total { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+
+.pulse-spark {
+    display: flex; align-items: flex-end; gap: 1px;
+    height: 2.6rem; margin: .25rem 0;
+}
+.pulse-bar { flex: 1 1 0; min-width: 1px; background: var(--brand); border-radius: 1px; }
+
+.pulse-note { font-size: .72rem; color: var(--faint); }
 
 /* ------------------------------------------------------------------ Print */
 

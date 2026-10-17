@@ -8,6 +8,7 @@ use App\Core\Acl;
 use App\Core\Audit;
 use App\Core\Auth;
 use App\Core\DB;
+use App\Core\Event;
 use App\Core\Request;
 use App\Core\Response;
 
@@ -328,6 +329,27 @@ final class ContactController extends Controller
 
         Audit::record('contact.created', 'contacts', $id, null, $row);
 
+        /*
+         * FIRED HERE TOO, and it was not — which is the whole point of writing
+         * it down.
+         *
+         * `contact.created` was fired from the five places a guest arrives on
+         * their own (a form, the public booking page, an inbound text, an
+         * inbound email, the API) and NOT from the one place a member of staff
+         * types one in, which is the commonest way a contact is created at a
+         * front desk. An audit row is not an event: it records what happened,
+         * it does not tell anything.
+         *
+         * So a venue's "welcome a new guest" automation ran for everybody
+         * except the people the desk added, and a webhook subscription to
+         * `contact.*` never heard about them either. Nothing failed; the
+         * sequence simply never started, which is the hardest kind of bug to
+         * notice from the outside.
+         *
+         * `source` says which door they came in by, matching the other five.
+         */
+        Event::fire('contact.created', ['contact_id' => $id, 'source' => 'staff']);
+
         return $this->success($request, 'Contact saved.', '/contacts/' . $id);
     }
 
@@ -399,6 +421,29 @@ final class ContactController extends Controller
 
             Audit::record('contact.updated', 'contacts', $id, $contact, $row);
         });
+
+        /*
+         * Fired after the commit, and the lifecycle move separately.
+         *
+         * "A guest becomes a customer" is the moment a venue builds its
+         * onboarding on, and it is not the same moment as "somebody corrected
+         * a phone number" — an automation on `contact.updated` would run for
+         * both. The payload names which columns moved rather than carrying
+         * their values: this event is fired on every edit, and the values
+         * include a phone number and an email address.
+         */
+        Event::fire('contact.updated', ['contact_id' => $id, 'changed' => array_keys($row)]);
+
+        $wasStage = (string) ($contact['lifecycle_stage'] ?? '');
+        $nowStage = (string) ($row['lifecycle_stage'] ?? $wasStage);
+
+        if ($nowStage !== $wasStage) {
+            Event::fire('contact.lifecycle_changed', [
+                'contact_id' => $id,
+                'from'       => $wasStage,
+                'to'         => $nowStage,
+            ]);
+        }
 
         return $this->success($request, 'Contact updated.', '/contacts/' . $id);
     }
@@ -590,6 +635,25 @@ final class ContactController extends Controller
             );
         });
 
+        /*
+         * Announced as well as audited.
+         *
+         * This had the audit row and no event, so a withdrawal recorded at the
+         * desk — "take me off the texts", said at the counter — reached the
+         * consent log and nothing else. The sequence they were half way
+         * through carried on, because the only thing that could have stopped
+         * it is an automation on `contact.consent_revoked`, and nothing fired
+         * it anywhere in the application.
+         */
+        Event::fire(
+            $granted ? 'contact.consent_granted' : 'contact.consent_revoked',
+            [
+                'contact_id' => $id,
+                'channel'    => $channel,
+                'source'     => (string) $data['source'],
+            ]
+        );
+
         return $this->success(
             $request,
             $granted
@@ -670,6 +734,24 @@ final class ContactController extends Controller
                 ['do_not_contact' => $blocking ? 1 : 0, 'source' => $data['source']]
             );
         });
+
+        if ($blocking) {
+            // Do-not-contact is broader than a single channel's withdrawal,
+            // but it withdraws both, so it announces one revocation per
+            // channel that was actually held — the same shape as the consent
+            // log above, so an automation that removes somebody from a
+            // sequence runs for the channel it is about.
+            foreach (self::CHANNELS as $channel) {
+                if ((int) $contact[$channel . '_consent'] === 1) {
+                    Event::fire('contact.consent_revoked', [
+                        'contact_id' => $id,
+                        'channel'    => $channel,
+                        'source'     => (string) $data['source'],
+                        'reason'     => 'do_not_contact',
+                    ]);
+                }
+            }
+        }
 
         return $this->success(
             $request,

@@ -91,6 +91,7 @@ $stageLabels = [
     <?php else: ?>
         <div class="table-wrap">
             <table class="table">
+                <caption class="sr-only">Contacts</caption>
                 <thead>
                 <tr>
                     <th scope="col">Name</th>
