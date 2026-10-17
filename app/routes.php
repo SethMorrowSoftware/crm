@@ -221,6 +221,10 @@ $router->group('/settings/backups', ['auth', 'can:backup_manage'], function ($ro
     $router->get('', ['BackupController', 'index'], [], 'backups');
     $router->post('', ['BackupController', 'create'], ['csrf', 'throttle:6,10']);
     $router->post('/settings', ['BackupController', 'saveSettings'], ['csrf']);
+
+    // Removing the installer's example guests. Throttled like the backup
+    // itself: it is a bulk delete, and nothing legitimate needs it twice.
+    $router->post('/demo-data', ['BackupController', 'removeDemoData'], ['csrf', 'throttle:6,10']);
     $router->get('/export', ['BackupController', 'export'], ['throttle:20,10'], 'backups.export');
 
     // The filename pattern matches what Backup::create() writes, and
@@ -761,7 +765,6 @@ $router->group('/reputation', ['auth', 'can:view_reputation'], function ($router
     $router->post('/settings', ['ReputationController', 'saveSettings'], ['csrf', 'can:settings']);
 });
 
-$router->get('/marketing', ['PlaceholderController', 'marketing'], ['auth', 'can:view_marketing'], 'marketing');
 // ---------------------------------------------------------------------------
 // Memberships and season passes
 //

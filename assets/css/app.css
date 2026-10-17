@@ -708,7 +708,6 @@ body[data-density="comfortable"] .table td { padding: .8rem .6rem; }
 .cell-actions { display: flex; flex-wrap: wrap; gap: .35rem; justify-content: flex-end; }
 
 .card-actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
-.placeholder-actions { margin: 1rem 0 0; }
 
 /*
  * One condition in a segment's rule builder.
@@ -834,24 +833,13 @@ ul.checks li:last-child { border-bottom: 0; }
 .settings-body span { font-size: .8rem; color: var(--muted); }
 .settings-tile > .icon { color: var(--faint); flex: 0 0 auto; }
 
-/* -------------------------------------------------------------- Placeholder */
-
-.card-wide { max-width: 44rem; }
-
-.placeholder { text-align: center; padding: 1.5rem 0; }
-.placeholder-icon {
-    display: inline-grid; place-items: center;
-    width: 4rem; height: 4rem; border-radius: var(--radius);
-    background: var(--brand-light); color: var(--brand); margin-bottom: 1rem;
-}
-.placeholder h2 { font-size: 1.2rem; margin-bottom: .25rem; }
-.placeholder-phase {
-    display: inline-block; padding: .15rem .6rem; border-radius: 999px;
-    background: var(--bg); border: 1px solid var(--line);
-    font-size: .76rem; font-weight: 600; color: var(--muted); margin-bottom: 1.25rem;
-}
-.placeholder-lede { color: var(--muted); font-size: .9rem; margin-bottom: 1rem; }
-
+/*
+ * A checklist of features or facts, used on a contact's record. It outlived
+ * the "arrives in Phase N" placeholder page it was written for: every module
+ * that page advertised has shipped, so the page, its route and its controller
+ * are gone rather than left telling a reader that Campaigns is still coming
+ * while Campaigns sits in the nav beside it.
+ */
 .feature-list {
     list-style: none; margin: 0 auto 1.25rem; padding: 0;
     max-width: 30rem; text-align: left;
@@ -861,14 +849,6 @@ ul.checks li:last-child { border-bottom: 0; }
     padding: .35rem 0; font-size: .87rem;
 }
 .feature-list .icon { color: var(--ok); flex: 0 0 auto; margin-top: .15rem; }
-
-.placeholder-note {
-    display: flex; gap: .5rem; align-items: flex-start;
-    max-width: 30rem; margin: 0 auto 1.25rem; padding: .65rem .85rem;
-    background: var(--info-bg); color: var(--info);
-    border-radius: var(--radius-sm); font-size: .82rem; text-align: left;
-}
-.placeholder-note .icon { flex: 0 0 auto; margin-top: .1rem; }
 
 /* --------------------------------------------------------------- Error page */
 

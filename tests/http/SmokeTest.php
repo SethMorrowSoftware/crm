@@ -214,7 +214,10 @@ Harness::test('every page an owner can reach renders', function () use ($owner):
         '/inbox'                                => 'Inbox',
         '/deals'                                => 'pipeline',
         '/bookings'                             => 'Bookings',
-        '/marketing'                            => 'Marketing',
+        '/campaigns'                            => 'Campaigns',
+        '/segments'                             => 'Segments',
+        '/text-club'                            => 'Text Club',
+        '/forms'                                => 'Forms',
         '/reputation'                           => 'Reputation',
         '/memberships'                          => 'Memberships',
         '/tasks'                                => 'Tasks',
@@ -231,6 +234,40 @@ Harness::test('every page an owner can reach renders', function () use ($owner):
         Assert::notContains('Fatal error', $response['body'], $path);
         Assert::notContains('Warning:', $response['body'], $path);
         Assert::notContains('Undefined ', $response['body'], $path);
+    }
+});
+
+Harness::test('EVERY SIDEBAR LINK GOES SOMEWHERE REAL', function () use ($owner): void {
+    // The page map above is hand-written, so it only covers what somebody
+    // remembered to add. This reads the nav itself, which is what a user
+    // actually clicks, and holds every item in it to rendering for an owner.
+    //
+    // Two failures it is here to catch, and both have happened in a sibling
+    // project: a nav item whose route was never registered (a 404 on a link
+    // the sidebar offers), and one still pointing at an "arrives in Phase N"
+    // placeholder for a module that has since shipped — which is worse than
+    // the 404, because it reads as working and tells the reader a feature is
+    // still coming while it sits in the nav directly below.
+    $layout = (string) file_get_contents(CC_ROOT . '/app/Views/layouts/app.php');
+
+    preg_match_all("/\['([^']+)', '(\/[^']*)', '[a-z_]+', '[a-z-]+'\]/", $layout, $nav, PREG_SET_ORDER);
+
+    Assert::greaterThan(10, count($nav), 'the nav should have parsed');
+
+    foreach ($nav as [, $label, $href]) {
+        $response = $owner->get($href);
+
+        Assert::same(200, $response['status'], '"' . $label . '" links to ' . $href);
+
+        // A placeholder answers 200, so the status alone does not settle it.
+        Assert::notContains(
+            'Arrives in Phase',
+            $response['body'],
+            '"' . $label . '" still shows a coming-soon placeholder'
+        );
+
+        Assert::notContains('Fatal error', $response['body'], $href);
+        Assert::notContains('Undefined ', $response['body'], $href);
     }
 });
 
@@ -427,7 +464,7 @@ Harness::test('front desk can reach bookings but not settings', function () use 
 
     $allowed = ['/', '/bookings', '/contacts', '/inbox', '/account'];
     $denied  = ['/settings', '/settings/users', '/settings/roles', '/settings/audit',
-                '/settings/health', '/reports', '/marketing', '/playbooks', '/memberships'];
+                '/settings/health', '/reports', '/campaigns', '/playbooks', '/memberships'];
 
     foreach ($allowed as $path) {
         Assert::same(200, $desk->get($path)['status'], $path . ' should be allowed');
@@ -499,7 +536,7 @@ Harness::test('an owner can create a user, who can then sign in', function () us
     Assert::same(200, $newUser->get('/')['status']);
 
     // Marketing can reach campaigns but not users.
-    Assert::same(200, $newUser->get('/marketing')['status']);
+    Assert::same(200, $newUser->get('/campaigns')['status']);
     Assert::same(403, $newUser->get('/settings/users')['status']);
 });
 
