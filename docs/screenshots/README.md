@@ -11,11 +11,12 @@ before reading them:
   against these images and no test will fail if they change — they document
   what the application looks like, and that is all.
 - **Nothing real appears in any of them.** `tools/screenshot-guard.php` runs
-  first and refuses the capture unless every contact carries a mark a real
-  person's record could not: an email on a domain the standards reserve for
-  fiction, a phone in the reserved 555-01xx block, or the installer seed's own
-  marker. A missing email is not such a mark — that is the ordinary shape of a
-  guest who arrived by text. It also refuses a user account on a real email
+  first and refuses the capture unless every detail of every contact is one a
+  real person's record could not carry: an email on a domain the standards
+  reserve for fiction and a phone in the reserved 555-0100 to 555-0199 block.
+  A contact with neither is refused, since that is the ordinary shape of a
+  guest who arrived by text, and so is any booking or Text Club number that is
+  not plainly fictional. It also refuses a user account on a real email
   domain (the user list is one of these pictures, and the signed-in name is in
   the sidebar of all of them) and a real SMTP host or from-address (the email
   settings page shows them in full). The check is on the data, not on a flag

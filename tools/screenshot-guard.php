@@ -24,12 +24,13 @@ declare(strict_types=1);
  * reserved domains" over a folder of their names. A missing email is the
  * normal shape of a real guest here; it can never be what clears one.
  *
- * So every row must carry a mark that a real person's record could not: an
- * email on a domain the standards reserve for fiction (RFC 2606's
+ * So every detail a row carries must be one a real person's record could
+ * not: an email on a domain the standards reserve for fiction (RFC 2606's
  * example.com/.net/.org/.edu, RFC 2606's .test/.invalid/.example, RFC 6761's
- * .localhost), a phone in the NANP's reserved 555-01xx block, or the
- * installer seed's own `source = 'demo'` marker. Anything else is treated as
- * a real person, including a row carrying nothing but a name.
+ * .localhost) and a phone in the NANP's reserved 555-0100 to 555-0199 block.
+ * Where a row came from proves nothing, because an example guest can be
+ * edited into a real one. Anything else is treated as a real person,
+ * including a row carrying nothing but a name.
  *
  * AND IT IS NOT ONLY THE GUESTS. The capture photographs the whole
  * application, so it also checks:
@@ -74,8 +75,13 @@ $explain = in_array('--explain', $argv, true);
 const RESERVED = ['example.com', 'example.net', 'example.org', 'example.edu',
                   '.test', '.invalid', '.localhost', '.example'];
 
-/** The NANP block set aside for fiction. */
-const FAKE_PHONE = ['%55501%', '%555-01%', '%555 01%'];
+/**
+ * The NANP block set aside for fiction, as a whole normalized number:
+ * +1, a real-shaped area code, then 555-0100 to 555-0199. Matched against
+ * `phone_normalized` from end to end, so a foreign or malformed number that
+ * merely contains the digits 55501 is not mistaken for one.
+ */
+const FAKE_PHONE = '^\\+1[2-9][0-9]{2}55501[0-9]{2}$';
 
 /** @var list<string> every reason this install must not be photographed */
 $refusals = [];
@@ -130,24 +136,18 @@ try {
  */
 if ($total > 0) {
     [$emailClause, $params] = reserved_email_clause('email', 'd');
+    $params['fp'] = FAKE_PHONE;
 
-    $phoneConditions = [];
-
-    foreach (FAKE_PHONE as $i => $pattern) {
-        $phoneConditions[] = "COALESCE(phone, '') LIKE :p" . $i;
-        $params['p' . $i]  = $pattern;
-    }
-
-    // Positive evidence, in the three shapes this application can carry it.
-    // COALESCE on every column, for the reason on `reserved_email_clause()`.
-    // The seed's own mark is the list of ids it recorded, not `source`:
-    // `source` is a column any contact form or API call can write.
-    $seedIds = Settings::get('demo.seed_contact_ids', []);
-    $seedIds = is_array($seedIds) ? array_values(array_filter(array_map('intval', $seedIds))) : [];
-
-    $fictional = $emailClause
-        . ' OR (' . implode(' OR ', $phoneConditions) . ')'
-        . ($seedIds === [] ? '' : ' OR id IN (' . implode(',', $seedIds) . ')');
+    // Positive evidence from what the row says now, not from where it came
+    // from: an example guest edited into a real one keeps its id, so the
+    // seed's list of ids proves nothing about the details on screen. Every
+    // identifier the row carries must be fictional, and it must carry at
+    // least one. COALESCE on every column, for the reason on
+    // `reserved_email_clause()`.
+    $fictional = "(COALESCE(email, '') = '' OR " . $emailClause . ')'
+        . " AND (COALESCE(phone, '') = '' AND COALESCE(phone_normalized, '') = ''"
+        . "      OR COALESCE(phone_normalized, '') REGEXP :fp)"
+        . " AND (COALESCE(email, '') <> '' OR COALESCE(phone_normalized, '') <> '')";
 
     $real = (int) DB::value(
         'SELECT COUNT(*) FROM {contacts} WHERE NOT (' . $fictional . ')',
@@ -156,9 +156,9 @@ if ($total > 0) {
 
     if ($real > 0) {
         $refusals[] = number_format($real) . ' of ' . number_format($total)
-            . ' contacts carry no mark of being fictional — no reserved email'
-            . ' domain, no 555-01xx phone, and not the installer seed\'s own'
-            . ' marker. They are treated as real people.';
+            . ' contacts carry a detail that is not fictional — an email off the'
+            . ' reserved domains, a phone outside 555-0100 to 555-0199, or'
+            . ' neither at all. They are treated as real people.';
     }
 
     if ($explain) {
@@ -190,6 +190,23 @@ if ($total > 0 || DB::exists('SELECT id FROM {bookings}')) {
             . ' bookings are neither the seed\'s (DEMO-) nor attached to a fictional guest.'
             . ' The bookings screen shows their guest of honour and allergies.';
     }
+}
+
+// ------------------------------------------------------------- the Text Club
+//
+// A subscriber outlives the guest it came from (`contact_id` is SET NULL on
+// delete), and `/text-club` renders its number. So each row's own number has
+// to be fictional.
+
+$realSubscribers = (int) DB::value(
+    "SELECT COUNT(*) FROM {text_club} WHERE NOT (COALESCE(phone_normalized, '') REGEXP :fp)",
+    ['fp' => FAKE_PHONE]
+);
+
+if ($realSubscribers > 0) {
+    $refusals[] = number_format($realSubscribers)
+        . ' Text Club subscribers have a number outside 555-0100 to 555-0199.'
+        . ' The Text Club screen shows it.';
 }
 
 // ----------------------------------------------------------------- the staff

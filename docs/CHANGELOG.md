@@ -1198,9 +1198,10 @@ at 390px, measured on every section rather than on the three captured at phone
 width.
 
 `tools/screenshot-guard.php` runs first and refuses the capture unless every
-contact carries POSITIVE evidence of being fictional: a reserved email domain,
-a 555-01xx phone, or the installer seed's own marker. A missing email is not
-such evidence — that is the ordinary shape of a guest who arrived by text, and
+contact carries POSITIVE evidence of being fictional in every detail: a
+reserved email domain and a phone in 555-0100 to 555-0199. Where the row came
+from is not evidence, since an example guest can be edited into a real one,
+and a missing email is not evidence either — that is the ordinary shape of a guest who arrived by text, and
 reading it as proof of fiction cleared a whole venue's real list. It also
 refuses a user account on a real email domain (the user list is one of the
 pictures, and the signed-in name is in the sidebar of all of them) and a real
