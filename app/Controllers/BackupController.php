@@ -11,6 +11,7 @@ use App\Core\Log;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Settings;
+use App\Services\DemoData;
 use RuntimeException;
 use Throwable;
 
@@ -45,6 +46,7 @@ final class BackupController extends Controller
             'canCompress' => function_exists('gzopen'),
             'tables'     => Backup::exportableTables(),
             'rowCounts'  => $this->rowCounts(),
+            'demoData'   => DemoData::summary(),
         ]);
     }
 
@@ -151,6 +153,77 @@ final class BackupController extends Controller
         Audit::event('backup.deleted', ['filename' => $filename]);
 
         return $this->success($request, 'Backup deleted.', '/settings/backups');
+    }
+
+    /**
+     * Delete the example guests and bookings the installer can seed.
+     *
+     * This lives beside the backups rather than in the installer because of
+     * WHEN it is wanted: not during setup, but at the end of a trial, on the
+     * morning somebody is about to import the real list. The runbook's advice
+     * is to do it before a single real guest arrives, so there is never a
+     * question about which rows are which.
+     *
+     * Typing DELETE is required. The demo seed only runs from the installer,
+     * so this cannot be undone from inside the application — that makes it
+     * irreversible in practice even though nothing real is lost, and the
+     * confirmation is the same friction Safe Mode uses for the same reason.
+     */
+    public function removeDemoData(Request $request): Response
+    {
+        if ($denied = $this->authorize('backup_manage')) {
+            return $denied;
+        }
+
+        if (strcasecmp(trim($request->str('confirm')), 'DELETE') !== 0) {
+            return $this->refuse(
+                $request,
+                'To remove the example data, type DELETE to confirm.',
+                '/settings/backups'
+            );
+        }
+
+        $before = DemoData::summary();
+
+        if (!$before['present']) {
+            return $this->refuse(
+                $request,
+                'There is no example data to remove.',
+                '/settings/backups'
+            );
+        }
+
+        try {
+            $removed = DemoData::remove();
+        } catch (Throwable $e) {
+            Log::error('Removing the example data failed', ['error' => $e->getMessage()]);
+
+            return $this->refuse(
+                $request,
+                'The example data could not be removed: ' . $e->getMessage(),
+                '/settings/backups'
+            );
+        }
+
+        // Audited with the breakdown, not just a total: this deletes guest
+        // records, and "who emptied the contacts table" is a question that
+        // deserves an answer even when the records were fictional.
+        Audit::event('backup.demo_data_removed', [
+            'total'  => $removed['total'],
+            'counts' => $removed['counts'],
+        ]);
+
+        $orphaned = $before['untagged_linked'];
+
+        return $this->success(
+            $request,
+            'Example data removed — ' . number_format($removed['total']) . ' record(s).'
+            . ($orphaned > 0
+                ? ' ' . number_format($orphaned) . ' booking(s) or deal(s) you created against an'
+                  . ' example guest were kept, and now have no guest attached.'
+                : ''),
+            '/settings/backups'
+        );
     }
 
     public function saveSettings(Request $request): Response

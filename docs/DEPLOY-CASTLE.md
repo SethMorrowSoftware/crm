@@ -20,6 +20,75 @@ Three consequences follow, and they are the reason this file exists:
 
 ---
 
+## Trying it before connecting it to anything
+
+**You can install this, exercise every page, and have it reach nothing at
+all.** That is the shipped default rather than a mode you have to find, and
+these are the facts behind it — each one verified against the code and a real
+install, not a claim about intent:
+
+| | Ships as | What that means |
+|---|---|---|
+| **Safe Mode** | **on** | Every outbound message is redirected to the owner with the intended recipient noted at the top. A finished install **cannot contact a guest at all.** |
+| **Mail driver** | **`log`** | Nothing leaves the server. Messages are written in full to `storage/logs/` instead. A password reset still works — the link is in the log. |
+| **The 112 automations** | **all off** | Measured on a real install: 0 of 112 active, 0 of 8 playbooks active. And an automation inside an inactive playbook does not run even if its own switch is on. |
+| **POS connection** | **none** | Nothing is configured, and this host has no MSSQL driver. **Settings → Health** reports its absence. It cannot reach your POS. |
+| **API tokens** | **none exist** | Until you create one. No token, no API access — a signed-in browser session is refused by `/api/v1` outright. |
+| **Webhooks** | **none** | Nothing is sent anywhere until you add an endpoint. |
+| **Your guest data** | **not there** | Only what you import. Import nothing and there is nothing. |
+
+### The tyre-kicking configuration
+
+Do runbook steps **1 → 4** (upload, database, installer, cron), and at the
+installer's seed step:
+
+- ✅ **The Castle's operating shape** — attractions, packages, pipelines. No
+  guest data; this is what makes the application look like your venue rather
+  than a blank grid.
+- ✅ **The playbooks and automations** — they arrive switched off, and seeding
+  them now means you can read what each one would do before deciding.
+- ✅ **Example guests and bookings** — *off by default, and worth turning ON
+  for a trial.* Every row is tagged `demo-data` so you can delete the lot in
+  one action, and none of it can be contacted. It is the difference between
+  judging the reports on an empty table and judging them on something that
+  looks like a Saturday.
+
+Then **stop**. Skip steps 5 (mail), 7 (importing your lists) and 9 (leaving
+Safe Mode). You now have the whole application, populated, reaching nothing.
+
+### What is worth exercising in that state
+
+- **Take a booking** end to end: the public `/book` page → the enquiry in the
+  pipeline → quote → deposit → the run sheet → check-in.
+- **Open the calendar** on month, week and day, and the resource lanes.
+- **Read a report** and try to reconcile it by hand. Every figure is something
+  that actually happened — no projections, no averaged baselines — so a number
+  you cannot reconcile is a bug worth telling us about.
+- **Click through the automations** and read the step sequences. This is the
+  cheapest time to decide which playbooks you actually want.
+- **Try Check-in on a phone.** It is the page the desk holds on the day of a
+  party, and the one worth a real device rather than a desktop browser.
+- **Build a role** in Settings and sign in as it. Hiding a section removes the
+  nav item, bounces the route *and* closes the data behind it — worth seeing
+  before you decide what the front desk can reach.
+- **Send yourself a password reset** and fish the link out of
+  `storage/logs/`. It proves the mail path works before any mail can leave.
+
+### Then throw the demo data away
+
+**Settings → Backups → Remove the example data** deletes everything the seed
+created — guests, households, children, visits, deals, activities, tasks and
+bookings — in one action. It tells you the count first, asks you to type
+DELETE, and is recorded in the audit log. Do it before you import a single
+real guest, so there is never a question about which rows are which.
+
+It will NOT delete a booking or a deal you created yourself against an example
+guest; those are yours, so they survive with no guest attached, and the page
+says how many before you press anything. The card only appears while there is
+something to remove.
+
+---
+
 ## 1. Before you start
 
 Have these to hand:
@@ -314,3 +383,38 @@ name, and is audited as the decision it is. That friction is deliberate.
 - **Start the 10DLC registration** if you want the Text Club. It is 2–4 weeks
   of carrier lead time and it gates nothing else, so the sooner it is in the
   queue the better.
+
+---
+
+## 11. Turning things on, one at a time
+
+Each of these is independent. Nothing below requires anything above it, so
+stop wherever you like and stay there as long as you like.
+
+| Step | What it exposes | What it still cannot do |
+|---|---|---|
+| **Mail on `log`** (the default) | nothing | reach anybody |
+| **SMTP configured, Safe Mode on** | your own inbox | reach a guest — every message is redirected to the owner |
+| **Import your lists, Safe Mode on** | real guest data in the app | contact any of them |
+| **Safe Mode off, all playbooks off** | transactional mail only — password resets, booking confirmations, run sheets | send a campaign or run a sequence; nothing is scheduled |
+| **One playbook on** | that sequence, to the guests its segment matches | anything the other seven would do |
+| **A campaign sent** | a one-off to a segment you chose and previewed | — |
+| **An API token** | whatever you ticked, to whoever holds the token | more than you ticked; it is scoped and revocable |
+| **The POS bridge** | visit history flowing in from CEplay | write to your POS — the feed is read-only by construction |
+
+Two things worth knowing about the order:
+
+- **Leaving Safe Mode is the only irreversible-feeling step**, and it has
+  friction on purpose: its own permission, typing the venue's name, and an
+  audit row with your name on it. Everything else is a switch you can flip
+  back.
+- **Turn playbooks on one at a time, with a week between them.** Not because
+  the application struggles, but because if guest replies start arriving you
+  want to know which sequence caused them. Eight at once is unreadable.
+
+### The one thing to check before leaving Safe Mode
+
+Open **Settings → Health** and confirm the cron heartbeat is current. With
+Safe Mode on, a dead cron is invisible — nothing was going to send anyway.
+With Safe Mode off and a dead cron, campaigns and sequences silently never
+run, which looks exactly like "the automations do not work".

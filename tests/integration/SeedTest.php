@@ -461,6 +461,154 @@ Harness::test('every demo row is reachable from the demo-data tag', function ():
     test_reset_transactional_data();
 });
 
+// ------------------------------------------- the removal the runbook promises
+//
+// The test above proves the cleanup is POSSIBLE by hand. These prove the
+// button does it, because the runbook tells a venue to press one before
+// importing a real guest list, and for most of a release that button did not
+// exist — the doc described a feature nobody had written.
+
+Harness::test('THE DEMO REMOVAL TAKES EVERYTHING THE SEED CREATED', function (): void {
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $before = App\Services\DemoData::summary();
+
+    Assert::true($before['present'], 'the seed just ran, so there is something to remove');
+
+    foreach (['contact', 'household', 'child', 'visit', 'deal', 'activity', 'task', 'booking'] as $type) {
+        Assert::greaterThan(0, $before['counts'][$type] ?? 0, $type . ' should be counted');
+    }
+
+    $removed = App\Services\DemoData::remove();
+
+    Assert::same($before['total'], $removed['total'], 'it removes what it said it would');
+
+    // The tagged tables.
+    foreach (['contacts', 'households', 'children', 'visits', 'deals', 'activities',
+              'tasks', 'bookings'] as $table) {
+        Assert::same(
+            0,
+            (int) DB::value('SELECT COUNT(*) FROM {' . $table . '}'),
+            $table . ' must be empty after the removal'
+        );
+    }
+
+    // And the two that cascade rather than carry the tag. Bookings are the
+    // one that matters: their FK to contacts is SET NULL, so a removal that
+    // only deleted contacts would leave these behind, looking finished.
+    Assert::same(0, (int) DB::value('SELECT COUNT(*) FROM {booking_payments}'));
+    Assert::same(0, (int) DB::value('SELECT COUNT(*) FROM {consent_log}'));
+
+    Assert::false(
+        DB::exists("SELECT id FROM {tags} WHERE name = 'demo-data'"),
+        'the marker tag goes too once nothing wears it'
+    );
+
+    test_reset_transactional_data();
+});
+
+Harness::test('the removal names what it will delete in words, not type names', function (): void {
+    // The first version of the card offered to delete "8 activitys, 11 childs".
+    $words = App\Services\DemoData::describe([
+        'contact' => 8, 'household' => 1, 'child' => 11, 'visit' => 7,
+        'deal' => 8, 'activity' => 8, 'task' => 5, 'booking' => 2,
+    ]);
+
+    Assert::same(
+        '8 guests, 1 household, 11 children, 7 visits, 8 party enquiries, 8 activities, 5 tasks, 2 bookings',
+        $words
+    );
+
+    Assert::same('1 guest, 1 child', App\Services\DemoData::describe(['contact' => 1, 'child' => 1]));
+    Assert::same('', App\Services\DemoData::describe([]), 'nothing to delete says nothing');
+    Assert::same('', App\Services\DemoData::describe(['contact' => 0]), 'and neither does zero');
+});
+
+Harness::test('removing the demo data twice is not an error', function (): void {
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    App\Services\DemoData::remove();
+
+    $after = App\Services\DemoData::summary();
+
+    Assert::false($after['present'], 'nothing left to find');
+    Assert::same(0, $after['total']);
+
+    $second = App\Services\DemoData::remove();
+
+    Assert::same(0, $second['total'], 'a second removal does nothing rather than throwing');
+
+    test_reset_transactional_data();
+});
+
+Harness::test('THE REMOVAL KEEPS WHAT THE VENUE MADE ITSELF, AND SAYS SO FIRST', function (): void {
+    // A venue kicking the tyres takes a booking against an example guest to
+    // see the flow. That booking is theirs, not the seed's, so it survives —
+    // but it survives with no guest attached, and the only honest place to
+    // say so is BEFORE the removal, not in the flash message afterwards.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $contactId = (int) DB::value("SELECT id FROM {contacts} WHERE source = 'demo' LIMIT 1");
+
+    Assert::greaterThan(0, $contactId);
+
+    $mine = DB::insert('bookings', [
+        'booking_number' => 'TRIAL-0001',
+        'contact_id'     => $contactId,
+        'status'         => 'confirmed',
+        'event_date'     => gmdate('Y-m-d', time() + 86400),
+        'start_time'     => '14:00:00',
+        'end_time'       => '16:00:00',
+        'created_at'     => gmdate('Y-m-d H:i:s'),
+        'updated_at'     => gmdate('Y-m-d H:i:s'),
+    ]);
+
+    $summary = App\Services\DemoData::summary();
+
+    Assert::same(1, $summary['untagged_linked'], 'the venue own booking is counted and named');
+
+    App\Services\DemoData::remove();
+
+    $survivor = DB::first('SELECT contact_id FROM {bookings} WHERE id = :id', ['id' => $mine]);
+
+    Assert::notNull($survivor, 'a booking the venue made is never deleted by this');
+    Assert::null($survivor['contact_id'], 'and its example guest is gone, so it has none');
+
+    test_reset_transactional_data();
+});
+
+Harness::test('the removal leaves a tag the venue uses itself alone', function (): void {
+    // `demo-data` is an ordinary tag. If somebody has put it on their own
+    // rows, deleting the tag would silently untag their work.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $tagId = (int) DB::value("SELECT id FROM {tags} WHERE name = 'demo-data'");
+    $now   = gmdate('Y-m-d H:i:s');
+
+    // A row of theirs, of a type the seed never tags, wearing the same tag.
+    DB::query(
+        'INSERT IGNORE INTO {taggables} (tag_id, entity_type, entity_id, created_at)
+         VALUES (:tag, :type, :id, :at)',
+        ['tag' => $tagId, 'type' => 'company', 'id' => 99999, 'at' => $now]
+    );
+
+    App\Services\DemoData::remove();
+
+    Assert::true(
+        DB::exists('SELECT id FROM {tags} WHERE id = :id', ['id' => $tagId]),
+        'the tag stays while anything still wears it'
+    );
+
+    DB::delete('taggables', 'tag_id = :tag', ['tag' => $tagId]);
+    DB::delete('tags', 'id = :id', ['id' => $tagId]);
+
+    test_reset_transactional_data();
+});
+
 // ------------------------------------------------------------- the playbooks
 
 Harness::test('EVERY SEEDED STEP IS ONE THE ENGINE CAN ACTUALLY PERFORM', function (): void {

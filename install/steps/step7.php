@@ -65,9 +65,9 @@ $seeds = $state['seeds'] ?? ['venue' => true, 'playbooks' => true, 'demo' => fal
                     pipeline and calendar have something in them while you learn the system.
                     Every address is on <code>example.com</code> and every phone number is in the
                     reserved 555&#8209;01xx range, so <strong>no example guest can ever be
-                    contacted</strong>, and every row is tagged <code>demo-data</code> so you can
-                    find and delete the lot later. Still, leave this OFF for a real install if you
-                    can: a clean contact list is worth more than a populated demo.
+                    contacted</strong>. <strong>Settings &rarr; Backups</strong> removes the lot
+                    again in one action when you are done looking. Still, leave this OFF for a real
+                    install if you can: a clean contact list is worth more than a populated demo.
                 </p>
             </div>
         </div>
