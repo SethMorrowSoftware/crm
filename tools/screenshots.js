@@ -47,8 +47,8 @@ const BASE = arg('base', 'http://127.0.0.1:8777').replace(/\/$/, '');
 const OUT = path.resolve(arg('out', 'docs/screenshots'));
 const EMAIL = process.env.CC_SHOT_EMAIL || 'demo@castle.test';
 const PASSWORD = process.env.CC_SHOT_PASSWORD || 'demo-passphrase-99';
-const CHROME = process.env.CC_SHOT_CHROME
-  || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+// Unset means the Chromium Playwright installed for itself.
+const CHROME = process.env.CC_SHOT_CHROME || undefined;
 
 // The sections, in the order the sidebar lists them, each with the thing a
 // reader should actually look at. `wait` is a selector to settle on where a

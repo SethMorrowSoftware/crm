@@ -140,9 +140,14 @@ if ($total > 0) {
 
     // Positive evidence, in the three shapes this application can carry it.
     // COALESCE on every column, for the reason on `reserved_email_clause()`.
+    // The seed's own mark is the list of ids it recorded, not `source`:
+    // `source` is a column any contact form or API call can write.
+    $seedIds = Settings::get('demo.seed_contact_ids', []);
+    $seedIds = is_array($seedIds) ? array_values(array_filter(array_map('intval', $seedIds))) : [];
+
     $fictional = $emailClause
         . ' OR (' . implode(' OR ', $phoneConditions) . ')'
-        . " OR COALESCE(source, '') = 'demo'";
+        . ($seedIds === [] ? '' : ' OR id IN (' . implode(',', $seedIds) . ')');
 
     $real = (int) DB::value(
         'SELECT COUNT(*) FROM {contacts} WHERE NOT (' . $fictional . ')',
@@ -202,7 +207,10 @@ try {
     $mail = [
         'SMTP host'     => (string) Settings::get('mail.smtp_host', ''),
         'SMTP username' => (string) Settings::get('mail.smtp_username', ''),
-        'from address'  => (string) Settings::get('mail.from_address', ''),
+        // `mail.from_email` is the key MailSettingsController writes; an
+        // earlier version read `mail.from_address`, which nothing sets.
+        'from address'  => (string) Settings::get('mail.from_email', ''),
+        'Safe Mode address' => (string) Settings::get('mail.safe_mode_address', ''),
         'reply-to'      => (string) Settings::get('mail.reply_to', ''),
     ];
 

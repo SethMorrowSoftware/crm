@@ -717,6 +717,64 @@ Harness::test('IT NAMES THE WORK OF YOUR OWN THAT THE DATABASE WILL DESTROY', fu
     test_reset_transactional_data();
 });
 
+Harness::test('a real guest who also has source "demo" is still not the seed\'s', function (): void {
+    // `source` is an ordinary column: the contact form, the API and an
+    // automation step can all write it. So a real guest wearing the tag AND
+    // carrying source = 'demo' must survive too. Only the ids the seed
+    // recorded count as its own.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $now   = gmdate('Y-m-d H:i:s');
+    $tagId = (int) DB::value("SELECT id FROM {tags} WHERE name = 'demo-data'");
+
+    $forged = DB::insert('contacts', [
+        'first_name' => 'Dana',
+        'last_name'  => 'Whitfield',
+        'email'      => 'dana.whitfield@example.test',
+        'source'     => 'demo',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    DB::insert('taggables', ['tag_id' => $tagId, 'entity_type' => 'contact',
+                             'entity_id' => $forged, 'created_at' => $now]);
+
+    Assert::same(8, App\Services\DemoData::summary()['counts']['contact'], 'the seed\'s eight, not nine');
+
+    App\Services\DemoData::remove();
+
+    Assert::true(
+        DB::exists('SELECT id FROM {contacts} WHERE id = :id', ['id' => $forged]),
+        'the guest whose source merely says "demo" survives'
+    );
+
+    test_reset_transactional_data();
+});
+
+Harness::test('a campaign delivery to an example guest is named as deleted, not kept', function (): void {
+    // `campaign_recipients.contact_id` is ON DELETE CASCADE, so the venue's
+    // delivery history to an example guest goes with the guest.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $contactId  = (int) DB::value("SELECT id FROM {contacts} WHERE source = 'demo' LIMIT 1");
+    $now        = gmdate('Y-m-d H:i:s');
+    $campaignId = DB::insert('campaigns', ['name' => 'Trial blast', 'created_at' => $now, 'updated_at' => $now]);
+
+    DB::insert('campaign_recipients', ['campaign_id' => $campaignId, 'contact_id' => $contactId]);
+
+    $summary = App\Services\DemoData::summary();
+
+    Assert::same(1, $summary['cascade']['deliveries'] ?? 0, 'counted before the decision');
+    Assert::contains(
+        'campaign deliveries to an example guest',
+        App\Services\DemoData::describeCascade($summary['cascade'])
+    );
+
+    test_reset_transactional_data();
+});
+
 Harness::test('and it counts an orphan that is not a booking or a deal', function (): void {
     // A membership sold to an example guest came back active, paid for and
     // owned by nobody, while the page named only bookings and deals.

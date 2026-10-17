@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Core\DB;
+use App\Core\Settings;
 use Throwable;
 
 /**
@@ -70,17 +71,14 @@ final class DemoData
      * which is why contacts are the one type that needs a second mark and
      * the other seven do not.
      *
-     * `source = 'demo'` is written by the seed on every contact it creates
-     * and by nothing else.
-     *
-     * `{a}` is the table alias the caller is using, filled by `seedMark()` —
-     * the same condition is needed against three different aliases.
-     *
-     * @var array<string,string> entity type => extra SQL
+     * The mark is the list of ids the seed itself created, kept in the
+     * `demo.seed_contact_ids` setting. It used to be `source = 'demo'`, but
+     * `source` is an ordinary column: the contact form, the API and an
+     * automation step can all write it, so a real guest could carry both the
+     * tag and the source and be deleted. No controller writes that setting;
+     * only the seed does.
      */
-    private const SEED_MARK = [
-        'contact' => "COALESCE({a}.source, '') = 'demo'",
-    ];
+    private const SEED_IDS_KEY = 'demo.seed_contact_ids';
 
     /**
      * Rows a venue writes ITSELF that the database destroys along with the
@@ -93,8 +91,8 @@ final class DemoData
      * on an example enquiry is the expected case rather than a corner of one.
      *
      * Verified against `information_schema` on the real schema: `quotes.deal_id`,
-     * `contact_notes.contact_id` and `conversations.contact_id` are all
-     * ON DELETE CASCADE.
+     * `contact_notes.contact_id`, `conversations.contact_id` and
+     * `campaign_recipients.contact_id` are all ON DELETE CASCADE.
      *
      * @var array<string,array{0:string,1:string,2:string,3:string}>
      *      key => [table, foreign key column, the tagged type it hangs off, plural label]
@@ -103,6 +101,7 @@ final class DemoData
         'quotes'        => ['quotes', 'deal_id', 'deal', 'quotes written on an example enquiry'],
         'notes'         => ['contact_notes', 'contact_id', 'contact', 'notes written on an example guest'],
         'conversations' => ['conversations', 'contact_id', 'contact', 'inbox threads with an example guest'],
+        'deliveries'    => ['campaign_recipients', 'contact_id', 'contact', 'campaign deliveries to an example guest'],
     ];
 
     /**
@@ -214,10 +213,10 @@ final class DemoData
     /**
      * Did the installer's demo seed actually run on this install?
      *
-     * The same two markers the seed itself uses to decide it has already run
-     * (`install/seeds/demo.php`): a contact it stamped `source = 'demo'`, or a
-     * booking numbered `DEMO-…`. Neither is reachable from the application's
-     * own UI, so neither can be produced by a venue going about its work.
+     * Either of two marks the seed leaves (`install/seeds/demo.php`): the
+     * contact ids it recorded in `demo.seed_contact_ids`, or a booking
+     * numbered `DEMO-…`. Neither is reachable from the application's own UI,
+     * so neither can be produced by a venue going about its work.
      *
      * Without this, a `demo-data` tag was all it took: the automation engine's
      * "Add a tag" step takes free text, creates the tag if it is missing, and
@@ -226,8 +225,20 @@ final class DemoData
      */
     private static function seedRan(): bool
     {
-        return DB::exists("SELECT id FROM {contacts} WHERE source = 'demo'")
+        return self::seedContactIds() !== []
             || DB::exists("SELECT id FROM {bookings} WHERE booking_number LIKE 'DEMO-%'");
+    }
+
+    /**
+     * The contacts the seed created, as the seed recorded them.
+     *
+     * @return list<int>
+     */
+    private static function seedContactIds(): array
+    {
+        $ids = Settings::get(self::SEED_IDS_KEY, []);
+
+        return is_array($ids) ? array_values(array_filter(array_map('intval', $ids))) : [];
     }
 
     /**
@@ -245,11 +256,15 @@ final class DemoData
      */
     private static function seedMark(string $type, string $alias, string $prefix = ''): string
     {
-        if (!isset(self::SEED_MARK[$type])) {
+        if ($type !== 'contact') {
             return '';
         }
 
-        return $prefix . str_replace('{a}', $alias, self::SEED_MARK[$type]);
+        $ids = self::seedContactIds();
+
+        // Integers by construction, so inlining them is safe; an empty list
+        // matches nothing rather than everything.
+        return $prefix . ($ids === [] ? '1 = 0' : $alias . '.id IN (' . implode(',', $ids) . ')');
     }
 
     /**
@@ -412,7 +427,6 @@ final class DemoData
         'tickets'            => null,
         'waiver_signatures'  => null,
         'survey_responses'   => null,
-        'campaign_recipients' => null,
     ];
 
     private static function untaggedLinked(int $tagId): int
