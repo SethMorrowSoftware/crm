@@ -476,7 +476,9 @@ Two things worth knowing from that:
 `.claude/hooks/session-start.sh` is a `SessionStart` hook that installs MariaDB
 and prepares `castle_crm_test` before the session starts, so `php tests/run.php`
 works with no setup. It is registered in `.claude/settings.json`, does nothing
-unless `CLAUDE_CODE_REMOTE=true`, and prints one line naming the engine, the
+unless `CLAUDE_CODE_REMOTE=true`, stands down on a self-hosted runner (anything
+other than the hosted `cloud_default` environment) unless
+`CASTLE_PROVISION_TEST_DB=1` is set, and prints one line naming the engine, the
 connection and the `LocalDay` mode it got. Measured: ~18s on a cold container,
 ~1s on a resumed one, then 1,765 tests passing with nothing skipped.
 

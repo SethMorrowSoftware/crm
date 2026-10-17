@@ -43,6 +43,19 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
+# And only a disposable, Anthropic-hosted container. CLAUDE_CODE_REMOTE is also
+# true on a self-hosted runner, which is an organisation's own long-lived host
+# that may run several sessions at once; installing a server there, rewriting
+# an account's authentication and granting ALL ON *.* would be done to that
+# host, and parallel sessions would share one castle_crm_test. The hosted
+# environment identifies itself as `cloud_default`; anywhere else this needs an
+# explicit CASTLE_PROVISION_TEST_DB=1 from whoever owns the machine.
+if [ "${CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE:-}" != "cloud_default" ] \
+   && [ "${CASTLE_PROVISION_TEST_DB:-}" != "1" ]; then
+  echo "Castle CRM SessionStart hook: stood down without installing anything. This is not an Anthropic-hosted cloud container (CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE='${CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE:-}'), and provisioning a database means installing MariaDB and granting root access on this host. Set CASTLE_PROVISION_TEST_DB=1 in the environment if that is wanted here."
+  exit 0
+fi
+
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
 # Defaults copied from tests/bootstrap.php, which is the file that decides them.
