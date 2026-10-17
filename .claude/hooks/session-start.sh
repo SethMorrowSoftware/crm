@@ -72,15 +72,32 @@ DB_PASS="${CC_TEST_DB_PASS-}"
 # bootstrap and it is always root, whatever CC_TEST_DB_USER says.
 ADMIN_USER=root
 
-# An empty password is the only thing this hook can provision, and that is
-# deliberate rather than an omission: when the suite's user is root — the
-# default — setting a password on it would lock this script out of the very
-# socket connection it uses to issue its own grants, so supporting one means a
-# second credential path for no gain in a container nobody else can reach. A
-# session that arrives with CC_TEST_DB_PASS set is pointed at a database this
-# hook does not own, so it stands down before installing anything.
+# What this hook can provision is exactly the suite's default: a local server
+# on 127.0.0.1:3306, reached over TCP, with an empty password. Anything else
+# means the session is pointed at a database this hook does not own, so it
+# stands down before installing anything rather than build one database and
+# then report on another.
+#
+# - A password: when the suite's user is root, the default, setting one would
+#   lock this script out of the socket connection it issues its own grants
+#   over, and supporting it means a second credential path for no gain in a
+#   container nobody else can reach.
+# - A socket: DB::connect() prefers CC_TEST_DB_SOCKET over host and port, so
+#   the suite would ignore the TCP endpoint this hook verifies.
+# - Another host or port: the server below is started on the packaged
+#   defaults and provisioned over its local socket.
+STAND_DOWN=
 if [ -n "$DB_PASS" ]; then
-  echo "Castle CRM SessionStart hook: stood down without installing anything. CC_TEST_DB_PASS is set, so this session is pointed at a database this hook does not manage — it only provisions the suite's default, which is ${DB_USER} with an empty password on a local MariaDB. If that database is reachable, \`php tests/run.php\` will use it as it stands."
+  STAND_DOWN="CC_TEST_DB_PASS is set"
+elif [ -n "${CC_TEST_DB_SOCKET:-}" ]; then
+  STAND_DOWN="CC_TEST_DB_SOCKET is set"
+elif [ "$DB_HOST" != "127.0.0.1" ] && [ "$DB_HOST" != "localhost" ]; then
+  STAND_DOWN="CC_TEST_DB_HOST is ${DB_HOST}"
+elif [ "$DB_PORT" != "3306" ]; then
+  STAND_DOWN="CC_TEST_DB_PORT is ${DB_PORT}"
+fi
+if [ -n "$STAND_DOWN" ]; then
+  echo "Castle CRM SessionStart hook: stood down without installing anything. ${STAND_DOWN}, so this session is pointed at a database this hook does not manage — it only provisions the suite's default, which is ${DB_USER} with an empty password on a local MariaDB at 127.0.0.1:3306. If that database is reachable, \`php tests/run.php\` will use it as it stands."
   exit 0
 fi
 
