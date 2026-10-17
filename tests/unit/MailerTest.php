@@ -387,6 +387,39 @@ Harness::test('DNS ADVICE FOLLOWS WHO ACTUALLY SENDS, NOT WHO HOSTS', function (
     Assert::notEmpty($unset['warning'], 'with no host configured it asks for one rather than guessing');
 
     /*
+     * A LOOKALIKE HOST IS NOT A PROVIDER. The first version matched on a
+     * substring, so `smtp.gmail.com.evil.test` was reported as Google
+     * Workspace and `email-smtp.anything.test` as Amazon SES — measured. Less
+     * destructive than the record this whole method exists to stop printing,
+     * but a page telling an operator what to publish in DNS has no business
+     * being confidently wrong, and "the trailing label can be anything" is
+     * how every lookalike-domain trick works.
+     */
+    foreach ([
+        'smtp.gmail.com.evil.test',
+        'email-smtp.evilcorp.test',
+        'email-smtp.amazonaws.com.evil.io',
+        'notsmtp.gmail.com',
+        'my-smtp.sendgrid.net.attacker.io',
+        'smtp.office365.com.phish.example',
+    ] as $lookalike) {
+        $advice = Mailer::dnsAdvice('smtp', $lookalike, 'example.test');
+
+        Assert::same($lookalike, $advice['sender'], $lookalike . ' must not be read as a known provider');
+        Assert::notEmpty($advice['warning'], $lookalike);
+
+        foreach ($advice['records'] as $record) {
+            Assert::notContains('include:', $record['value'], $lookalike . ': no include may be guessed');
+        }
+    }
+
+    // A real subdomain of a provider's host still counts, and so does every
+    // SES region.
+    foreach (['email-smtp.us-east-1.amazonaws.com', 'email-smtp.eu-west-2.amazonaws.com'] as $ses) {
+        Assert::same('Amazon SES', Mailer::dnsAdvice('smtp', $ses, 'example.test')['sender'], $ses);
+    }
+
+    /*
      * The ONE case the old unconditional advice was right about: this install
      * really does send its own mail.
      */

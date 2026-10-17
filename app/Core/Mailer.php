@@ -1425,16 +1425,36 @@ final class Mailer
             'mailgun'     => ['match' => ['smtp.mailgun.org'], 'name' => 'Mailgun',
                               'spf'   => 'include:mailgun.org',
                               'dkim'  => 'Mailgun gives you a DKIM TXT record per sending domain.'],
-            'ses'         => ['match' => ['email-smtp.'], 'name' => 'Amazon SES',
+            'ses'         => ['match' => [], 'pattern' => '/^email-smtp\\.[a-z0-9-]+\\.amazonaws\\.com$/',
+                              'name'  => 'Amazon SES',
                               'spf'   => 'include:amazonses.com',
                               'dkim'  => 'SES gives you three CNAMEs when you verify the domain.'],
         ];
 
+        /*
+         * MATCHED ON THE WHOLE HOST, NOT A SUBSTRING OF IT.
+         *
+         * This used `str_contains`, which read `smtp.gmail.com.evil.test` as
+         * Google Workspace and `email-smtp.anything.test` as Amazon SES —
+         * measured. Naming the wrong provider is less destructive than the
+         * record this method exists to stop printing (mail fails SPF rather
+         * than the domain going down), but a page that tells an operator what
+         * to publish in DNS has no business being confidently wrong, and
+         * "a trailing label can be anything" is how every lookalike-domain
+         * trick works. An exact host, or a real subdomain of one.
+         */
         $provider = null;
 
         foreach ($known as $candidate) {
+            if (isset($candidate['pattern']) && $host !== ''
+                && preg_match($candidate['pattern'], $host) === 1
+            ) {
+                $provider = $candidate;
+                break;
+            }
+
             foreach ($candidate['match'] as $needle) {
-                if ($host !== '' && str_contains($host, $needle)) {
+                if ($host === $needle || ($host !== '' && str_ends_with($host, '.' . $needle))) {
                     $provider = $candidate;
                     break 2;
                 }
