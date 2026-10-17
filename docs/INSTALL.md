@@ -144,7 +144,7 @@ use anywhere else: this account can see every guest's details.
 |---|---|
 | Venue data (attractions, packages, pipelines) | **Keep it.** Prices came from your public website and may be stale — the installer marks them for you to confirm. |
 | The 8 playbooks and their automations | **Keep it.** Everything arrives switched off. It is a library, not a machine that starts running. |
-| Example guests and bookings | **Leave it off** for a real install. Useful if you want to explore first; every row is fictional, unreachable and tagged `demo-data` so you can delete it later. |
+| Example guests and bookings | **Leave it off** for a real install. Useful if you want to explore first; every row is fictional and unreachable, and **Settings → Backups → Remove the example data** deletes the lot in one action when you are done. |
 
 Email templates are always seeded, because the password-reset message is one
 of them.

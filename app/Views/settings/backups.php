@@ -14,6 +14,7 @@ declare(strict_types=1);
  * @var bool                $canCompress
  * @var list<string>        $tables
  * @var array<string,int>   $rowCounts
+ * @var array{present:bool,counts:array<string,int>,total:int,untagged_linked:int} $demoData
  */
 
 $bytes = static function (int $size): string {
@@ -252,3 +253,67 @@ $stale = $lastRun === null || strtotime((string) $lastRun) < time() - 172800;
         <span class="form-hint">Every export is recorded in the audit log with your name on it.</span>
     </div>
 </form>
+
+<?php if ($demoData['present']): ?>
+<!-- ──────────────────────── Remove the example data ───────────────────── -->
+<form method="post" action="<?= e(url('/settings/backups/demo-data')) ?>" class="card card-danger form">
+    <?= csrf_field() ?>
+
+    <div class="card-head">
+        <div>
+            <h2>Remove the example data</h2>
+            <p class="card-sub">
+                The example guests and bookings the installer seeded, so you can judge the reports
+                on something that looks like a Saturday. Do this before you import your real list,
+                so there is never a question about which rows are which.
+            </p>
+        </div>
+    </div>
+
+    <p class="field-hint">
+        <?= number_format($demoData['total']) ?> records &mdash;
+        <?= e(App\Services\DemoData::describe($demoData['counts'])) ?>.
+        Every one is tagged <code>demo-data</code>, every address is on a reserved domain, and
+        none of them can be contacted even with Safe Mode off.
+    </p>
+
+    <?php if (($demoData['cascade_total'] ?? 0) > 0): ?>
+        <div class="alert alert-error">
+            <?= icon('alert', 16) ?>
+            <p>
+                <strong>This will also delete work of your own:</strong>
+                <?= e(App\Services\DemoData::describeCascade($demoData['cascade'])) ?>.
+                They hang off an example record, so the database removes them with it and
+                nothing here can keep them. Save anything you need first.
+            </p>
+        </div>
+    <?php endif; ?>
+
+    <?php if ($demoData['untagged_linked'] > 0): ?>
+        <div class="alert alert-warning">
+            <?= icon('alert', 16) ?>
+            <p>
+                <?= number_format($demoData['untagged_linked']) ?> record(s) you created
+                yourself against an example guest &mdash; bookings, deals, memberships,
+                tickets, waiver signatures &mdash; will be <strong>kept</strong>, because they
+                are yours rather than the seed's. They will be left with no guest attached.
+            </p>
+        </div>
+    <?php endif; ?>
+
+    <div class="field">
+        <label for="confirm-demo">Type DELETE to confirm</label>
+        <input type="text" id="confirm-demo" name="confirm" autocomplete="off" required
+               placeholder="DELETE" style="max-width: 14rem;">
+        <p class="field-hint">
+            This cannot be undone from here &mdash; the example data is only seeded by the
+            installer.
+        </p>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-danger"><?= icon('trash', 16) ?> Remove example data</button>
+        <span class="form-hint">Recorded in the audit log with your name on it.</span>
+    </div>
+</form>
+<?php endif; ?>

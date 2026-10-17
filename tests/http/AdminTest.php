@@ -244,6 +244,99 @@ Harness::test('a backup download is audited with the actor', function () use ($o
     Assert::notNull($entry['user_id'], 'and the trace must name them');
 });
 
+// ------------------------------------------- removing the installer examples
+
+Harness::test('the front desk cannot remove the example data', function () use ($desk): void {
+    // The token comes from a page the front desk CAN reach, so what refuses
+    // this is the permission gate rather than a missing CSRF token.
+    $response = $desk->postWithToken(
+        '/bookings',
+        '/settings/backups/demo-data',
+        ['confirm' => 'DELETE'],
+        true
+    );
+
+    Assert::inArray(
+        $response['status'],
+        [302, 403],
+        'a bulk delete of guest records is not a front-desk action'
+    );
+});
+
+Harness::test('REMOVING THE EXAMPLE DATA NEEDS THE WORD TYPED', function () use ($owner): void {
+    // The seed only runs from the installer, so this cannot be undone from
+    // inside the application. Without the typed word it must do NOTHING —
+    // and the test asserts the data is still there afterwards rather than
+    // just reading the message, because a refusal that still deletes is
+    // exactly the failure worth catching.
+    $seed = require CC_ROOT . '/install/seeds/demo.php';
+    $seed();
+
+    $before = (int) DB::value("SELECT COUNT(*) FROM {contacts} WHERE source = 'demo'");
+
+    Assert::greaterThan(0, $before, 'precondition: the examples are seeded');
+
+    foreach (['', 'delete me', 'yes'] as $typed) {
+        $response = $owner->postWithToken(
+            '/settings/backups',
+            '/settings/backups/demo-data',
+            ['confirm' => $typed],
+            true
+        );
+
+        Assert::same(200, $response['status']);
+        Assert::contains('type DELETE', $response['body'], 'it should say what is needed');
+        Assert::same(
+            $before,
+            (int) DB::value("SELECT COUNT(*) FROM {contacts} WHERE source = 'demo'"),
+            'a refused removal must not have removed anything'
+        );
+    }
+});
+
+Harness::test('the owner can remove the example data, and it is audited', function () use ($owner): void {
+    DB::delete('audit_log', "action = 'backup.demo_data_removed'");
+
+    Assert::greaterThan(
+        0,
+        (int) DB::value("SELECT COUNT(*) FROM {contacts} WHERE source = 'demo'"),
+        'precondition: the previous test left the examples in place'
+    );
+
+    $response = $owner->postWithToken(
+        '/settings/backups',
+        '/settings/backups/demo-data',
+        ['confirm' => 'DELETE'],
+        true
+    );
+
+    Assert::same(200, $response['status']);
+    Assert::contains('Example data removed', $response['body']);
+
+    Assert::same(
+        0,
+        (int) DB::value("SELECT COUNT(*) FROM {contacts} WHERE source = 'demo'"),
+        'the examples are gone'
+    );
+    Assert::same(
+        0,
+        (int) DB::value("SELECT COUNT(*) FROM {bookings} WHERE booking_number LIKE 'DEMO-%'"),
+        'including the bookings, whose guest FK is SET NULL and would otherwise survive'
+    );
+
+    $entry = DB::first(
+        "SELECT * FROM {audit_log} WHERE action = 'backup.demo_data_removed' ORDER BY id DESC LIMIT 1"
+    );
+
+    Assert::notNull($entry, 'deleting guest records leaves a trace even when they were fictional');
+    Assert::notNull($entry['user_id'], 'and the trace names who did it');
+
+    // Nothing left to remove, and the page stops offering it.
+    $page = $owner->get('/settings/backups');
+
+    Assert::notContains('Remove the example data', $page['body']);
+});
+
 Harness::test('a traversal attempt on the download route does not reach a file', function () use ($owner): void {
     // The guarantee being tested is that no file outside storage/backups is
     // ever served — NOT that each attempt produces a particular status. An

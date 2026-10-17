@@ -129,10 +129,33 @@ function ri_window(string $from, string $to): array
     return Reports::window('custom', $from, $to, $to);
 }
 
+/**
+ * Is an evening at this venue already tomorrow in UTC?
+ *
+ * The two evening tests below exist for exactly one fact: that the Castle's
+ * busiest hours fall on the far side of midnight UTC, so a report that groups
+ * by `DATE(created_at)` files a Saturday night on Sunday. At a venue where
+ * that is not true — UTC itself, or anywhere east of it — there is nothing
+ * for them to catch, and they say so and stand down rather than failing.
+ *
+ * They used to ask `$zone === 'UTC'`, which is the same question only for a
+ * venue behind UTC. Running the suite under CC_TEST_VENUE_TZ at UTC+14 is
+ * what showed the difference: the guard let the test through and the test
+ * then failed on its own precondition, which reads as a timezone bug rather
+ * than as a case that does not apply.
+ */
+function ri_evening_crosses_utc_midnight(string $zone, string $localTime): bool
+{
+    $evening = new DateTimeImmutable(test_local_day(1) . ' ' . $localTime, new DateTimeZone($zone));
+
+    return $evening->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d')
+        !== $evening->format('Y-m-d');
+}
+
 // ------------------------------------------------- 1. they all actually run
 
 Harness::test('every report in the catalogue runs and returns the agreed shape', function (): void {
-    $window = ri_window(gmdate('Y-m-d', time() - (86400 * 60)), gmdate('Y-m-d'));
+    $window = ri_window(test_local_day(60), test_local_day());
 
     foreach (array_keys(Reports::CATALOG) as $id) {
         $result = ReportRunner::run($id, $window);
@@ -169,7 +192,7 @@ Harness::test('every report in the catalogue runs and returns the agreed shape',
 });
 
 Harness::test('a money report declares at least one money column, and a plain one does not lie', function (): void {
-    $window = ri_window(gmdate('Y-m-d', time() - (86400 * 30)), gmdate('Y-m-d'));
+    $window = ri_window(test_local_day(30), test_local_day());
 
     foreach (Reports::CATALOG as $id => $report) {
         $types = array_column(ReportRunner::run($id, $window)['columns'], 'type');
@@ -203,7 +226,7 @@ Harness::test('a report that is not in the catalogue is refused by name', functi
 Harness::test('revenue by day counts the parties it says it counts', function (): void {
     ri_clear();
 
-    $day = gmdate('Y-m-d', time() - (86400 * 5));
+    $day = test_local_day(5);
 
     ri_booking($day, ['total_cents' => 45000, 'guest_count' => 12]);
     ri_booking($day, ['total_cents' => 30000, 'guest_count' => 8]);
@@ -241,8 +264,8 @@ Harness::test('a report with no rows is an empty report, not a broken one', func
 Harness::test('the prior period is read from the prior period', function (): void {
     ri_clear();
 
-    $now    = gmdate('Y-m-d', time() - (86400 * 3));
-    $before = gmdate('Y-m-d', time() - (86400 * 10));
+    $now    = test_local_day(3);
+    $before = test_local_day(10);
 
     ri_booking($now, ['total_cents' => 50000]);
     ri_booking($before, ['total_cents' => 20000]);
@@ -251,9 +274,9 @@ Harness::test('the prior period is read from the prior period', function (): voi
     // that, which is where $before sits.
     $window = Reports::window(
         'custom',
-        gmdate('Y-m-d', time() - (86400 * 9)),
-        gmdate('Y-m-d', time() - (86400 * 3)),
-        gmdate('Y-m-d')
+        test_local_day(9),
+        test_local_day(3),
+        test_local_day()
     );
 
     $result = ReportRunner::run('revenue_by_day', $window);
@@ -270,7 +293,7 @@ Harness::test('a rise in cancellations is not reported as a good thing', functio
     // The one report where UP is BAD. Without `good` on the comparison the
     // page paints every rise green, which is the colour saying "well done"
     // over a column of parties the venue lost.
-    $window   = ri_window(gmdate('Y-m-d', time() - (86400 * 30)), gmdate('Y-m-d'));
+    $window   = ri_window(test_local_day(30), test_local_day());
     $result   = ReportRunner::run('cancellations', $window);
 
     Assert::same('down', $result['comparison']['good']);
@@ -291,9 +314,10 @@ Harness::test('an evening booking belongs to the evening it was taken', function
 
     $zone = Settings::timezone();
 
-    if ($zone === 'UTC') {
-        // Nothing to prove on a venue that really runs on UTC.
-        Assert::true(true, 'venue timezone is UTC, so there is no conversion to test');
+    if (!ri_evening_crosses_utc_midnight($zone, '21:00:00')) {
+        // Nothing to prove at a venue whose 9pm is still the same day in UTC
+        // — on UTC itself, or anywhere east of it. The Castle is not one.
+        Assert::true(true, '9pm at ' . $zone . ' is the same day in UTC');
 
         return;
     }
@@ -309,7 +333,7 @@ Harness::test('an evening booking belongs to the evening it was taken', function
      * plausible, every total is right, and the days are all shifted by one
      * for anything that happened after about eight o'clock.
      */
-    $localDay = gmdate('Y-m-d', time() - (86400 * 10));
+    $localDay = test_local_day(10);
     $evening  = new DateTimeImmutable($localDay . ' 21:00:00', new DateTimeZone($zone));
     $utc      = $evening->setTimezone(new DateTimeZone('UTC'));
 
@@ -359,13 +383,13 @@ Harness::test('the list-growth trend puts an evening sign-up on the right day', 
 
     $zone = Settings::timezone();
 
-    if ($zone === 'UTC') {
-        Assert::true(true, 'venue timezone is UTC');
+    if (!ri_evening_crosses_utc_midnight($zone, '22:30:00')) {
+        Assert::true(true, '10:30pm at ' . $zone . ' is the same day in UTC');
 
         return;
     }
 
-    $localDay = gmdate('Y-m-d', time() - (86400 * 4));
+    $localDay = test_local_day(4);
     $utc      = (new DateTimeImmutable($localDay . ' 22:30:00', new DateTimeZone($zone)))
         ->setTimezone(new DateTimeZone('UTC'));
 
@@ -396,8 +420,8 @@ Harness::test('the day expression and the window agree about which day it is', f
 
     ri_clear();
 
-    $from = gmdate('Y-m-d', time() - (86400 * 7));
-    $to   = gmdate('Y-m-d', time() - (86400 * 3));
+    $from = test_local_day(7);
+    $to   = test_local_day(3);
 
     // Two minutes past midnight on the first day, and two minutes to
     // midnight on the last: the extremes a local day can hold.
@@ -457,7 +481,7 @@ Harness::test('the timezone mode is decided by the server, not assumed', functio
 // --------------------------------------------------------- the clamp and CSV
 
 Harness::test('a decade-long window is clamped before it reaches the database', function (): void {
-    $window = Reports::window('custom', '2010-01-01', gmdate('Y-m-d'), gmdate('Y-m-d'));
+    $window = Reports::window('custom', '2010-01-01', test_local_day(), test_local_day());
 
     Assert::true($window['clamped']);
 
@@ -472,7 +496,7 @@ Harness::test('the rollup writes a figure for every metric on every day', functi
     ri_clear();
     DB::query('DELETE FROM {report_daily_rollup}');
 
-    $day = gmdate('Y-m-d', time() - (86400 * 2));
+    $day = test_local_day(2);
     ri_booking($day, ['total_cents' => 40000, 'guest_count' => 10]);
     ri_booking($day, ['total_cents' => 20000, 'guest_count' => 6]);
     ri_booking($day, ['status' => 'cancelled', 'total_cents' => 90000]);
@@ -528,7 +552,7 @@ Harness::test('running the rollup twice writes the same answer, not twice the an
     ri_clear();
     DB::query('DELETE FROM {report_daily_rollup}');
 
-    $day = gmdate('Y-m-d', time() - (86400 * 3));
+    $day = test_local_day(3);
     ri_booking($day, ['total_cents' => 33300]);
 
     ReportRollup::refresh();
@@ -558,7 +582,7 @@ Harness::test('a correction made days later lands in the rollup', function (): v
     ri_clear();
     DB::query('DELETE FROM {report_daily_rollup}');
 
-    $day = gmdate('Y-m-d', time() - (86400 * 6));
+    $day = test_local_day(6);
     $id  = ri_booking($day, ['total_cents' => 10000]);
 
     ReportRollup::refresh();
@@ -667,7 +691,7 @@ Harness::test('a series fills the quiet days with zero and reports its coverage'
     ri_clear();
     DB::query('DELETE FROM {report_daily_rollup}');
 
-    $day = gmdate('Y-m-d', time() - (86400 * 5));
+    $day = test_local_day(5);
     ri_booking($day);
 
     $result = ReportRollup::refresh();
@@ -728,7 +752,7 @@ Harness::test('the rollup agrees with the report it summarises', function (): vo
 });
 
 Harness::test('every report exports as CSV with a cell per declared column', function (): void {
-    $window = ri_window(gmdate('Y-m-d', time() - (86400 * 30)), gmdate('Y-m-d'));
+    $window = ri_window(test_local_day(30), test_local_day());
 
     foreach (array_keys(Reports::CATALOG) as $id) {
         $result = ReportRunner::run($id, $window);

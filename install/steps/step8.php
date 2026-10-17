@@ -113,7 +113,8 @@ endif;
                     <?= (int) $summary['seeds']['demo']['contacts'] ?> fictional guests,
                     <?= (int) $summary['seeds']['demo']['deals'] ?> party inquiries and
                     <?= (int) $summary['seeds']['demo']['bookings'] ?> bookings
-                    &mdash; every one tagged <code>demo-data</code> so you can find and delete them</li>
+                    &mdash; removable in one action from <strong>Settings &rarr; Backups</strong>
+                    when you have finished looking</li>
             <?php endif; ?>
         </ul>
     <?php endif; ?>

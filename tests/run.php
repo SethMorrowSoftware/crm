@@ -16,6 +16,10 @@ declare(strict_types=1);
  *   CC_TEST_DB_HOST / _PORT / _NAME / _USER / _PASS   database to use
  *   CC_TEST_SKIP_DB=1                                 skip database suites
  *   CC_TEST_SKIP_HTTP=1                               skip the HTTP suite
+ *   CC_TEST_VENUE_TZ=Pacific/Midway                   run the suite in
+ *       another venue's calendar, to find tests that only agree with the
+ *       application while UTC and the venue are on the same day. See
+ *       `test_apply_venue_tz_override()` in bootstrap.php.
  */
 
 /*
@@ -201,6 +205,38 @@ if ($minimum > 0 && $filter === []) {
                 $ran
             ));
         }
+
+        $exitCode = 1;
+    }
+}
+
+/*
+ * And the same idea for the venue-timezone override: a run that asked for
+ * another venue's calendar must still be in it at the end.
+ *
+ * `http/smoke` saves the venue settings form, which writes `venue.timezone`,
+ * and it used to post `America/New_York` as a literal — so from that suite
+ * onwards every later HTTP request was served in New York while this process
+ * still held the override cached, and the run reported a clean pass over an
+ * instrument that had quietly stopped working. That one is fixed at its
+ * source; this catches the next test to do it, because a tool that silently
+ * stops testing is worse than one that is not there.
+ */
+$venueOverride = getenv('CC_TEST_VENUE_TZ');
+
+if ($databaseReady && $venueOverride !== false && $venueOverride !== '') {
+    App\Core\Settings::load(true);
+    $endedAt = App\Core\Settings::timezone();
+
+    if ($endedAt !== $venueOverride) {
+        fwrite(STDERR, sprintf(
+            "\nFAIL: the run started with CC_TEST_VENUE_TZ=%s and ended in %s.\n"
+            . "Some test wrote venue.timezone and did not put it back, so an\n"
+            . "unknown part of this run was NOT in the calendar you asked for.\n"
+            . "Find it and have it save and restore the setting.\n",
+            $venueOverride,
+            $endedAt
+        ));
 
         $exitCode = 1;
     }

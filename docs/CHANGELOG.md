@@ -1062,6 +1062,50 @@ reachable by accident — which is exactly why they needed finding.
   float loses the last cent. Both are now refused and reported against the
   line they came from, rather than imported as a number nobody typed.
 
+### The calendar the tests were written in
+
+- **Three tests broke the moment a run crossed midnight UTC**, and the fix
+  for those three — `test_local_day()`, and the diagnosis it carries — landed
+  with the validator change above. What was left was the question that fix
+  could not answer by itself: whether the rest of the suite had the same
+  thing wrong, and nothing to stop it happening again.
+- **Every date the suite builds from the clock has now been read and
+  classified one at a time** — 71 lines, which is what the new gate below
+  flags on the tree before this change. The ones that reach a venue day were
+  converted to `test_local_day()`; the 29 that remain are UTC on purpose, and
+  each carries a line saying so, because the alternative is every future
+  reader deriving it again. They are not all the same case: `SegmentEngine`
+  windows really are `UTC_TIMESTAMP()`, the importer refuses a future date
+  against its own `gmdate('Y-m-d')`, and a `visit_date` posted to the API and
+  compared only with itself has no calendar in it at all. Three spellings the
+  first pass did not cover are included: bare `gmdate('Y-m-d')`,
+  `strtotime('-3 days')`, and a whole-day offset on a timestamp — which is
+  the shape the two membership tests were actually written in.
+- **A build failure rather than a comment.** `static/quality-gates` refuses a
+  test that builds a day from UTC unless a comment within six lines says why
+  UTC is right there. A marker rather than an allowlist of file:line: an
+  allowlist goes stale on the next insertion above it and then either fails
+  honest tests or silently stops covering the line it named, and the reason
+  belongs where the date is written. An offset in hours or minutes is left
+  alone — those are instants, and instants here really are UTC.
+- **`CC_TEST_VENUE_TZ` runs the whole suite in another venue's calendar**, so
+  this class of bug can be reproduced on demand instead of waiting for the
+  evening. The suite is green in four positions: the Castle inside its bad
+  window, the Castle at midday, a venue 11 hours behind UTC, and a venue 14
+  hours ahead. The last of those found two tests that failed on their own
+  preconditions rather than standing down, which read as a timezone bug
+  rather than as a case that does not apply.
+- **The override now survives the run, and says so if it does not.** Review
+  caught that `http/smoke` saves the venue settings form with a hard-coded
+  `America/New_York`, which SET the zone: from that suite onwards every HTTP
+  request was served in New York while the test process still held the
+  override, and the run reported a clean pass over an instrument that had
+  quietly stopped working. The form now echoes the zone already configured —
+  nothing in that test is about timezones, it is a required field — and
+  `tests/run.php` fails any run that does not end in the zone it was asked
+  for, because a tool that silently stops testing is worse than one that is
+  not there.
+
 ---
 
 ## Unreleased — next
@@ -1105,6 +1149,65 @@ the CEplay box rather than a pull from shared hosting. It also carries the
 five-minute Database Explorer query that settles whether CenterEdge holds
 usable guest email at all — the question `SPEC.md` §14 calls its most
 important, which nobody has ever run.
+
+### Added: removing the example data, which the runbook had been promising
+
+The installer offers "Example guests and bookings" so the reports can be
+judged on something that looks like a Saturday, and the runbook tells a venue
+to delete the lot before importing a real guest list. **There was no way to
+do that** — the doc described a button nobody had written, found while
+preparing the runbook rather than by any test.
+
+**Settings → Backups → Remove the example data** is now that button: it names
+the count first, asks for the word DELETE, and leaves an audit row. It deletes
+the seed's rows EXPLICITLY, children before parents, rather than deleting the
+demo contacts and trusting the database — because every foreign key here is
+`SET NULL` or `CASCADE` and not one is `RESTRICT`, so the obvious version does
+not fail, it SUCCEEDS and leaves fake bookings behind with no guest. That is
+worse than failing: it looks finished. The seed's own header records hitting
+exactly that.
+
+Two things it deliberately will not do: delete a booking or deal the venue
+made itself against an example guest (those are theirs, so they survive with
+no guest attached — and the count is on the page BEFORE the decision, not in
+the message afterwards), and delete the `demo-data` tag while anything else
+still wears it.
+
+### Fixed: a "coming soon" page for four features that had shipped
+
+The sidebar carried a **Marketing** item pointing at an "Arrives in Phase 4"
+placeholder listing campaigns, segments, Text Club and web forms — all four
+of which were live, and three of which sat in the nav directly beneath it.
+The placeholder, its route, its controller and its styles are gone, and
+**Forms** takes the slot, which had no nav entry of its own at all.
+
+A smoke test now walks the sidebar itself and holds every item in it to
+rendering for an owner and to not being a placeholder, so neither a nav link
+that goes nowhere nor one still advertising a shipped feature can come back
+unnoticed.
+
+### Added: screenshots of every section
+
+`docs/screenshots/` — 39 images, one per section plus dark mode and three at
+phone width, with an index naming what to look at in each. `tools/screenshots.js`
+takes them and asserts as it goes: no page logs an error, no page answers
+anything but 200 — checked on the status AND on this application's own error
+titles, which are "Not permitted", "Too many requests" and "Method not allowed"
+rather than the three a first draft guessed at — and no page scrolls sideways
+at 390px, measured on every section rather than on the three captured at phone
+width.
+
+`tools/screenshot-guard.php` runs first and refuses the capture unless every
+contact carries POSITIVE evidence of being fictional in every detail: a
+reserved email domain and a phone in 555-0100 to 555-0199. Where the row came
+from is not evidence, since an example guest can be edited into a real one,
+and a missing email is not evidence either — that is the ordinary shape of a guest who arrived by text, and
+reading it as proof of fiction cleared a whole venue's real list. It also
+refuses a user account on a real email domain (the user list is one of the
+pictures, and the signed-in name is in the sidebar of all of them) and a real
+SMTP host or from-address, which the email settings page shows in full. The
+check is on the DATA, not on a flag somebody set: these images go into git, and
+a venue's guest list in git history is in every clone for ever.
 
 
 Phase 8 is done and written up in `docs/AUDIT.md`. **Phases 1–6 and 8 are

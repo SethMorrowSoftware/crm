@@ -148,6 +148,9 @@ $dealId = DB::insert('deals', [
     'stage_id'    => (int) DB::value('SELECT id FROM {pipeline_stages} ORDER BY id LIMIT 1'),
     'title'       => 'Robin birthday party',
     'contact_id'  => $contactId,
+    // UTC-CORRECT: the deal every quote in this file hangs off. Its date is
+    // never compared with a venue day — the one test here that is about a
+    // calendar day pins a literal, 2030-06-01, on purpose.
     'event_date'  => gmdate('Y-m-d', strtotime('+30 days')),
     'guest_count' => 14,
     'status'      => 'open',
@@ -304,6 +307,8 @@ Harness::test('creating a quote stores the lines and a draft status', function (
     $quote = quotes_create($gm, [
         ['Laser tag for 10', '1', '180.00'],
         ['Extra pizza',      '3', '12.50'],
+        // UTC-CORRECT: stored and read straight back; this test asserts the
+        // lines and the draft status, nothing about expiry.
     ], ['deal_id' => (string) $dealId, 'valid_until' => gmdate('Y-m-d', strtotime('+14 days'))]);
 
     Assert::same('draft', (string) $quote['status'], 'a new quote is a draft, never sent');
@@ -646,7 +651,20 @@ Harness::test('an expiry date is not shifted by the venue timezone', function ()
         'valid_until' => '2030-06-01',
     ]);
 
-    Assert::same('America/New_York', Settings::timezone(), 'the precondition: a venue behind UTC');
+    // The precondition is the PROPERTY, not the zone's name: this test is
+    // about a date being dragged BACK a day by a negative offset, so any
+    // venue behind UTC exercises it and one ahead of UTC has nothing here to
+    // catch. Naming America/New_York instead made this a failure under
+    // CC_TEST_VENUE_TZ, where it read as a timezone bug rather than as a
+    // case that does not apply.
+    $offset = (new DateTimeZone(Settings::timezone()))
+        ->getOffset(new DateTimeImmutable('2030-06-01 00:00:00', new DateTimeZone('UTC')));
+
+    if ($offset >= 0) {
+        Assert::true(true, Settings::timezone() . ' is not behind UTC, so midnight cannot fall back a day');
+
+        return;
+    }
     Assert::same(
         '2030-06-01',
         substr((string) $quote['valid_until'], 0, 10),
@@ -1332,6 +1350,7 @@ Harness::test('seeing every quote is not permission to edit, re-status or send o
     Assert::same(
         404,
         $supervisor->postWithToken('/quotes/' . $id, '/quotes/' . $id, [
+            // UTC-CORRECT: filler in a payload that is refused on scope.
             'valid_until' => gmdate('Y-m-d', strtotime('+14 days')),
             'notes'       => 'Edited by somebody it does not belong to',
             'lines[0][description]' => 'Rewritten line',

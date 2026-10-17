@@ -365,6 +365,10 @@ Harness::test('money is EMPTY for a money-blind token, and the keys stay', funct
         'booking_number' => 'HA-' . bin2hex(random_bytes(3)),
         'type'           => 'birthday',
         'status'         => 'confirmed',
+        // UTC-CORRECT: the API index has no date window — it pages by id and
+        // filters only on `updated_since` — so this row comes back whichever
+        // calendar its event_date was written in. The subject is the money
+        // keys, not the day.
         'event_date'     => gmdate('Y-m-d'),
         'guest_count'    => 14,
         'total_cents'    => 54900,
@@ -581,7 +585,11 @@ Harness::test('a visit goes through the recorder, so a repeat is not a second vi
         'source'     => 'hatest',
     ]);
 
-    $id  = (int) $created['json']['data']['id'];
+    $id = (int) $created['json']['data']['id'];
+
+    // UTC-CORRECT: this day is posted and then posted again, and the only
+    // thing read from it is whether the two match. Nothing buckets it by the
+    // venue's calendar, so the frame it is built in cannot change the answer.
     $day = gmdate('Y-m-d', time() - 86400);
 
     $first = ha_call('POST', '/api/v1/visits', $full, [
@@ -758,6 +766,8 @@ Harness::test('A WRITE IS SCOPED BY THE WRITE PERMISSION, NOT THE READ ONE', fun
 
     $visit = ha_call('POST', '/api/v1/visits', $split, [
         'contact_id'  => $somebodys,
+        // UTC-CORRECT: filler for a payload that is refused on scope before
+        // the date is looked at. No calendar reads it.
         'visit_date'  => gmdate('Y-m-d', time() - 86400),
         'spend_cents' => 5000,
     ]);
@@ -784,6 +794,8 @@ Harness::test('A WRITE IS SCOPED BY THE WRITE PERMISSION, NOT THE READ ONE', fun
     // And my own guest still works, so the scope narrowed rather than broke.
     $ok = ha_call('POST', '/api/v1/visits', $split, [
         'contact_id'  => $mine,
+        // UTC-CORRECT: stored verbatim and never read back as a day — this
+        // test asserts the status, not what the visit is filed under.
         'visit_date'  => gmdate('Y-m-d', time() - 86400),
         'spend_cents' => 5000,
     ]);
@@ -802,6 +814,8 @@ Harness::test('a visit cannot be recorded on a DELETED guest either', function (
     // not something an integration should be able to do by accident.
     $response = ha_call('POST', '/api/v1/visits', $full, [
         'contact_id'  => $id,
+        // UTC-CORRECT: filler for a payload refused because the guest is
+        // deleted. The day never reaches a report.
         'visit_date'  => gmdate('Y-m-d', time() - 86400),
         'spend_cents' => 1000,
     ]);
@@ -834,6 +848,7 @@ Harness::test('A VISIT NEEDS A REAL CONTACT, so the id space cannot be walked', 
     foreach ([$absent, $absent + 7, 999999999, -1, 0] as $id) {
         $response = ha_call('POST', '/api/v1/visits', $full, [
             'contact_id' => $id,
+            // UTC-CORRECT: filler for a payload refused on the contact id.
             'visit_date' => gmdate('Y-m-d', time() - 86400),
         ]);
 
@@ -894,6 +909,7 @@ Harness::test('DELETING NEEDS THE DELETE PERMISSION, NOT THE EDIT ONE', function
         'booking_number' => 'HA-' . strtoupper(bin2hex(random_bytes(3))),
         'type'           => 'birthday',
         'status'         => 'inquiry',
+        // UTC-CORRECT: a row that exists only to be refused by permission.
         'event_date'     => gmdate('Y-m-d', time() + 86400 * 30),
         'source'         => 'hatest',
         'created_at'     => now_utc(),

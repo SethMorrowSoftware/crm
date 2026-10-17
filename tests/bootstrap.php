@@ -130,11 +130,66 @@ function test_boot(bool $fresh = false): bool
     // non-null foreign key, so the reputation module needs a survey to exist.
     (require CC_ROOT . '/install/seeds/surveys.php')();
 
+    test_apply_venue_tz_override();
+
     Settings::load(true);
 
     $booted = true;
 
     return true;
+}
+
+/**
+ * Move the venue's timezone for the run, so the suite can be audited for
+ * UTC-versus-local date bugs without waiting for the clock.
+ *
+ *   CC_TEST_VENUE_TZ=Pacific/Kiritimati php tests/run.php     local is AHEAD
+ *   CC_TEST_VENUE_TZ=Pacific/Midway     php tests/run.php     local is BEHIND
+ *
+ * The bug this exists to find — see `test_local_day()` below — only shows
+ * itself while the venue's calendar day and UTC's disagree, which for
+ * `America/New_York` is the four hours between 8pm and midnight Eastern. A
+ * test written in the wrong frame therefore passes all day and fails in the
+ * evening, which is both the worst way to find out and the hardest state to
+ * reproduce on purpose.
+ *
+ * Moving the venue instead of the clock reproduces it on demand, but WHICH
+ * side of midnight you get still depends on the hour you run at, so it is
+ * worth knowing exactly what each one buys:
+ *
+ *   Pacific/Midway     (UTC-11) is a day BEHIND  UTC from 00:00 to 10:59 UTC
+ *   Pacific/Kiritimati (UTC+14) is a day AHEAD of UTC from 10:00 to 23:59 UTC
+ *
+ * Between them, some skew is available at every hour of the day, and the two
+ * directions together are the whole space. Neither observes daylight saving,
+ * so a failure under one of them is a frame error and never a DST artefact.
+ * To choose the direction rather than take what the hour gives — running the
+ * venue-ahead case in the morning, say — put the clock where you need it with
+ * `faketime`, and start MySQL under the same offset so that `UTC_TIMESTAMP()`
+ * and PHP's `time()` still agree.
+ *
+ * This writes the same settings row the installer writes, which is what makes
+ * it reach the HTTP suite too: that runs in a separate web-server process,
+ * so an override held only in this process's memory would not apply to it.
+ */
+function test_apply_venue_tz_override(): void
+{
+    $zone = getenv('CC_TEST_VENUE_TZ');
+
+    if ($zone === false || $zone === '') {
+        return;
+    }
+
+    try {
+        new DateTimeZone($zone);
+    } catch (Throwable) {
+        fwrite(STDERR, "\n[test bootstrap] CC_TEST_VENUE_TZ=\"{$zone}\" is not a timezone.\n");
+        exit(1);
+    }
+
+    Settings::set('venue.timezone', $zone);
+
+    echo 'Venue timezone overridden: ' . $zone . "\n";
 }
 
 /**
@@ -163,13 +218,15 @@ function test_drop_all(): void
 }
 
 /**
- * Create a user for a test and return its id.
- *
- * @param array<string,mixed> $overrides
- */
-/**
  * A date N days ago IN THE VENUE'S OWN CALENDAR, which is the frame the
  * application reasons in.
+ *
+ * ```php
+ * test_local_day()                // today, at the venue
+ * test_local_day(7)               // a week ago
+ * test_local_day(-7)              // a week from now: negative is the future
+ * test_local_day(10, '12:00:00')  // that day, as a timestamp
+ * ```
  *
  * Use this instead of `gmdate('Y-m-d', time() - N * 86400)` whenever a test
  * builds a date the code will compare against a venue-local day — a
@@ -185,16 +242,31 @@ function test_drop_all(): void
  *
  * None of them was a bug in the application. All three were a test telling the
  * truth about the wrong calendar.
+ *
+ * MIDDAY IS THE RIGHT TIME OF DAY TO ASK FOR when a column wants a timestamp:
+ * noon is the same calendar day in the venue's frame and in UTC whatever the
+ * offset, so the value says what it means however the column is later read.
+ * That is what makes `test_local_day(10, '12:00:00')` safe to write into
+ * `updated_at`, which `MembershipLifecycle::unfreeze()` reads the date part
+ * of and compares against the venue's today.
  */
 function test_local_day(int $daysAgo = 0, string $suffix = ''): string
 {
+    // `%+d` rather than '-N days': a negative $daysAgo is a date in the
+    // FUTURE, and spelling that by hand produces '--7 days', which is not a
+    // relative format at all. TriggersTest counts forward through this.
     $day = (new DateTimeImmutable('now', venue_tz()))
-        ->modify(($daysAgo === 0 ? '' : '-' . $daysAgo . ' days') ?: 'now')
+        ->modify(sprintf('%+d days', -$daysAgo))
         ->format('Y-m-d');
 
     return $suffix === '' ? $day : $day . ' ' . $suffix;
 }
 
+/**
+ * Create a user for a test and return its id.
+ *
+ * @param array<string,mixed> $overrides
+ */
 function test_make_user(string $roleSlug = 'owner', array $overrides = []): int
 {
     $roleId = (int) DB::value('SELECT id FROM {roles} WHERE slug = :s', ['s' => $roleSlug]);

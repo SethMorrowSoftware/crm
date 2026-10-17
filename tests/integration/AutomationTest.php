@@ -856,6 +856,8 @@ Harness::test(
             'booking_number' => 'AUTEST-' . bin2hex(random_bytes(3)),
             'contact_id'     => $contactId,
             'type'           => 'birthday',
+            // UTC-CORRECT: the exit condition is `has_booking is_true`, an
+            // existence check. The date is filler.
             'event_date'     => gmdate('Y-m-d', time() + 86400 * 30),
             'start_time'     => '14:00:00',
             'status'         => 'confirmed',
@@ -896,6 +898,8 @@ Harness::test('a cancelled booking does not count as having booked', function ()
         'booking_number' => 'AUTEST-' . bin2hex(random_bytes(3)),
         'contact_id'     => $contactId,
         'type'           => 'birthday',
+        // UTC-CORRECT: same existence check; what is under test is the
+        // status, not the day.
         'event_date'     => gmdate('Y-m-d', time() + 86400 * 30),
         'status'         => 'cancelled',
         'guest_count'    => 10,
@@ -1380,6 +1384,8 @@ Harness::test(
         $bookingId = (int) DB::insert('bookings', [
             'booking_number' => 'AU-' . bin2hex(random_bytes(4)),
             'contact_id'     => $contactId,
+            // UTC-CORRECT: the subject is which contact the run finds from a
+            // booking id. Nothing reads this date.
             'event_date'     => gmdate('Y-m-d', time() + 86400 * 10),
             'start_time'     => '14:00',
             'end_time'       => '16:00',
@@ -1821,6 +1827,8 @@ Harness::test('the same guest is not given the same offer twice', function (): v
 Harness::test('an offer that has run out is skipped, and the sequence goes on', function (): void {
     au_clear();
 
+    // UTC-CORRECT: an instant that is simply in the past, compared against
+    // UTC now by the issue_coupon step.
     au_coupon('AUTESTOLD', ['expires_at' => gmdate('Y-m-d H:i:s', time() - 86400)]);
     au_template('autest-after-coupon');
 
@@ -2094,6 +2102,9 @@ Harness::test(
         Assert::greaterThan(0, (int) ($config['days'] ?? 0));
 
         // The engine's own answer, against a party six weeks out.
+        // UTC-CORRECT: `$expected` below is derived from `$party` itself, so
+        // this date is only ever compared with itself; the one clock-relative
+        // claim is "still in the future", which six weeks settles.
         $party = gmdate('Y-m-d', time() + 42 * 86400);
 
         $when = AutomationEngine::scheduleStep(
@@ -2116,6 +2127,11 @@ Harness::test(
          * and 27 after it — which is a test that passes or fails by the clock
          * on the wall, and it did exactly that (Expected 28, got 27) once the
          * day had got on a bit. The contract is the date.
+         *
+         * UTC-CORRECT: the `strtotime()` below reads an ABSOLUTE instant —
+         * `$party` at noon UTC — not a relative one, so no clock enters this
+         * at all. The static gate cannot tell those two apart and flags any
+         * `strtotime`, which is why this says so out loud.
          */
         $expected = gmdate(
             'Y-m-d',

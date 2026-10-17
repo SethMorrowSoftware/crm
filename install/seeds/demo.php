@@ -536,6 +536,11 @@ return static function (): array {
         }
     }
 
+    // The one mark of "the seed made this guest" that nothing else can write.
+    // `source = 'demo'` is set too, but the contact form and the API can set
+    // it as well, so Settings → Backups trusts only this list.
+    App\Core\Settings::set('demo.seed_contact_ids', array_values(array_map('intval', $contactIds)));
+
     return [
         'contacts' => $contacts,
         'children' => $children,

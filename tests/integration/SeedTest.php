@@ -287,6 +287,8 @@ Harness::test('the demo seed produces both a lapsed and a recent guest', functio
     // So the lapsed-guest report and the recent-visit widget each have a row.
     $lapseDays = 120;
 
+    // UTC-CORRECT: this test compares a stored UTC instant against a UTC
+    // instant in its own SQL. Nothing here is a calendar day.
     $lapsed = (int) DB::value(
         "SELECT COUNT(*) FROM {contacts}
           WHERE source = 'demo' AND last_visit_at < :cutoff",
@@ -296,6 +298,7 @@ Harness::test('the demo seed produces both a lapsed and a recent guest', functio
     $recent = (int) DB::value(
         "SELECT COUNT(*) FROM {contacts}
           WHERE source = 'demo' AND last_visit_at >= :cutoff",
+        // UTC-CORRECT: the other half of the same comparison.
         ['cutoff' => gmdate('Y-m-d H:i:s', time() - (30 * 86400))]
     );
 
@@ -457,6 +460,414 @@ Harness::test('every demo row is reachable from the demo-data tag', function ():
         (int) DB::value('SELECT COUNT(*) FROM {consent_log}'),
         'consent rows should have cascaded with their contact'
     );
+
+    test_reset_transactional_data();
+});
+
+// ------------------------------------------- the removal the runbook promises
+//
+// The test above proves the cleanup is POSSIBLE by hand. These prove the
+// button does it, because the runbook tells a venue to press one before
+// importing a real guest list, and for most of a release that button did not
+// exist — the doc described a feature nobody had written.
+
+Harness::test('THE DEMO REMOVAL TAKES EVERYTHING THE SEED CREATED', function (): void {
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $before = App\Services\DemoData::summary();
+
+    Assert::true($before['present'], 'the seed just ran, so there is something to remove');
+
+    foreach (['contact', 'household', 'child', 'visit', 'deal', 'activity', 'task', 'booking'] as $type) {
+        Assert::greaterThan(0, $before['counts'][$type] ?? 0, $type . ' should be counted');
+    }
+
+    $removed = App\Services\DemoData::remove();
+
+    Assert::same($before['total'], $removed['total'], 'it removes what it said it would');
+
+    // The tagged tables.
+    foreach (['contacts', 'households', 'children', 'visits', 'deals', 'activities',
+              'tasks', 'bookings'] as $table) {
+        Assert::same(
+            0,
+            (int) DB::value('SELECT COUNT(*) FROM {' . $table . '}'),
+            $table . ' must be empty after the removal'
+        );
+    }
+
+    // And the two that cascade rather than carry the tag. Bookings are the
+    // one that matters: their FK to contacts is SET NULL, so a removal that
+    // only deleted contacts would leave these behind, looking finished.
+    Assert::same(0, (int) DB::value('SELECT COUNT(*) FROM {booking_payments}'));
+    Assert::same(0, (int) DB::value('SELECT COUNT(*) FROM {consent_log}'));
+
+    Assert::false(
+        DB::exists("SELECT id FROM {tags} WHERE name = 'demo-data'"),
+        'the marker tag goes too once nothing wears it'
+    );
+
+    test_reset_transactional_data();
+});
+
+Harness::test('the removal names what it will delete in words, not type names', function (): void {
+    // The first version of the card offered to delete "8 activitys, 11 childs".
+    $words = App\Services\DemoData::describe([
+        'contact' => 8, 'household' => 1, 'child' => 11, 'visit' => 7,
+        'deal' => 8, 'activity' => 8, 'task' => 5, 'booking' => 2,
+    ]);
+
+    Assert::same(
+        '8 guests, 1 household, 11 children, 7 visits, 8 party enquiries, 8 activities, 5 tasks, 2 bookings',
+        $words
+    );
+
+    Assert::same('1 guest, 1 child', App\Services\DemoData::describe(['contact' => 1, 'child' => 1]));
+    Assert::same('', App\Services\DemoData::describe([]), 'nothing to delete says nothing');
+    Assert::same('', App\Services\DemoData::describe(['contact' => 0]), 'and neither does zero');
+});
+
+Harness::test('removing the demo data twice is not an error', function (): void {
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    App\Services\DemoData::remove();
+
+    $after = App\Services\DemoData::summary();
+
+    Assert::false($after['present'], 'nothing left to find');
+    Assert::same(0, $after['total']);
+
+    $second = App\Services\DemoData::remove();
+
+    Assert::same(0, $second['total'], 'a second removal does nothing rather than throwing');
+
+    test_reset_transactional_data();
+});
+
+Harness::test('THE REMOVAL KEEPS WHAT THE VENUE MADE ITSELF, AND SAYS SO FIRST', function (): void {
+    // A venue kicking the tyres takes a booking against an example guest to
+    // see the flow. That booking is theirs, not the seed's, so it survives —
+    // but it survives with no guest attached, and the only honest place to
+    // say so is BEFORE the removal, not in the flash message afterwards.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $contactId = (int) DB::value("SELECT id FROM {contacts} WHERE source = 'demo' LIMIT 1");
+
+    Assert::greaterThan(0, $contactId);
+
+    $mine = DB::insert('bookings', [
+        'booking_number' => 'TRIAL-0001',
+        'contact_id'     => $contactId,
+        'status'         => 'confirmed',
+        // A party happens on the venue's own calendar day, not on UTC's.
+        'event_date'     => test_local_day(-1),
+        'start_time'     => '14:00:00',
+        'end_time'       => '16:00:00',
+        'created_at'     => gmdate('Y-m-d H:i:s'),
+        'updated_at'     => gmdate('Y-m-d H:i:s'),
+    ]);
+
+    $summary = App\Services\DemoData::summary();
+
+    Assert::same(1, $summary['untagged_linked'], 'the venue own booking is counted and named');
+
+    App\Services\DemoData::remove();
+
+    $survivor = DB::first('SELECT contact_id FROM {bookings} WHERE id = :id', ['id' => $mine]);
+
+    Assert::notNull($survivor, 'a booking the venue made is never deleted by this');
+    Assert::null($survivor['contact_id'], 'and its example guest is gone, so it has none');
+
+    test_reset_transactional_data();
+});
+
+Harness::test('A TAG NAMED demo-data IS NOT ON ITS OWN A REASON TO DELETE GUESTS', function (): void {
+    // `demo-data` is an ordinary tag with an ordinary name, and the automation
+    // engine's "Add a tag" step takes free text and creates the tag if it is
+    // missing. So a venue that names a tag `demo-data` for its own purposes
+    // gets REAL contacts wearing it — and on an install where the seed never
+    // ran, this used to offer to delete them.
+    test_reset_transactional_data();
+
+    $now   = gmdate('Y-m-d H:i:s');
+    $tagId = DB::insert('tags', ['name' => 'demo-data', 'color' => '#b45309',
+                                 'group' => 'system', 'created_at' => $now]);
+
+    $realContact = DB::insert('contacts', [
+        'first_name' => 'Dana',
+        'last_name'  => 'Whitfield',
+        'email'      => 'dana.whitfield@example.test',
+        // NOT 'demo'. This guest walked in; nothing seeded them.
+        'source'     => 'walk_in',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    DB::insert('taggables', ['tag_id' => $tagId, 'entity_type' => 'contact',
+                             'entity_id' => $realContact, 'created_at' => $now]);
+
+    $summary = App\Services\DemoData::summary();
+
+    Assert::false($summary['present'], 'the seed never ran, so there is nothing of its to remove');
+    Assert::same(0, $summary['total']);
+
+    $removed = App\Services\DemoData::remove();
+
+    Assert::same(0, $removed['total'], 'and the removal takes nothing');
+    Assert::true(
+        DB::exists('SELECT id FROM {contacts} WHERE id = :id', ['id' => $realContact]),
+        'the venue\'s own guest is untouched'
+    );
+
+    test_reset_transactional_data();
+});
+
+Harness::test('and a real guest wearing that tag survives a removal that DOES run', function (): void {
+    // The harder case: the seed HAS run, so the removal is legitimate — but a
+    // contact the venue tagged itself must still not go with it. `source` is
+    // the second mark; the seed stamps it and nothing in the UI can.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $now   = gmdate('Y-m-d H:i:s');
+    $tagId = (int) DB::value("SELECT id FROM {tags} WHERE name = 'demo-data'");
+
+    $realContact = DB::insert('contacts', [
+        'first_name' => 'Dana',
+        'last_name'  => 'Whitfield',
+        'email'      => 'dana.whitfield@example.test',
+        'source'     => 'walk_in',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    DB::insert('taggables', ['tag_id' => $tagId, 'entity_type' => 'contact',
+                             'entity_id' => $realContact, 'created_at' => $now]);
+
+    $summary = App\Services\DemoData::summary();
+
+    Assert::true($summary['present']);
+    Assert::same(8, $summary['counts']['contact'], 'the seed\'s eight, not nine');
+
+    App\Services\DemoData::remove();
+
+    Assert::true(
+        DB::exists('SELECT id FROM {contacts} WHERE id = :id', ['id' => $realContact]),
+        'the venue\'s own guest survives'
+    );
+    Assert::same(
+        0,
+        (int) DB::value("SELECT COUNT(*) FROM {contacts} WHERE source = 'demo'"),
+        'and the seed\'s are all gone'
+    );
+
+    test_reset_transactional_data();
+});
+
+Harness::test('IT NAMES THE WORK OF YOUR OWN THAT THE DATABASE WILL DESTROY', function (): void {
+    /*
+     * A quote written on an example enquiry is NOT kept — `quotes.deal_id` is
+     * ON DELETE CASCADE, so deleting the demo deal takes it. That is the
+     * opposite of the bookings case, and the runbook actively tells a trial
+     * user to do exactly this ("the enquiry in the pipeline -> quote ->
+     * deposit"). Being told afterwards is no use; the count has to be on the
+     * page before the decision.
+     */
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $dealId = (int) DB::value('SELECT entity_id FROM {taggables} t
+                                JOIN {tags} g ON g.id = t.tag_id
+                               WHERE g.name = \'demo-data\' AND t.entity_type = \'deal\' LIMIT 1');
+
+    Assert::greaterThan(0, $dealId);
+
+    $now = gmdate('Y-m-d H:i:s');
+
+    $quoteId = DB::insert('quotes', [
+        'deal_id'        => $dealId,
+        'number'         => 'Q-TRIAL-0001',
+        'status'         => 'draft',
+        'subtotal_cents' => 54900,
+        'total_cents'    => 59361,
+        'created_at'     => $now,
+        'updated_at'     => $now,
+    ]);
+
+    $summary = App\Services\DemoData::summary();
+
+    Assert::same(1, $summary['cascade_total'], 'the quote is counted');
+    Assert::same(1, $summary['cascade']['quotes'] ?? 0);
+    Assert::contains(
+        'quotes written on an example enquiry',
+        App\Services\DemoData::describeCascade($summary['cascade']),
+        'and named in words the operator can act on'
+    );
+
+    App\Services\DemoData::remove();
+
+    Assert::false(
+        DB::exists('SELECT id FROM {quotes} WHERE id = :id', ['id' => $quoteId]),
+        'it really does go — the count was not a false alarm'
+    );
+
+    test_reset_transactional_data();
+});
+
+Harness::test('a real guest who also has source "demo" is still not the seed\'s', function (): void {
+    // `source` is an ordinary column: the contact form, the API and an
+    // automation step can all write it. So a real guest wearing the tag AND
+    // carrying source = 'demo' must survive too. Only the ids the seed
+    // recorded count as its own.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $now   = gmdate('Y-m-d H:i:s');
+    $tagId = (int) DB::value("SELECT id FROM {tags} WHERE name = 'demo-data'");
+
+    $forged = DB::insert('contacts', [
+        'first_name' => 'Dana',
+        'last_name'  => 'Whitfield',
+        'email'      => 'dana.whitfield@example.test',
+        'source'     => 'demo',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    DB::insert('taggables', ['tag_id' => $tagId, 'entity_type' => 'contact',
+                             'entity_id' => $forged, 'created_at' => $now]);
+
+    Assert::same(8, App\Services\DemoData::summary()['counts']['contact'], 'the seed\'s eight, not nine');
+
+    App\Services\DemoData::remove();
+
+    Assert::true(
+        DB::exists('SELECT id FROM {contacts} WHERE id = :id', ['id' => $forged]),
+        'the guest whose source merely says "demo" survives'
+    );
+
+    test_reset_transactional_data();
+});
+
+Harness::test('a campaign delivery to an example guest is named as deleted, not kept', function (): void {
+    // `campaign_recipients.contact_id` is ON DELETE CASCADE, so the venue's
+    // delivery history to an example guest goes with the guest.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $contactId  = (int) DB::value("SELECT id FROM {contacts} WHERE source = 'demo' LIMIT 1");
+    $now        = gmdate('Y-m-d H:i:s');
+    $campaignId = DB::insert('campaigns', ['name' => 'Trial blast', 'created_at' => $now, 'updated_at' => $now]);
+
+    DB::insert('campaign_recipients', ['campaign_id' => $campaignId, 'contact_id' => $contactId]);
+
+    $summary = App\Services\DemoData::summary();
+
+    Assert::same(1, $summary['cascade']['deliveries'] ?? 0, 'counted before the decision');
+    Assert::contains(
+        'campaign deliveries to an example guest',
+        App\Services\DemoData::describeCascade($summary['cascade'])
+    );
+
+    test_reset_transactional_data();
+});
+
+Harness::test('a visit the venue recorded for an example guest is named, the seed\'s own are not', function (): void {
+    // `visits.contact_id` is ON DELETE CASCADE. The seed's visits are tagged
+    // and are part of the ordinary counts; one recorded during the trial is
+    // the venue's and goes with the guest, so it must be named first.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    Assert::same(0, App\Services\DemoData::summary()['cascade_total'], 'the seed alone loses nothing of yours');
+
+    $contactId = (int) DB::value("SELECT id FROM {contacts} WHERE source = 'demo' LIMIT 1");
+    $now       = gmdate('Y-m-d H:i:s');
+
+    DB::insert('visits', [
+        'contact_id' => $contactId,
+        // A fixed far-off day, so it cannot collide with a seeded visit on
+        // the one-visit-per-day key.
+        'visit_date' => '2099-01-01',
+        'source'     => 'manual',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    $summary = App\Services\DemoData::summary();
+
+    Assert::same(1, $summary['cascade']['visits'] ?? 0, 'the trial visit is counted, the seed\'s are not');
+
+    test_reset_transactional_data();
+});
+
+Harness::test('and it counts an orphan that is not a booking or a deal', function (): void {
+    // A membership sold to an example guest came back active, paid for and
+    // owned by nobody, while the page named only bookings and deals.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $contactId = (int) DB::value("SELECT id FROM {contacts} WHERE source = 'demo' LIMIT 1");
+    $now       = gmdate('Y-m-d H:i:s');
+
+    $planId = (int) DB::value('SELECT id FROM {membership_plans} LIMIT 1');
+
+    if ($planId === 0) {
+        // The plans come from the venue seed. Without one there is no
+        // membership to sell, and this case has nothing to say.
+        return;
+    }
+
+    $before = App\Services\DemoData::summary()['untagged_linked'];
+
+    DB::insert('memberships', [
+        'plan_id'          => $planId,
+        'contact_id'       => $contactId,
+        'status'           => 'active',
+        'member_number'    => 'M-TRIAL-0001',
+        'started_at'       => test_local_day(0),
+        'price_paid_cents' => 29900,
+        'created_at'       => $now,
+        'updated_at'       => $now,
+    ]);
+
+    Assert::same(
+        $before + 1,
+        App\Services\DemoData::summary()['untagged_linked'],
+        'the membership is counted among what will be left with no guest'
+    );
+
+    test_reset_transactional_data();
+});
+
+Harness::test('the removal leaves a tag the venue uses itself alone', function (): void {
+    // `demo-data` is an ordinary tag. If somebody has put it on their own
+    // rows, deleting the tag would silently untag their work.
+    test_reset_transactional_data();
+    load_seed('demo')();
+
+    $tagId = (int) DB::value("SELECT id FROM {tags} WHERE name = 'demo-data'");
+    $now   = gmdate('Y-m-d H:i:s');
+
+    // A row of theirs, of a type the seed never tags, wearing the same tag.
+    DB::query(
+        'INSERT IGNORE INTO {taggables} (tag_id, entity_type, entity_id, created_at)
+         VALUES (:tag, :type, :id, :at)',
+        ['tag' => $tagId, 'type' => 'company', 'id' => 99999, 'at' => $now]
+    );
+
+    App\Services\DemoData::remove();
+
+    Assert::true(
+        DB::exists('SELECT id FROM {tags} WHERE id = :id', ['id' => $tagId]),
+        'the tag stays while anything still wears it'
+    );
+
+    DB::delete('taggables', 'tag_id = :tag', ['tag' => $tagId]);
+    DB::delete('tags', 'id = :id', ['id' => $tagId]);
 
     test_reset_transactional_data();
 });
@@ -861,7 +1272,13 @@ Harness::test('A MILESTONE CONGRATULATES A GUEST ONCE, NOT ON EVERY LATER VISIT'
         for ($day = 0; $day < 12; $day++) {
             App\Services\VisitRecorder::record([
                 'contact_id'  => $contactId,
-                'visit_date'  => gmdate('Y-m-d', time() - ($day * 86400)),
+                // Venue days, because that is what a visit_date IS here —
+                // "the day a guest would say they came", which is the same
+                // thing VisitRecorder fills in when a caller omits it. Only
+                // distinctness matters to the count below, but a UTC "today"
+                // files the first of these on a day the venue has not
+                // reached yet.
+                'visit_date'  => test_local_day($day),
                 'source'      => 'check_in',
                 'spend_cents' => 2500,
             ]);

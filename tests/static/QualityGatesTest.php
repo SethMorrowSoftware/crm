@@ -1069,6 +1069,306 @@ Harness::test('no unit test touches the database', function (): void {
     );
 });
 
+// -------------------------------------------------- which calendar a test means
+
+/**
+ * Every PHP file in the test suite itself.
+ *
+ * @return list<string>
+ */
+function suite_php_files(): array
+{
+    $files = [];
+
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator(CC_ROOT . '/tests', FilesystemIterator::SKIP_DOTS)
+    );
+
+    foreach ($iterator as $file) {
+        if ($file->isFile() && $file->getExtension() === 'php') {
+            $files[] = $file->getPathname();
+        }
+    }
+
+    sort($files);
+
+    return $files;
+}
+
+/**
+ * Every call in a file that builds a calendar day out of the clock.
+ *
+ * Read with PHP's own tokeniser rather than a regex over lines, and that is
+ * not gold-plating — the first version of this gate WAS a regex per line, and
+ * a reviewer pointed at `tests/integration/AutomationTest.php`, where a
+ * perfectly ordinary wrapped call
+ *
+ *     $expected = gmdate(
+ *         'Y-m-d',
+ *         (int) strtotime($party . ' 12:00:00 UTC') - ((int) $config['days'] * 86400)
+ *     );
+ *
+ * walked straight through it: the function, the format and the clock are on
+ * three different lines, and `(int) ` sat between the comma and `strtotime`.
+ * Both are normal formatting that this suite already uses. A gate that green-
+ * lights the one spelling a future author is most likely to reach for is the
+ * false assurance this file warns about two tests above.
+ *
+ * The tokeniser also makes three earlier special cases disappear: a comment
+ * explaining the wrong spelling is a comment token and never matches, so this
+ * file no longer has to skip itself or guess at comment lines, and `'` versus
+ * `"` stops mattering.
+ *
+ * A format built at runtime — `gmdate($format, ...)` — is not judged, because
+ * nothing here can know what it holds. None exists in the suite today.
+ *
+ * `strtotime()` is treated as the clock whatever it is passed, so an ABSOLUTE
+ * `strtotime('2026-01-01 12:00:00 UTC')` trips this too. Separating the two
+ * statically means parsing the relative-format grammar, which is a lot of
+ * machinery for a handful of sites; the one in the suite says UTC-CORRECT and
+ * explains itself in a line, which is the better trade.
+ *
+ * @return list<array{0:int,1:string}> the line the call starts on, and what is wrong with it
+ */
+function utc_day_calls(string $contents): array
+{
+    $tokens = token_get_all($contents);
+    $count  = count($tokens);
+    $found  = [];
+
+    for ($i = 0; $i < $count; $i++) {
+        $token = $tokens[$i];
+
+        // `\gmdate(` is one T_NAME_FULLY_QUALIFIED token, not a T_STRING, and
+        // it is a spelling this suite uses, so both have to be read.
+        if (!is_array($token) || !in_array($token[0], [T_STRING, T_NAME_FULLY_QUALIFIED], true)) {
+            continue;
+        }
+
+        $name = strtolower(ltrim($token[1], '\\'));
+
+        if ($name !== 'gmdate' && $name !== 'date') {
+            continue;
+        }
+
+        // A method or a declaration of the same name is not the global
+        // function: `\$clock->date(...)`, `Foo::date(...)`, `function date(`.
+        $before = null;
+
+        for ($j = $i - 1; $j >= 0; $j--) {
+            if (is_array($tokens[$j]) && in_array($tokens[$j][0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            $before = $tokens[$j];
+            break;
+        }
+
+        if (is_array($before) && in_array(
+            $before[0],
+            [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON, T_FUNCTION, T_NEW],
+            true
+        )) {
+            continue;
+        }
+
+        // The opening parenthesis of the call, if this is a call at all.
+        $open = null;
+
+        for ($j = $i + 1; $j < $count; $j++) {
+            if (is_array($tokens[$j]) && in_array($tokens[$j][0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            $open = $tokens[$j] === '(' ? $j : null;
+            break;
+        }
+
+        if ($open === null) {
+            continue;
+        }
+
+        // Split the call's arguments on top-level commas, so a nested call or
+        // an array literal inside one does not end it early.
+        $arguments = [];
+        $current   = '';
+        $depth     = 0;
+
+        for ($j = $open; $j < $count; $j++) {
+            $piece = is_array($tokens[$j]) ? $tokens[$j][1] : $tokens[$j];
+
+            if (is_array($tokens[$j]) && in_array($tokens[$j][0], [T_COMMENT, T_DOC_COMMENT], true)) {
+                continue;
+            }
+
+            if ($piece === '(' || $piece === '[') {
+                $depth++;
+
+                if ($depth === 1) {
+                    continue;
+                }
+            } elseif ($piece === ')' || $piece === ']') {
+                $depth--;
+
+                if ($depth === 0) {
+                    $arguments[] = $current;
+                    break;
+                }
+            } elseif ($piece === ',' && $depth === 1) {
+                $arguments[] = $current;
+                $current     = '';
+
+                continue;
+            }
+
+            $current .= $piece;
+        }
+
+        $format = trim($arguments[0] ?? '');
+
+        if ($format === '' || ($format[0] !== "'" && $format[0] !== '"')) {
+            continue; // not a literal format; nothing can be said about it
+        }
+
+        $format = trim($format, "'\"");
+
+        if (!str_starts_with($format, 'Y-m-d')) {
+            continue;
+        }
+
+        $line  = $token[2];
+        $clock = preg_replace('/\s+/', '', $arguments[1] ?? '') ?? '';
+        $fromClock = str_contains($clock, 'time()') || str_contains($clock, 'strtotime(');
+
+        if ($name === 'date') {
+            $found[] = [$line, "date() follows the process timezone, not the venue's"];
+
+            continue;
+        }
+
+        if (!isset($arguments[1])) {
+            /*
+             * `gmdate('Y-m-d H:i:s')` is NOW, which is the same instant in
+             * every calendar and is how half the fixtures in this suite
+             * stamp `created_at`. Only a bare DAY is a claim about a
+             * calendar, and only that is flagged.
+             */
+            if (!str_contains($format, 'H')) {
+                $found[] = [$line, "gmdate('Y-m-d') is today in UTC, which is tomorrow at the venue after 8pm"];
+            }
+
+            continue;
+        }
+
+        if (!$fromClock) {
+            continue; // a fixed timestamp, which says what it means
+        }
+
+        if (!str_contains($format, 'H')) {
+            $found[] = [$line, 'a day counted off the clock in UTC'];
+
+            continue;
+        }
+
+        // A timestamp, where only a WHOLE-DAY offset means "N days ago".
+        if (str_contains($clock, '86400')) {
+            $found[] = [$line, 'a whole number of days, in UTC, written into a timestamp'];
+        }
+    }
+
+    return $found;
+}
+
+Harness::test('no test builds a calendar day out of UTC without saying why', function (): void {
+    /*
+     * THE APPLICATION REASONS IN THE VENUE'S DAY. UTC IS A DIFFERENT DAY FOR
+     * FOUR HOURS OUT OF EVERY TWENTY-FOUR.
+     *
+     * `venue_tz()` is America/New_York, so from 8pm Eastern until midnight it
+     * is already tomorrow in UTC. `MembershipLifecycle::today()`,
+     * `ReportRunner::today()`, `ReportRollup::today()` and everything through
+     * `App\Services\LocalDay` ask the venue. A test that builds its dates
+     * with `gmdate()` and expects one of those to agree is therefore wrong
+     * for four hours a day — and it does not fail like a flake. It passes
+     * every morning and fails every evening, which is how three of them
+     * passed every run there had ever been and then went red together the
+     * moment one crossed midnight UTC: a membership gave back 9 days instead
+     * of 10, its HTTP twin lost "moved on by 7 days", and a rollup read
+     * 25000 against 96000.
+     *
+     * So: build days with `test_local_day()` (tests/bootstrap.php), or say in
+     * a comment why UTC is the right frame here.
+     *
+     * UTC GENUINELY IS RIGHT IN PLACES, which is why this is a marker and not
+     * a ban. `SegmentEngine` windows are `DATE_SUB(UTC_TIMESTAMP(), ...)`,
+     * `Importer` refuses a future date against its own `gmdate('Y-m-d')`, and
+     * a `visit_date` posted to the API and compared only with itself has no
+     * calendar in it at all. Each of those is fine, and each is now one line
+     * of comment that the next reader does not have to re-derive.
+     *
+     * WHY A MARKER RATHER THAN A LIST OF LINE NUMBERS HERE: an allowlist of
+     * file:line goes stale on the next insertion above it, and then either
+     * fails honest tests or, worse, silently stops covering the line it
+     * named. The reason also belongs where the date is written, not in a
+     * table in another file.
+     *
+     * WHAT IS DELIBERATELY NOT COVERED: `gmdate('Y-m-d H:i:s', ...)` with an
+     * offset in hours or minutes. That is an instant, and instants in this
+     * application really are UTC. Only a WHOLE-DAY offset is flagged, because
+     * that is the one that means "N days ago" — which is what the membership
+     * tests meant, written into a column whose date part was then read
+     * against the venue's today.
+     */
+    // Either quote: the suite writes single, but a gate that a double quote
+    // walks straight through is not a gate.
+    $offenders = [];
+
+    foreach (suite_php_files() as $file) {
+        $contents = (string) file_get_contents($file);
+        $lines    = preg_split('/\R/', $contents) ?: [];
+
+        foreach (utc_day_calls($contents) as [$line, $why]) {
+            /*
+             * The marker may sit on the line the call starts on or in the six
+             * above it: enough for a short comment block without being
+             * repeated per line. Six is a judgement — wide enough not to
+             * punish an explanation worth reading, tight enough that the
+             * marker is still visibly attached to the date it excuses.
+             */
+            $window = implode("\n", array_slice($lines, max(0, $line - 7), 7));
+
+            if (str_contains($window, 'UTC-CORRECT')) {
+                continue;
+            }
+
+            $offenders[] = relative_path($file) . ':' . $line . ' — ' . $why;
+        }
+    }
+
+    Assert::same(
+        [],
+        $offenders,
+        "these build a day from UTC. Use test_local_day() if the application\n   "
+            . "will read it as a venue day, or write a comment containing\n   "
+            . "UTC-CORRECT saying what reads it and why UTC is right:\n   "
+            . implode("\n   ", $offenders)
+    );
+});
+
+Harness::test('the UTC-day gate reads every spelling of the call', function (): void {
+    // The gate is only as good as what it can see, so it is held to the
+    // spellings a test is likely to use: plain, fully qualified, and wrapped
+    // over several lines. A method of the same name is not the function.
+    $flagged = static fn (string $code): int => count(utc_day_calls("<?php\n" . $code));
+
+    Assert::same(1, $flagged("\$d = gmdate('Y-m-d');"), 'plain gmdate()');
+    Assert::same(1, $flagged("\$d = \\gmdate('Y-m-d');"), 'fully qualified gmdate()');
+    Assert::same(1, $flagged("\$d = \\date('Y-m-d', time());"), 'fully qualified date()');
+    Assert::same(1, $flagged("\$d = gmdate(\n    'Y-m-d',\n    (int) strtotime('-3 days')\n);"), 'wrapped call');
+    Assert::same(0, $flagged("\$d = \$clock->date('Y-m-d');"), 'a method named date');
+    Assert::same(0, $flagged("\$d = \\gmdate('Y-m-d H:i:s');"), 'now, as a timestamp');
+});
+
 // ------------------------------------------------- writes against the schema
 
 /**

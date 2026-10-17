@@ -77,6 +77,9 @@ $badge = [
     <?php if ($rows === []): ?>
         <p class="empty">Nothing to show.</p>
     <?php else: ?>
+        <!-- Wrapped so a wide table scrolls inside its own box rather than
+             dragging the whole layout sideways on a phone. MEASURED at 390px. -->
+        <div class="table-scroll">
         <table class="table">
             <caption class="sr-only">Guest feedback</caption>
             <thead>
@@ -135,6 +138,7 @@ $badge = [
                 <?php endforeach; ?>
             </tbody>
         </table>
+        </div>
 
         <?php if ($total > $page['perPage']): ?>
             <nav class="pagination" aria-label="Pages">

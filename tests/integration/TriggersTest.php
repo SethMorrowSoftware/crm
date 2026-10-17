@@ -135,14 +135,25 @@ function tr_runs(int $automationId): int
     );
 }
 
-/** The venue's local date, N days from today — the same arithmetic a scanner does. */
+/**
+ * The venue's local date, N days from today — the same arithmetic a scanner
+ * does. This file had the right idea before the rest of the suite did: a
+ * named helper per frame, so a call site says which calendar it means.
+ * `test_local_day()` in the bootstrap is now that helper for everyone, and
+ * this one counts FORWARD, which is how every call below reads.
+ */
 function tr_local(int $days): string
 {
-    return (new DateTimeImmutable('now', new DateTimeZone(Settings::timezone())))
-        ->modify(($days >= 0 ? '+' : '') . $days . ' days')
-        ->format('Y-m-d');
+    return test_local_day(-$days);
 }
 
+/**
+ * An instant N days back, in UTC.
+ *
+ * UTC-CORRECT: every column this fills — `last_visit_at`, `sla_due_at`,
+ * `last_activity_at` — is a stored UTC instant that the scanners compare
+ * against UTC now. Nothing takes the date part of one and calls it a day.
+ */
 function tr_utc_days_ago(int $days): string
 {
     return gmdate('Y-m-d H:i:s', time() - $days * 86400);
