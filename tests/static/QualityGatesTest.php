@@ -1139,18 +1139,20 @@ function utc_day_calls(string $contents): array
     for ($i = 0; $i < $count; $i++) {
         $token = $tokens[$i];
 
-        if (!is_array($token) || $token[0] !== T_STRING) {
+        // `\gmdate(` is one T_NAME_FULLY_QUALIFIED token, not a T_STRING, and
+        // it is a spelling this suite uses, so both have to be read.
+        if (!is_array($token) || !in_array($token[0], [T_STRING, T_NAME_FULLY_QUALIFIED], true)) {
             continue;
         }
 
-        $name = strtolower($token[1]);
+        $name = strtolower(ltrim($token[1], '\\'));
 
         if ($name !== 'gmdate' && $name !== 'date') {
             continue;
         }
 
         // A method or a declaration of the same name is not the global
-        // function: `$clock->date(...)`, `Foo::date(...)`, `function date(`.
+        // function: `\$clock->date(...)`, `Foo::date(...)`, `function date(`.
         $before = null;
 
         for ($j = $i - 1; $j >= 0; $j--) {
@@ -1351,6 +1353,20 @@ Harness::test('no test builds a calendar day out of UTC without saying why', fun
             . "UTC-CORRECT saying what reads it and why UTC is right:\n   "
             . implode("\n   ", $offenders)
     );
+});
+
+Harness::test('the UTC-day gate reads every spelling of the call', function (): void {
+    // The gate is only as good as what it can see, so it is held to the
+    // spellings a test is likely to use: plain, fully qualified, and wrapped
+    // over several lines. A method of the same name is not the function.
+    $flagged = static fn (string $code): int => count(utc_day_calls("<?php\n" . $code));
+
+    Assert::same(1, $flagged("\$d = gmdate('Y-m-d');"), 'plain gmdate()');
+    Assert::same(1, $flagged("\$d = \\gmdate('Y-m-d');"), 'fully qualified gmdate()');
+    Assert::same(1, $flagged("\$d = \\date('Y-m-d', time());"), 'fully qualified date()');
+    Assert::same(1, $flagged("\$d = gmdate(\n    'Y-m-d',\n    (int) strtotime('-3 days')\n);"), 'wrapped call');
+    Assert::same(0, $flagged("\$d = \$clock->date('Y-m-d');"), 'a method named date');
+    Assert::same(0, $flagged("\$d = \\gmdate('Y-m-d H:i:s');"), 'now, as a timestamp');
 });
 
 // ------------------------------------------------- writes against the schema
