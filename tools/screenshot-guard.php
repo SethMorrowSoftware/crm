@@ -166,6 +166,32 @@ if ($total > 0) {
     }
 }
 
+// -------------------------------------------------------------- the bookings
+//
+// `bookings.contact_id` is nullable, and `/bookings` renders the guest of
+// honour's name and allergies from the booking itself. So a booking needs its
+// own mark of fiction: the seed's DEMO- number, or a fictional guest.
+
+if ($total > 0 || DB::exists('SELECT id FROM {bookings}')) {
+    $fictionalContact = isset($fictional)
+        // COALESCE, because a NULL contact_id makes IN() NULL, and NOT NULL
+        // matches nothing: exactly the guest-less booking this is for.
+        ? 'COALESCE(b.contact_id IN (SELECT id FROM {contacts} WHERE ' . $fictional . '), 0)'
+        : '0 = 1';
+
+    $realBookings = (int) DB::value(
+        "SELECT COUNT(*) FROM {bookings} b
+          WHERE NOT (COALESCE(b.booking_number, '') LIKE 'DEMO-%' OR " . $fictionalContact . ')',
+        isset($fictional) ? $params : []
+    );
+
+    if ($realBookings > 0) {
+        $refusals[] = number_format($realBookings)
+            . ' bookings are neither the seed\'s (DEMO-) nor attached to a fictional guest.'
+            . ' The bookings screen shows their guest of honour and allergies.';
+    }
+}
+
 // ----------------------------------------------------------------- the staff
 //
 // `settings-users.png` is a photograph of the user list. On a venue install

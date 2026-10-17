@@ -117,6 +117,10 @@ final class DemoData
         'activities'    => ['activities', 'contact_id', 'contact', 'activities logged on an example guest', 'activity', null],
         'children'      => ['children', 'contact_id', 'contact', 'children added to an example guest', 'child', null],
         'members'       => ['membership_members', 'contact_id', 'contact', 'membership places held by an example guest', null, null],
+        // A place can be held by a child alone. Where it also names a guest,
+        // the row above already counted it.
+        'child_members' => ['membership_members', 'child_id', 'child', 'membership places held by an example child',
+                            null, 'r.contact_id IS NULL'],
         'referrals'     => ['referrals', 'referrer_contact_id', 'contact', 'referrals made by an example guest', null, null],
         'comments'      => ['task_comments', 'task_id', 'task', 'comments on an example task', null, null],
     ];
@@ -455,6 +459,10 @@ final class DemoData
         'tickets'            => null,
         'waiver_signatures'  => null,
         'survey_responses'   => null,
+        'text_club'          => null,
+        'form_submissions'   => null,
+        'coupon_redemptions' => null,
+        'messages'           => null,
     ];
 
     private static function untaggedLinked(int $tagId): int
