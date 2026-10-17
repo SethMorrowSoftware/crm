@@ -698,8 +698,15 @@ Harness::test('the rollup agrees with the report it summarises', function (): vo
 
     // The one assertion that catches a rollup drifting from the live query:
     // two independent implementations of "what did we take", compared.
-    $from = gmdate('Y-m-d', time() - (86400 * 8));
-    $to   = gmdate('Y-m-d', time() - (86400 * 1));
+    /*
+     * The window in the VENUE's calendar, not UTC's. A report groups by the
+     * venue's own day, so a booking dated UTC-yesterday lands in local TODAY
+     * for four hours every night — and the rollup, which never holds today,
+     * then disagreed with the live report by the whole of that booking
+     * (measured: 25000 against 96000).
+     */
+    $from = test_local_day(8);
+    $to   = test_local_day(1);
 
     ri_booking($from, ['total_cents' => 25000]);
     ri_booking($to, ['total_cents' => 71000]);

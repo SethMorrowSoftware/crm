@@ -173,6 +173,47 @@ final class Validator
     {
         $label = $this->label($field);
 
+        /*
+         * A VALUE THAT IS NOT A SCALAR IS REFUSED HERE, ONCE.
+         *
+         * Nearly every rule below does `(string) $value` or `strlen()` on it,
+         * and PHP casting an array to a string is a warning — which means two
+         * different wrong answers depending on how the install is configured.
+         * In development, where notices are promoted to exceptions, the
+         * request dies with a 500 before validation has returned anything. In
+         * production it is worse than that: the warning is swallowed and the
+         * value becomes the literal string `"Array"`, which then passes
+         * `max:80` happily and gets stored.
+         *
+         * And it is trivially reachable — `field[]=x` in a form post, or a
+         * JSON array in an API body — so a public enquiry form could be made
+         * to answer 500, or to file an enquiry whose name is "Array".
+         *
+         * Found by review on the API's consent endpoint, where `in:email,sms`
+         * on an array answered 500; fixed at the validator because every
+         * controller and every public form shares it. `array` and the
+         * presence rules are exempt: they are the ones that legitimately
+         * expect something that is not a scalar.
+         */
+        $declaredArray = false;
+
+        foreach ($fieldRules as $declared) {
+            if (explode(':', $declared, 2)[0] === 'array') {
+                $declaredArray = true;
+                break;
+            }
+        }
+
+        if ($value !== null && !is_scalar($value)
+            && !in_array($rule, ['required', 'nullable', 'array'], true)
+            // `min`/`max` count ITEMS on a field declared `array` — the same
+            // rule meaning two things, decided by the declaration rather than
+            // by inspecting the value, exactly as the numeric case above.
+            && !($declaredArray && in_array($rule, ['min', 'max'], true))
+        ) {
+            return $this->addError($field, sprintf('%s must be text.', $label));
+        }
+
         // A ZIP code, a phone number and an order reference are all strings
         // that happen to look numeric. Whether min/max means "value between"
         // or "length between" is therefore decided by the field's DECLARED
