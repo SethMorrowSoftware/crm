@@ -172,6 +172,10 @@ $reasonWords = [
             </div>
         </div>
 
+        <!-- Wrapped so a wide table scrolls inside its own box rather than
+             dragging the whole layout sideways on a phone. MEASURED: this page
+             overflowed 390px by 185px. -->
+        <div class="table-scroll">
         <table class="table">
             <caption class="sr-only">Unresolved complaints, oldest first</caption>
             <thead>
@@ -212,6 +216,7 @@ $reasonWords = [
                 <?php endforeach; ?>
             </tbody>
         </table>
+        </div>
     </section>
 <?php endif; ?>
 
@@ -322,6 +327,10 @@ $reasonWords = [
         </dl>
 
         <?php if (($funnel['by_platform'] ?? []) !== []): ?>
+            <!-- Wrapped so a wide table scrolls inside its own box rather than
+                 dragging the whole layout sideways on a phone. MEASURED: this page
+                 overflowed 390px by 185px. -->
+            <div class="table-scroll">
             <table class="table">
                 <caption class="sr-only">Asks by platform</caption>
                 <thead>
@@ -337,6 +346,7 @@ $reasonWords = [
                     <?php endforeach; ?>
                 </tbody>
             </table>
+            </div>
         <?php endif; ?>
     </section>
 
@@ -354,6 +364,10 @@ $reasonWords = [
         <?php if ($byHost === []): ?>
             <p class="empty">No host has three scores yet in this period.</p>
         <?php else: ?>
+            <!-- Wrapped so a wide table scrolls inside its own box rather than
+                 dragging the whole layout sideways on a phone. MEASURED: this page
+                 overflowed 390px by 185px. -->
+            <div class="table-scroll">
             <table class="table">
                 <caption class="sr-only">Average score by party host</caption>
                 <thead>
@@ -375,6 +389,7 @@ $reasonWords = [
                     <?php endforeach; ?>
                 </tbody>
             </table>
+            </div>
         <?php endif; ?>
     </section>
 </div>

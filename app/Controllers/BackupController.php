@@ -219,8 +219,12 @@ final class BackupController extends Controller
             $request,
             'Example data removed — ' . number_format($removed['total']) . ' record(s).'
             . ($orphaned > 0
-                ? ' ' . number_format($orphaned) . ' booking(s) or deal(s) you created against an'
+                ? ' ' . number_format($orphaned) . ' record(s) you created against an'
                   . ' example guest were kept, and now have no guest attached.'
+                : '')
+            . (($before['cascade_total'] ?? 0) > 0
+                ? ' ' . DemoData::describeCascade($before['cascade'])
+                  . ' went with them, as the database requires.'
                 : ''),
             '/settings/backups'
         );

@@ -3,11 +3,11 @@
 // Run it against a DEMO install and commit what it writes. Three properties
 // make the output worth keeping in the repository:
 //
-//   1. **It refuses to photograph real guests.** `tools/screenshot-guard.php`
-//      runs first and checks the DATA, not a flag: every contact's email must
-//      be on a domain the standards reserve for fiction. Screenshots get
-//      committed, and a venue's guest list in git history is in every clone
-//      for ever.
+//   1. **It refuses to photograph anything real.** `tools/screenshot-guard.php`
+//      runs first and checks the DATA, not a flag: every contact must carry
+//      positive evidence of being fictional, and no user account or mail
+//      setting may be on a real domain. Screenshots get committed, and a
+//      venue's guest list in git history is in every clone for ever.
 //   2. **Every image says what it is a picture of.** The index it writes
 //      carries the section's name, its path, and what to look at — a folder of
 //      PNGs nobody can caption is decoration.
@@ -190,7 +190,18 @@ const run = async () => {
     const file = target.file + suffix + '.png';
 
     try {
-      await p.goto(BASE + target.path, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      const landed = await p.goto(BASE + target.path, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+      /*
+       * The STATUS, not just the body text. A page that answers 403, 405 or
+       * 429 is a picture of a refusal, and the three of them are the easiest
+       * way to end up with a folder of them: a role without a permission, a
+       * route that moved, or the login throttle (12 per 5 minutes per IP,
+       * and each run of this script spends two of them).
+       */
+      if (landed !== null && landed.status() !== 200) {
+        problems.push(`${target.path} answered ${landed.status()}`);
+      }
 
       // Follow into a detail page where the section asks for it, so the index
       // shows a record rather than only a list.
@@ -208,10 +219,23 @@ const run = async () => {
       // client-side router, so there is nothing else to wait for.
       await p.waitForTimeout(350);
 
-      const status = await p.evaluate(() => document.body.innerText.slice(0, 200));
+      /*
+       * And the body text, as a second witness — a `follow` click navigates
+       * after the response above was read, so a detail page that refuses is
+       * only visible here.
+       *
+       * These are THIS application's own error titles, read out of
+       * app/Core/Middleware.php and app/Core/Router.php rather than guessed.
+       * The first version of this list guessed — "Not found|Forbidden|
+       * Something went wrong" — and the app renders none of those three: it
+       * says "Not permitted" (403), "Too many requests" (429) and "Method
+       * not allowed" (405). Every one of those would have been photographed
+       * and committed with the run still exiting 0.
+       */
+      const text = await p.evaluate(() => document.body.innerText.slice(0, 200));
 
-      if (/Not found|Forbidden|Something went wrong/i.test(status)) {
-        problems.push(`${target.path} rendered an error page`);
+      if (/Not permitted|Too many requests|Method not allowed|Page not found|Something went wrong/i.test(text)) {
+        problems.push(`${target.path} rendered an error page: ${text.split('\n').filter(Boolean)[0] || ''}`);
       }
 
       /*
@@ -274,6 +298,13 @@ const run = async () => {
   });
   const phonePage = await phoneContext.newPage();
 
+  // The same two listeners the desktop page carries. Without them a phone
+  // capture could log a page error or take a 500 and nothing would say so.
+  phonePage.on('pageerror', e => problems.push(`pageerror (phone): ${String(e).slice(0, 120)}`));
+  phonePage.on('response', r => {
+    if (r.status() >= 500) problems.push(`${r.status()} ${r.url().replace(BASE, '')} (phone)`);
+  });
+
   await phonePage.goto(BASE + '/login', { waitUntil: 'domcontentloaded' });
   await phonePage.fill('input[name="email"]', EMAIL);
   await phonePage.fill('input[name="password"]', PASSWORD);
@@ -281,6 +312,20 @@ const run = async () => {
     phonePage.waitForNavigation({ waitUntil: 'domcontentloaded' }),
     phonePage.click('form[action$="/login"] button[type="submit"]'),
   ]);
+
+  /*
+   * And the same assertion. This is the SECOND sign-in of the run, and
+   * POST /login is throttled 12 per 5 minutes per IP — so on a sixth or
+   * seventh run while iterating, the desktop login is allowed and this one
+   * is answered with the 429 page. Unchecked, the three phone captures
+   * become three pictures of a login form and the run still exits 0.
+   */
+  if (/\/login/.test(phonePage.url())) {
+    throw new Error(
+      'the phone sign-in failed — if the desktop one worked, this is the login'
+      + ' throttle (12 per 5 minutes per IP); wait five minutes and run it again'
+    );
+  }
 
   const phoneCaptured = [];
 
@@ -293,6 +338,37 @@ const run = async () => {
 
     if (overflow > 1) problems.push(`${section.path} scrolls sideways by ${overflow}px at 390px`);
   }
+
+  /*
+   * EVERY section measured at phone width, not only the three photographed
+   * there. The index claims "no page in this application scrolls sideways at
+   * 390px" and attributes it to the capture — which was true of three pages
+   * out of twenty-nine, so the sentence was doing work the tool had not done.
+   * Measuring is cheap (a navigation, no screenshot) and makes the claim the
+   * capture's own rather than a hope.
+   */
+  const phoneOnly = new Set(PHONE.map(s => s.path));
+  let measured = PHONE.length;
+
+  for (const section of SECTIONS) {
+    if (phoneOnly.has(section.path)) continue;
+
+    try {
+      await phonePage.goto(BASE + section.path, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await phonePage.waitForTimeout(120);
+
+      const overflow = await phonePage.evaluate(() =>
+        document.documentElement.scrollWidth - document.documentElement.clientWidth);
+
+      measured++;
+
+      if (overflow > 1) problems.push(`${section.path} scrolls sideways by ${overflow}px at 390px`);
+    } catch (e) {
+      problems.push(`${section.path} could not be measured at 390px: ${String(e.message).slice(0, 80)}`);
+    }
+  }
+
+  console.log(`\nMeasured ${measured} sections at 390px for horizontal scroll.`);
 
   await phoneContext.close();
   await browser.close();
@@ -323,11 +399,16 @@ before reading them:
   capture ran, so two runs differ in every date and figure. Nothing compares
   against these images and no test will fail if they change — they document
   what the application looks like, and that is all.
-- **No real guest appears in any of them.** \`tools/screenshot-guard.php\` runs
-  first and refuses the capture unless every contact's email address is on a
-  domain the standards reserve for fiction, and every phone number shown is in
-  the 555-01xx block reserved for the same purpose. The check is on the data,
-  not on a flag somebody set.
+- **Nothing real appears in any of them.** \`tools/screenshot-guard.php\` runs
+  first and refuses the capture unless every contact carries a mark a real
+  person's record could not: an email on a domain the standards reserve for
+  fiction, a phone in the reserved 555-01xx block, or the installer seed's own
+  marker. A missing email is not such a mark — that is the ordinary shape of a
+  guest who arrived by text. It also refuses a user account on a real email
+  domain (the user list is one of these pictures, and the signed-in name is in
+  the sidebar of all of them) and a real SMTP host or from-address (the email
+  settings page shows them in full). The check is on the data, not on a flag
+  somebody set.
 - **The figures are real arithmetic over fake data.** Nothing here is a mockup:
   every total was computed by the application from the rows behind it.
 
@@ -349,9 +430,10 @@ ${darkCaptured.map(s => `| [${s.name}](${s.file}-dark.png) | \`${s.path}\` |`).j
 
 ## On a phone
 
-Check-in is the page floor staff actually hold, so it leads. **No page in
-this application scrolls sideways at 390px** — that is asserted by the capture
-itself, not just looked at.
+Check-in is the page floor staff actually hold, so it leads. Three are
+photographed here; **all ${measured} sections were measured at 390px and none
+of them scrolls sideways** — the capture asserts that rather than leaving it
+to be looked at.
 
 | Section | Path | What to look at |
 |---|---|---|

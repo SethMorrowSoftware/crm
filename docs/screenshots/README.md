@@ -1,7 +1,7 @@
 # What Castle CRM looks like
 
 One picture per section, so somebody can see the application without
-installing it. **39 images, 7632 KB in all.**
+installing it. **39 images, 7615 KB in all.**
 
 Taken by `tools/screenshots.js` against a demo install. Three things to know
 before reading them:
@@ -10,11 +10,16 @@ before reading them:
   capture ran, so two runs differ in every date and figure. Nothing compares
   against these images and no test will fail if they change — they document
   what the application looks like, and that is all.
-- **No real guest appears in any of them.** `tools/screenshot-guard.php` runs
-  first and refuses the capture unless every contact's email address is on a
-  domain the standards reserve for fiction, and every phone number shown is in
-  the 555-01xx block reserved for the same purpose. The check is on the data,
-  not on a flag somebody set.
+- **Nothing real appears in any of them.** `tools/screenshot-guard.php` runs
+  first and refuses the capture unless every contact carries a mark a real
+  person's record could not: an email on a domain the standards reserve for
+  fiction, a phone in the reserved 555-01xx block, or the installer seed's own
+  marker. A missing email is not such a mark — that is the ordinary shape of a
+  guest who arrived by text. It also refuses a user account on a real email
+  domain (the user list is one of these pictures, and the signed-in name is in
+  the sidebar of all of them) and a real SMTP host or from-address (the email
+  settings page shows them in full). The check is on the data, not on a flag
+  somebody set.
 - **The figures are real arithmetic over fake data.** Nothing here is a mockup:
   every total was computed by the application from the rows behind it.
 
@@ -70,9 +75,10 @@ The theme is one stylesheet, so a representative few rather than all of them.
 
 ## On a phone
 
-Check-in is the page floor staff actually hold, so it leads. **No page in
-this application scrolls sideways at 390px** — that is asserted by the capture
-itself, not just looked at.
+Check-in is the page floor staff actually hold, so it leads. Three are
+photographed here; **all 29 sections were measured at 390px and none
+of them scrolls sideways** — the capture asserts that rather than leaving it
+to be looked at.
 
 | Section | Path | What to look at |
 |---|---|---|

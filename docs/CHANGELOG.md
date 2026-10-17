@@ -1178,13 +1178,23 @@ unnoticed.
 
 ### Added: screenshots of every section
 
-`docs/screenshots/` — 38 images, one per section plus dark mode and three at
+`docs/screenshots/` — 39 images, one per section plus dark mode and three at
 phone width, with an index naming what to look at in each. `tools/screenshots.js`
-takes them and asserts as it goes that no page errors, no page 500s and no page
-scrolls sideways at 390px.
+takes them and asserts as it goes: no page logs an error, no page answers
+anything but 200 — checked on the status AND on this application's own error
+titles, which are "Not permitted", "Too many requests" and "Method not allowed"
+rather than the three a first draft guessed at — and no page scrolls sideways
+at 390px, measured on every section rather than on the three captured at phone
+width.
 
 `tools/screenshot-guard.php` runs first and refuses the capture unless every
-contact's email address is on a domain the standards reserve for fiction. The
+contact carries POSITIVE evidence of being fictional: a reserved email domain,
+a 555-01xx phone, or the installer seed's own marker. A missing email is not
+such evidence — that is the ordinary shape of a guest who arrived by text, and
+reading it as proof of fiction cleared a whole venue's real list. It also
+refuses a user account on a real email domain (the user list is one of the
+pictures, and the signed-in name is in the sidebar of all of them) and a real
+SMTP host or from-address, which the email settings page shows in full. The
 check is on the DATA, not on a flag somebody set: these images go into git, and
 a venue's guest list in git history is in every clone for ever.
 

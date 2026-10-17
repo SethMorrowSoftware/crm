@@ -132,7 +132,7 @@ Two answers that matter:
   calendar day, so a 9pm Saturday booking counts as Saturday's. Getting this
   wrong puts late-evening revenue on the wrong day, for ever.
 - **Seed data: yes, seed the venue's own shape.** The attractions, packages,
-  pipelines and the 111 automations all come from the seed. The automations
+  pipelines and the 112 automations all come from the seed. The automations
   arrive switched **off**; nothing sends until you turn a playbook on.
 
 The final page shows the cron line and tells you Safe Mode is on. **Copy the

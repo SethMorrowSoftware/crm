@@ -277,13 +277,26 @@ $stale = $lastRun === null || strtotime((string) $lastRun) < time() - 172800;
         none of them can be contacted even with Safe Mode off.
     </p>
 
+    <?php if (($demoData['cascade_total'] ?? 0) > 0): ?>
+        <div class="alert alert-error">
+            <?= icon('alert', 16) ?>
+            <p>
+                <strong>This will also delete work of your own:</strong>
+                <?= e(App\Services\DemoData::describeCascade($demoData['cascade'])) ?>.
+                They hang off an example record, so the database removes them with it and
+                nothing here can keep them. Save anything you need first.
+            </p>
+        </div>
+    <?php endif; ?>
+
     <?php if ($demoData['untagged_linked'] > 0): ?>
         <div class="alert alert-warning">
             <?= icon('alert', 16) ?>
             <p>
-                <?= number_format($demoData['untagged_linked']) ?> booking(s) or deal(s) you
-                created yourself against an example guest will be <strong>kept</strong>, because
-                they are yours rather than the seed's. They will be left with no guest attached.
+                <?= number_format($demoData['untagged_linked']) ?> record(s) you created
+                yourself against an example guest &mdash; bookings, deals, memberships,
+                tickets, waiver signatures &mdash; will be <strong>kept</strong>, because they
+                are yours rather than the seed's. They will be left with no guest attached.
             </p>
         </div>
     <?php endif; ?>

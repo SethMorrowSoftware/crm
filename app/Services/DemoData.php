@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Core\DB;
+use Throwable;
 
 /**
  * Finding and removing the example guests the installer can seed.
@@ -53,6 +54,55 @@ final class DemoData
         'child'     => 'children',
         'contact'   => 'contacts',
         'household' => 'households',
+    ];
+
+    /**
+     * A second mark required before a row of this type is treated as the
+     * seed's, beyond wearing the `demo-data` tag.
+     *
+     * THE TAG ALONE IS NOT PROOF, because `demo-data` is an ordinary tag with
+     * an ordinary name. An automation's "Add a tag" step takes free text and
+     * `AutomationRunner::tag()` creates the tag if it does not exist, so a
+     * venue that names a tag `demo-data` for its own purposes gets REAL
+     * guests wearing it — and this would then offer to delete them, on an
+     * install where the seed had never run at all. Measured against the real
+     * runner: that step tags `entity_type = 'contact'` and nothing else,
+     * which is why contacts are the one type that needs a second mark and
+     * the other seven do not.
+     *
+     * `source = 'demo'` is written by the seed on every contact it creates
+     * and by nothing else.
+     *
+     * `{a}` is the table alias the caller is using, filled by `seedMark()` —
+     * the same condition is needed against three different aliases.
+     *
+     * @var array<string,string> entity type => extra SQL
+     */
+    private const SEED_MARK = [
+        'contact' => "COALESCE({a}.source, '') = 'demo'",
+    ];
+
+    /**
+     * Rows a venue writes ITSELF that the database destroys along with the
+     * seed's, because their foreign key cascades.
+     *
+     * These are not orphans — an orphan survives and is merely detached, and
+     * `untaggedLinked()` counts those. These are DELETED, and the venue's own
+     * work is in them: the runbook tells a trial user to walk "the enquiry in
+     * the pipeline → quote → deposit" on the example data, so a quote written
+     * on an example enquiry is the expected case rather than a corner of one.
+     *
+     * Verified against `information_schema` on the real schema: `quotes.deal_id`,
+     * `contact_notes.contact_id` and `conversations.contact_id` are all
+     * ON DELETE CASCADE.
+     *
+     * @var array<string,array{0:string,1:string,2:string,3:string}>
+     *      key => [table, foreign key column, the tagged type it hangs off, plural label]
+     */
+    private const CASCADE_LOSSES = [
+        'quotes'        => ['quotes', 'deal_id', 'deal', 'quotes written on an example enquiry'],
+        'notes'         => ['contact_notes', 'contact_id', 'contact', 'notes written on an example guest'],
+        'conversations' => ['conversations', 'contact_id', 'contact', 'inbox threads with an example guest'],
     ];
 
     /**
@@ -108,14 +158,26 @@ final class DemoData
      * created against a demo guest, which this will not delete and which will
      * be left with an empty guest. That one is worth knowing in advance.
      *
-     * @return array{present:bool,counts:array<string,int>,total:int,untagged_linked:int}
+     * @return array{present:bool,counts:array<string,int>,total:int,untagged_linked:int,
+     *               cascade:array<string,int>,cascade_total:int}
      */
     public static function summary(): array
     {
+        $empty = [
+            'present'         => false,
+            'counts'          => [],
+            'total'           => 0,
+            'untagged_linked' => 0,
+            'cascade'         => [],
+            'cascade_total'   => 0,
+        ];
+
         $tagId = self::tagId();
 
-        if ($tagId === 0) {
-            return ['present' => false, 'counts' => [], 'total' => 0, 'untagged_linked' => 0];
+        // Nothing is the seed's unless the seed demonstrably ran. See
+        // `seedRan()` — the tag's name is not evidence on its own.
+        if ($tagId === 0 || !self::seedRan()) {
+            return $empty;
         }
 
         $counts = [];
@@ -129,19 +191,130 @@ final class DemoData
             $counts[$type] = (int) DB::value(
                 'SELECT COUNT(*) FROM {taggables} t
                   JOIN {' . $table . '} e ON e.id = t.entity_id
-                 WHERE t.tag_id = :tag AND t.entity_type = :type',
+                 WHERE ' . self::seedRowClause($type),
                 ['tag' => $tagId, 'type' => $type]
             );
 
             $total += $counts[$type];
         }
 
+        $cascade      = $total > 0 ? self::cascadeLosses($tagId) : [];
+        $cascadeTotal = array_sum($cascade);
+
         return [
             'present'         => $total > 0,
             'counts'          => $counts,
             'total'           => $total,
-            'untagged_linked' => self::untaggedLinked($tagId),
+            'untagged_linked' => $total > 0 ? self::untaggedLinked($tagId) : 0,
+            'cascade'         => $cascade,
+            'cascade_total'   => $cascadeTotal,
         ];
+    }
+
+    /**
+     * Did the installer's demo seed actually run on this install?
+     *
+     * The same two markers the seed itself uses to decide it has already run
+     * (`install/seeds/demo.php`): a contact it stamped `source = 'demo'`, or a
+     * booking numbered `DEMO-…`. Neither is reachable from the application's
+     * own UI, so neither can be produced by a venue going about its work.
+     *
+     * Without this, a `demo-data` tag was all it took: the automation engine's
+     * "Add a tag" step takes free text, creates the tag if it is missing, and
+     * applies it to REAL contacts. On an install where the seed had never run,
+     * that alone made Settings → Backups offer to delete them.
+     */
+    private static function seedRan(): bool
+    {
+        return DB::exists("SELECT id FROM {contacts} WHERE source = 'demo'")
+            || DB::exists("SELECT id FROM {bookings} WHERE booking_number LIKE 'DEMO-%'");
+    }
+
+    /**
+     * The WHERE that identifies one tagged row as the seed's, for `$type`,
+     * against `{taggables} t` joined to its entity as `e`.
+     */
+    private static function seedRowClause(string $type): string
+    {
+        return 't.tag_id = :tag AND t.entity_type = :type' . self::seedMark($type, 'e', ' AND ');
+    }
+
+    /**
+     * The extra "this really is the seed's" condition for `$type`, against
+     * table alias `$alias`, or '' where the type needs none.
+     */
+    private static function seedMark(string $type, string $alias, string $prefix = ''): string
+    {
+        if (!isset(self::SEED_MARK[$type])) {
+            return '';
+        }
+
+        return $prefix . str_replace('{a}', $alias, self::SEED_MARK[$type]);
+    }
+
+    /**
+     * Rows the venue wrote that will be DELETED with the seed's, by cascade.
+     *
+     * Counted only where the row is not itself the seed's: the seed writes no
+     * quotes, notes or conversations today, but a count that silently included
+     * them would overstate the loss the moment it did.
+     *
+     * @return array<string,int> key => count, zero entries dropped
+     */
+    private static function cascadeLosses(int $tagId): array
+    {
+        $losses = [];
+
+        foreach (self::CASCADE_LOSSES as $key => [$table, $column, $parentType]) {
+            // Joined to the parent's own table so the "this really is the
+            // seed's" mark can be applied: a note on a REAL contact somebody
+            // tagged `demo-data` is not about to be deleted, because that
+            // contact is not about to be deleted either.
+            $parentTable = self::ENTITIES[$parentType];
+
+            try {
+                $count = (int) DB::value(
+                    'SELECT COUNT(*) FROM {' . $table . '} r
+                      JOIN {' . $parentTable . '} p ON p.id = r.' . $column . '
+                      JOIN {taggables} pt ON pt.entity_id = p.id
+                           AND pt.entity_type = :parent AND pt.tag_id = :tag
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM {taggables} rt
+                          WHERE rt.entity_id = r.id AND rt.tag_id = :tag2
+                     )' . self::seedMark($parentType, 'p', ' AND '),
+                    ['parent' => $parentType, 'tag' => $tagId, 'tag2' => $tagId]
+                );
+            } catch (Throwable) {
+                // A table this schema version does not have is not a loss.
+                continue;
+            }
+
+            if ($count > 0) {
+                $losses[$key] = $count;
+            }
+        }
+
+        return $losses;
+    }
+
+    /**
+     * The cascade losses as one readable clause.
+     *
+     * @param array<string,int> $cascade
+     */
+    public static function describeCascade(array $cascade): string
+    {
+        $parts = [];
+
+        foreach (self::CASCADE_LOSSES as $key => [, , , $label]) {
+            $n = (int) ($cascade[$key] ?? 0);
+
+            if ($n > 0) {
+                $parts[] = number_format($n) . ' ' . $label;
+            }
+        }
+
+        return implode(', ', $parts);
     }
 
     /**
@@ -162,7 +335,9 @@ final class DemoData
         return DB::transaction(static function (): array {
             $tagId = self::tagId();
 
-            if ($tagId === 0) {
+            // Same corroboration as `summary()`, re-checked here rather than
+            // trusted from the page: this is the method that deletes.
+            if ($tagId === 0 || !self::seedRan()) {
                 return ['counts' => [], 'total' => 0];
             }
 
@@ -173,7 +348,7 @@ final class DemoData
                 $ids = DB::column(
                     'SELECT t.entity_id FROM {taggables} t
                       JOIN {' . $table . '} e ON e.id = t.entity_id
-                     WHERE t.tag_id = :tag AND t.entity_type = :type',
+                     WHERE ' . self::seedRowClause($type),
                     ['tag' => $tagId, 'type' => $type]
                 );
 
@@ -221,26 +396,63 @@ final class DemoData
     /**
      * Rows somebody created against a demo guest that this will NOT delete.
      *
-     * Bookings and deals only: they are the two that carry money and a date,
-     * they are the two whose FK is SET NULL rather than CASCADE, and they are
-     * therefore the two that survive visibly rather than vanishing.
+     * Every table whose own foreign key into `contacts` is ON DELETE SET NULL,
+     * verified against `information_schema` on the real schema. Bookings and
+     * deals carry money and a date and are the ones a trial user notices, but
+     * they were not the only ones: a membership sold to an example guest came
+     * back `{"contact_id":null,"status":"active","price_paid_cents":29900}` —
+     * active, paid for, and owned by nobody — while the page's message named
+     * only bookings and deals. Anything listed here survives DETACHED, which
+     * is a different and quieter failure than the cascade losses above.
      */
+    private const ORPHANED = [
+        'bookings'           => 'booking',
+        'deals'              => 'deal',
+        'memberships'        => null,
+        'tickets'            => null,
+        'waiver_signatures'  => null,
+        'survey_responses'   => null,
+        'campaign_recipients' => null,
+    ];
+
     private static function untaggedLinked(int $tagId): int
     {
         $count = 0;
 
-        foreach (['bookings' => 'booking', 'deals' => 'deal'] as $table => $type) {
-            $count += (int) DB::value(
-                'SELECT COUNT(*) FROM {' . $table . '} r
-                  JOIN {contacts} c ON c.id = r.contact_id
-                  JOIN {taggables} ct ON ct.entity_id = c.id
-                       AND ct.entity_type = \'contact\' AND ct.tag_id = :tag
-                 WHERE NOT EXISTS (
-                     SELECT 1 FROM {taggables} rt
-                      WHERE rt.entity_id = r.id AND rt.entity_type = :type AND rt.tag_id = :tag2
-                 )',
-                ['tag' => $tagId, 'type' => $type, 'tag2' => $tagId]
-            );
+        foreach (self::ORPHANED as $table => $type) {
+            /*
+             * `$type` is the tagged entity type where the table is one this
+             * class also deletes — those rows must not be counted as
+             * survivors, because they do not survive. Where it is null the
+             * table is never tagged, so every matching row is a survivor.
+             */
+            $notItsOwn = $type === null
+                ? ''
+                : ' AND NOT EXISTS (
+                       SELECT 1 FROM {taggables} rt
+                        WHERE rt.entity_id = r.id AND rt.entity_type = :type AND rt.tag_id = :tag2
+                   )';
+
+            $params = ['tag' => $tagId];
+
+            if ($type !== null) {
+                $params['type'] = $type;
+                $params['tag2'] = $tagId;
+            }
+
+            try {
+                $count += (int) DB::value(
+                    'SELECT COUNT(*) FROM {' . $table . '} r
+                      JOIN {contacts} c ON c.id = r.contact_id
+                      JOIN {taggables} ct ON ct.entity_id = c.id
+                           AND ct.entity_type = \'contact\' AND ct.tag_id = :tag
+                     WHERE ' . self::seedMark('contact', 'c') . $notItsOwn,
+                    $params
+                );
+            } catch (Throwable) {
+                // A table this schema version does not have contributes none.
+                continue;
+            }
         }
 
         return $count;

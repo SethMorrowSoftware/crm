@@ -48,6 +48,9 @@ declare(strict_types=1);
     <?php if ($rows === []): ?>
         <p class="empty">No asks yet.</p>
     <?php else: ?>
+        <!-- Wrapped so a wide table scrolls inside its own box rather than
+             dragging the whole layout sideways on a phone. MEASURED at 390px. -->
+        <div class="table-scroll">
         <table class="table">
             <caption class="sr-only">Review asks</caption>
             <thead>
@@ -80,6 +83,7 @@ declare(strict_types=1);
                 <?php endforeach; ?>
             </tbody>
         </table>
+        </div>
 
         <?php if ($total > $page['perPage']): ?>
             <nav class="pagination" aria-label="Pages">
