@@ -1069,6 +1069,153 @@ Harness::test('no unit test touches the database', function (): void {
     );
 });
 
+// -------------------------------------------------- which calendar a test means
+
+/**
+ * Every PHP file in the test suite itself.
+ *
+ * @return list<string>
+ */
+function suite_php_files(): array
+{
+    $files = [];
+
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator(CC_ROOT . '/tests', FilesystemIterator::SKIP_DOTS)
+    );
+
+    foreach ($iterator as $file) {
+        if ($file->isFile() && $file->getExtension() === 'php') {
+            $files[] = $file->getPathname();
+        }
+    }
+
+    sort($files);
+
+    return $files;
+}
+
+Harness::test('no test builds a calendar day out of UTC without saying why', function (): void {
+    /*
+     * THE APPLICATION REASONS IN THE VENUE'S DAY. UTC IS A DIFFERENT DAY FOR
+     * FOUR HOURS OUT OF EVERY TWENTY-FOUR.
+     *
+     * `venue_tz()` is America/New_York, so from 8pm Eastern until midnight it
+     * is already tomorrow in UTC. `MembershipLifecycle::today()`,
+     * `ReportRunner::today()`, `ReportRollup::today()` and everything through
+     * `App\Services\LocalDay` ask the venue. A test that builds its dates
+     * with `gmdate()` and expects one of those to agree is therefore wrong
+     * for four hours a day — and it does not fail like a flake. It passes
+     * every morning and fails every evening, which is how three of them
+     * passed every run there had ever been and then went red together the
+     * moment one crossed midnight UTC: a membership gave back 9 days instead
+     * of 10, its HTTP twin lost "moved on by 7 days", and a rollup read
+     * 25000 against 96000.
+     *
+     * So: build days with `test_local_day()` (tests/bootstrap.php), or say in
+     * a comment why UTC is the right frame here.
+     *
+     * UTC GENUINELY IS RIGHT IN PLACES, which is why this is a marker and not
+     * a ban. `SegmentEngine` windows are `DATE_SUB(UTC_TIMESTAMP(), ...)`,
+     * `Importer` refuses a future date against its own `gmdate('Y-m-d')`, and
+     * a `visit_date` posted to the API and compared only with itself has no
+     * calendar in it at all. Each of those is fine, and each is now one line
+     * of comment that the next reader does not have to re-derive.
+     *
+     * WHY A MARKER RATHER THAN A LIST OF LINE NUMBERS HERE: an allowlist of
+     * file:line goes stale on the next insertion above it, and then either
+     * fails honest tests or, worse, silently stops covering the line it
+     * named. The reason also belongs where the date is written, not in a
+     * table in another file.
+     *
+     * WHAT IS DELIBERATELY NOT COVERED: `gmdate('Y-m-d H:i:s', ...)` with an
+     * offset in hours or minutes. That is an instant, and instants in this
+     * application really are UTC. Only a WHOLE-DAY offset is flagged, because
+     * that is the one that means "N days ago" — which is what the membership
+     * tests meant, written into a column whose date part was then read
+     * against the venue's today.
+     */
+    // Either quote: the suite writes single, but a gate that a double quote
+    // walks straight through is not a gate.
+    $patterns = [
+        "/gmdate\(['\"]Y-m-d['\"]\s*\)/"
+            => "gmdate('Y-m-d') is today in UTC, which is tomorrow at the venue after 8pm",
+        "/gmdate\(['\"]Y-m-d['\"],\s*(?:time\(\)|strtotime\()/"
+            => "a day counted off the clock in UTC",
+        "/gmdate\(['\"]Y-m-d H:i:s['\"],\s*time\(\)\s*[-+][^;]*86400/"
+            => "a whole number of days, in UTC, written into a timestamp",
+        /*
+         * `date()` follows the process timezone, which CI sets to UTC — the
+         * same bug wearing the local-looking spelling. The lookbehind keeps
+         * `gmdate(` out, and `>` and `:` keep a method called `date()` out.
+         */
+        "/(?<![A-Za-z0-9_\\\\>:])date\(['\"]Y-m-d/"
+            => "date() follows the process timezone, not the venue's",
+    ];
+
+    $offenders = [];
+
+    foreach (suite_php_files() as $file) {
+        /*
+         * This file is skipped: the patterns above are written out in it as
+         * strings, so it matches itself on every one of them.
+         */
+        if ($file === __FILE__) {
+            continue;
+        }
+
+        $lines = preg_split('/\R/', (string) file_get_contents($file)) ?: [];
+
+        foreach ($lines as $number => $line) {
+            $trimmed = ltrim($line);
+
+            // A comment may show the wrong spelling while explaining it —
+            // the docblock on `test_local_day()` does exactly that.
+            if ($trimmed === ''
+                || str_starts_with($trimmed, '*')
+                || str_starts_with($trimmed, '//')
+                || str_starts_with($trimmed, '#')
+                || str_starts_with($trimmed, '/*')
+            ) {
+                continue;
+            }
+
+            foreach ($patterns as $pattern => $why) {
+                if (preg_match($pattern, $line) !== 1) {
+                    continue;
+                }
+
+                /*
+                 * The marker may sit on the line itself or in the six above
+                 * it: enough for a short comment block, or for a value a few
+                 * lines inside the call it belongs to, without being
+                 * repeated per line. Six is a judgement — wide enough not to
+                 * punish an explanation worth reading, tight enough that the
+                 * marker is still visibly attached to the date it excuses.
+                 */
+                $window = implode("\n", array_slice($lines, max(0, $number - 6), 7));
+
+                if (str_contains($window, 'UTC-CORRECT')) {
+                    continue;
+                }
+
+                $offenders[] = relative_path($file) . ':' . ($number + 1) . ' — ' . $why;
+
+                break;
+            }
+        }
+    }
+
+    Assert::same(
+        [],
+        $offenders,
+        "these build a day from UTC. Use test_local_day() if the application\n   "
+            . "will read it as a venue day, or write a comment containing\n   "
+            . "UTC-CORRECT saying what reads it and why UTC is right:\n   "
+            . implode("\n   ", $offenders)
+    );
+});
+
 // ------------------------------------------------- writes against the schema
 
 /**

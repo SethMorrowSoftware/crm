@@ -130,11 +130,114 @@ function test_boot(bool $fresh = false): bool
     // non-null foreign key, so the reputation module needs a survey to exist.
     (require CC_ROOT . '/install/seeds/surveys.php')();
 
+    test_apply_venue_tz_override();
+
     Settings::load(true);
 
     $booted = true;
 
     return true;
+}
+
+/**
+ * Move the venue's timezone for the run, so the suite can be audited for
+ * UTC-versus-local date bugs without waiting for the clock.
+ *
+ *   CC_TEST_VENUE_TZ=Pacific/Kiritimati php tests/run.php     local is AHEAD
+ *   CC_TEST_VENUE_TZ=Pacific/Midway     php tests/run.php     local is BEHIND
+ *
+ * The bug this exists to find — see `test_local_day()` below — only shows
+ * itself while the venue's calendar day and UTC's disagree, which for
+ * `America/New_York` is the four hours between 8pm and midnight Eastern. A
+ * test written in the wrong frame therefore passes all day and fails in the
+ * evening, which is both the worst way to find out and the hardest state to
+ * reproduce on purpose.
+ *
+ * Moving the venue instead of the clock reproduces it on demand, but WHICH
+ * side of midnight you get still depends on the hour you run at, so it is
+ * worth knowing exactly what each one buys:
+ *
+ *   Pacific/Midway     (UTC-11) is a day BEHIND  UTC from 00:00 to 10:59 UTC
+ *   Pacific/Kiritimati (UTC+14) is a day AHEAD of UTC from 10:00 to 23:59 UTC
+ *
+ * Between them, some skew is available at every hour of the day, and the two
+ * directions together are the whole space. Neither observes daylight saving,
+ * so a failure under one of them is a frame error and never a DST artefact.
+ * To choose the direction rather than take what the hour gives — running the
+ * venue-ahead case in the morning, say — put the clock where you need it with
+ * `faketime`, and start MySQL under the same offset so that `UTC_TIMESTAMP()`
+ * and PHP's `time()` still agree.
+ *
+ * This writes the same settings row the installer writes, which is what makes
+ * it reach the HTTP suite too: that runs in a separate web-server process,
+ * so an override held only in this process's memory would not apply to it.
+ */
+function test_apply_venue_tz_override(): void
+{
+    $zone = getenv('CC_TEST_VENUE_TZ');
+
+    if ($zone === false || $zone === '') {
+        return;
+    }
+
+    try {
+        new DateTimeZone($zone);
+    } catch (Throwable) {
+        fwrite(STDERR, "\n[test bootstrap] CC_TEST_VENUE_TZ=\"{$zone}\" is not a timezone.\n");
+        exit(1);
+    }
+
+    Settings::set('venue.timezone', $zone);
+
+    echo 'Venue timezone overridden: ' . $zone . "\n";
+}
+
+/**
+ * The venue's calendar day, `$daysAgo` days ago.
+ *
+ * ```php
+ * test_local_day()                 // today, at the venue
+ * test_local_day(7)                // a week ago, at the venue
+ * test_local_day(-7)               // a week from now: negative is the future
+ * test_local_day(10, ' 12:00:00')  // that day, as a timestamp
+ * ```
+ *
+ * **Use this, and not `gmdate('Y-m-d', time() - $n * 86400)`, for any date a
+ * test expects the application to reason about as a day.**
+ *
+ * The application reasons in the VENUE's calendar day, not UTC. The venue is
+ * `America/New_York` (`venue_tz()` in `app/helpers.php`), so from 8pm Eastern
+ * until midnight it is already tomorrow in UTC and still today at the Castle.
+ * `MembershipLifecycle::today()` reads the venue's day; so does every report
+ * window and every rollup bucket, through `App\Services\LocalDay`.
+ *
+ * A test that builds its dates with `gmdate()` is therefore making a claim in
+ * the wrong calendar for four hours out of every twenty-four. It does not
+ * fail flakily — it fails *deterministically, in the evening*, and passes
+ * every time anyone looks at it the next morning. Three tests did exactly
+ * that the moment a run crossed midnight UTC:
+ *
+ *   - `FREEZING GIVES THE TIME BACK` wanted 10 days back and got 9, because
+ *     the UTC date it wrote into `updated_at` was a day further from the
+ *     venue's today than it meant to be;
+ *   - `freezing and unfreezing move the end date` lost its "moved on by
+ *     7 days" for the same reason, over HTTP;
+ *   - `the rollup agrees with the report it summarises` compared 96000
+ *     against 25000, because the UTC "yesterday" it booked revenue on was
+ *     still today at the venue, and the nightly rollup only covers days that
+ *     have finished.
+ *
+ * The suffix is appended verbatim, for the columns that want a timestamp
+ * rather than a date. Midday is the right time of day to ask for: it is the
+ * same calendar day in the venue's frame and in UTC whatever the offset, so
+ * the value says what it means however the column is later read.
+ */
+function test_local_day(int $daysAgo = 0, string $suffix = ''): string
+{
+    $day = (new DateTimeImmutable('now', venue_tz()))
+        ->modify(sprintf('%+d days', -$daysAgo));
+
+    return $day->format('Y-m-d') . $suffix;
 }
 
 /**

@@ -77,6 +77,28 @@ function rep_contact(string $name = 'Parent'): int
     ]);
 }
 
+/**
+ * A party date, `$daysAgo` days back, in the frame the sweep actually uses.
+ *
+ * UTC-CORRECT, said once here rather than twelve times below. The reports
+ * module reasons in venue days and its tests use `test_local_day()`; this one
+ * does not. `Feedback::plan()` bounds its candidates with
+ * `event_date >= :oldest AND event_date <= :today` where both come from a
+ * `DateTimeImmutable('now', 'UTC')`, so the lookback window really is UTC,
+ * and a date built here in the venue's frame would be testing a window the
+ * code does not have. (What IS venue-local in that sweep is the delay:
+ * `endOfBooking()` reads the party's end time in the venue's zone. Every
+ * call below clears that delay by days, so no assertion here turns on it.)
+ *
+ * If `plan()` is ever changed to bound by the venue's day — its own comment
+ * already claims it does — this helper is the one place to change with it.
+ */
+function rep_days_ago(int $daysAgo): string
+{
+    // UTC-CORRECT: see above. The whole file's reason lives in one place.
+    return gmdate('Y-m-d', time() - ($daysAgo * 86400));
+}
+
 /** @param array<string,mixed> $overrides */
 function rep_booking(int $contactId, string $date, array $overrides = []): int
 {
@@ -462,10 +484,10 @@ Harness::test('THE SWEEP NEVER REACHES PAST THE LOOKBACK WINDOW', function (): v
     $survey = rep_survey();
 
     $old = rep_contact('Ancient');
-    rep_booking($old, gmdate('Y-m-d', strtotime('-400 days')));
+    rep_booking($old, rep_days_ago(400));
 
     $alsoOld = rep_contact('LastMonth');
-    rep_booking($alsoOld, gmdate('Y-m-d', strtotime('-40 days')));
+    rep_booking($alsoOld, rep_days_ago(40));
 
     Feedback::dispatchDue();
 
@@ -487,7 +509,7 @@ Harness::test('a party inside the window IS planned once the delay has passed', 
 
     // Two days ago, so the 20-hour delay from the party's 16:00 end has
     // certainly passed whatever the venue's timezone.
-    rep_booking($contact, gmdate('Y-m-d', strtotime('-2 days')));
+    rep_booking($contact, rep_days_ago(2));
 
     Feedback::dispatchDue();
 
@@ -506,7 +528,7 @@ Harness::test('a party that ended an hour ago is NOT asked yet', function (): vo
     $contact = rep_contact('Today');
 
     // Today's party, with the delay still to run. The sweep must leave it.
-    rep_booking($contact, gmdate('Y-m-d'), ['end_time' => '23:59']);
+    rep_booking($contact, rep_days_ago(0), ['end_time' => '23:59']);
 
     Feedback::dispatchDue();
 
@@ -524,10 +546,10 @@ Harness::test('only a COMPLETED booking is surveyed', function (): void {
     $survey = rep_survey();
 
     $cancelled = rep_contact('Cancelled');
-    rep_booking($cancelled, gmdate('Y-m-d', strtotime('-2 days')), ['status' => 'cancelled']);
+    rep_booking($cancelled, rep_days_ago(2), ['status' => 'cancelled']);
 
     $noShow = rep_contact('NoShow');
-    rep_booking($noShow, gmdate('Y-m-d', strtotime('-2 days')), ['status' => 'no_show']);
+    rep_booking($noShow, rep_days_ago(2), ['status' => 'no_show']);
 
     Feedback::dispatchDue();
 
@@ -545,7 +567,7 @@ Harness::test('THE SAME PARTY IS NEVER ASKED TWICE', function (): void {
     rep_clear();
     $survey  = rep_survey();
     $contact = rep_contact('Once');
-    rep_booking($contact, gmdate('Y-m-d', strtotime('-3 days')));
+    rep_booking($contact, rep_days_ago(3));
 
     Feedback::dispatchDue();
     Feedback::dispatchDue();
@@ -566,7 +588,7 @@ Harness::test('a switched-off survey asks nobody', function (): void {
     DB::update('surveys', ['is_active' => 0], 'id = :id', ['id' => $survey]);
 
     $contact = rep_contact('Dormant');
-    rep_booking($contact, gmdate('Y-m-d', strtotime('-3 days')));
+    rep_booking($contact, rep_days_ago(3));
 
     Assert::same(0, Feedback::dispatchDue());
     Assert::same(
@@ -582,7 +604,7 @@ Harness::test('a survey with no trigger asks nobody either', function (): void {
     $survey = rep_survey(['trigger_event' => null]);
 
     $contact = rep_contact('Untriggered');
-    rep_booking($contact, gmdate('Y-m-d', strtotime('-3 days')));
+    rep_booking($contact, rep_days_ago(3));
 
     Assert::same(0, Feedback::dispatchDue());
 
@@ -602,7 +624,7 @@ Harness::test('AN INVITATION REFUSED FOR GOOD RECORDS WHY, AND IS NOT RETRIED', 
 
     $contact = rep_contact('NoEmail');
     DB::update('contacts', ['email' => null], 'id = :id', ['id' => $contact]);
-    rep_booking($contact, gmdate('Y-m-d', strtotime('-3 days')));
+    rep_booking($contact, rep_days_ago(3));
 
     Feedback::dispatchDue();
 
@@ -637,7 +659,7 @@ Harness::test('a guest who has opted out of marketing is not surveyed', function
     $contact = rep_contact('OptedOut');
 
     DB::update('contacts', ['email_consent' => 0], 'id = :id', ['id' => $contact]);
-    rep_booking($contact, gmdate('Y-m-d', strtotime('-3 days')));
+    rep_booking($contact, rep_days_ago(3));
 
     Feedback::dispatchDue();
 
@@ -657,7 +679,7 @@ Harness::test('the invitation sweep stops when the budget runs out', function ()
     $survey = rep_survey();
 
     for ($i = 0; $i < 3; $i++) {
-        rep_booking(rep_contact('Budget' . $i), gmdate('Y-m-d', strtotime('-3 days')));
+        rep_booking(rep_contact('Budget' . $i), rep_days_ago(3));
     }
 
     // A budget that is already spent: the rows may be planned, but nothing is

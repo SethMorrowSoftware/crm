@@ -304,6 +304,8 @@ Harness::test('MONEY TYPED IN DOLLARS FINDS THE RIGHT SPENDERS', function (): vo
 });
 
 Harness::test('a relative window finds the recent and not the old', function (): void {
+    // UTC-CORRECT: instants, matched against `DATE_SUB(UTC_TIMESTAMP(), ...)`
+    // in SegmentEngine. The engine's windows are UTC by design.
     $recent = sg_contact(['last_visit_at' => gmdate('Y-m-d H:i:s', time() - 10 * 86400)]);
     $old    = sg_contact(['last_visit_at' => gmdate('Y-m-d H:i:s', time() - 200 * 86400)]);
     $never  = sg_contact();
@@ -409,6 +411,8 @@ Harness::test('A CANCELLED PARTY IS NOT A PARTY THEY HAD', function (): void {
                 'type'           => 'birthday',
                 'status'         => $status,
                 'contact_id'     => $contactId,
+                // UTC-CORRECT: the rule under test is `has_booking ever`,
+                // which asks whether a row exists and never reads its date.
                 'event_date'     => gmdate('Y-m-d', time() - 30 * 86400),
                 'start_time'     => '14:00:00',
                 'end_time'       => '16:00:00',
@@ -624,6 +628,8 @@ Harness::test('campaign engagement counts campaign messages only', function (): 
             'channel'     => 'email',
             'campaign_id' => $campaignId,
             'status'      => 'sent',
+            // UTC-CORRECT: the rule here is `campaign_opened ever`, which
+            // only asks whether the column is set.
             'opened_at'   => gmdate('Y-m-d H:i:s', time() - 5 * 86400),
             'created_at'  => now_utc(),
         ]);
@@ -634,6 +640,7 @@ Harness::test('campaign engagement counts campaign messages only', function (): 
             'direction'  => 'outbound',
             'channel'    => 'email',
             'status'     => 'sent',
+            // UTC-CORRECT: as above — set or not set is the whole question.
             'opened_at'  => gmdate('Y-m-d H:i:s', time() - 5 * 86400),
             'created_at' => now_utc(),
         ]);
@@ -709,6 +716,9 @@ Harness::test('A REAL SEGMENT: consented spenders with a July child or a recent 
             'type'           => 'birthday',
             'status'         => 'completed',
             'contact_id'     => $recent,
+            // UTC-CORRECT: `in_last_days` is DATE_SUB(UTC_TIMESTAMP(), ...)
+            // in SegmentEngine — the engine's windows are UTC by design, not
+            // venue-local like the reports — so this matches its frame.
             'event_date'     => gmdate('Y-m-d', time() - 20 * 86400),
             'start_time'     => '14:00:00',
             'end_time'       => '16:00:00',

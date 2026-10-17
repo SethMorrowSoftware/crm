@@ -515,6 +515,11 @@ Harness::test('an unreadable date of birth is refused, and points at the fix', f
 });
 
 Harness::test('a date of birth in the future is refused', function (): void {
+    // UTC-CORRECT, and deliberately so: Importer compares against its own
+    // `gmdate('Y-m-d')`, so this is the frame the subject uses. A venue-local
+    // date here would be testing a rule the importer does not have. (Whether
+    // the importer SHOULD read the venue's today is a question about the
+    // application, not about this test — and 400 days clears both.)
     $result = imp_contact(['birth_date' => gmdate('Y-m-d', time() + 86400 * 400)]);
 
     Assert::false($result['ok']);
@@ -759,6 +764,8 @@ Harness::test('a visit in the future is refused as a booking', function (): void
      */
     $result = Importer::visitRow([
         'email'      => 'a@example.test',
+        // UTC-CORRECT: the rule being tested is `$date > gmdate('Y-m-d')`,
+        // inside Importer. Same frame as the subject, and a week clears it.
         'visit_date' => gmdate('Y-m-d', time() + 86400 * 7),
     ]);
 

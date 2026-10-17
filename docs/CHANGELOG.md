@@ -1050,6 +1050,40 @@ reachable by accident — which is exactly why they needed finding.
   float loses the last cent. Both are now refused and reported against the
   line they came from, rather than imported as a number nobody typed.
 
+### The calendar the tests were written in
+
+- **Three tests broke the moment a run crossed midnight UTC**, having passed
+  every run before it, and none of them was an application bug. The venue's
+  day is `America/New_York`; a test that builds its dates with `gmdate()` is
+  making a claim in UTC, and the two calendars disagree for four hours out of
+  every twenty-four. So those tests passed all afternoon and failed between
+  8pm and midnight Eastern: a membership gave back 9 days instead of 10, its
+  HTTP twin lost "moved on by 7 days", and a rollup compared 25000 against
+  96000 because the UTC "yesterday" it booked revenue on was still today at
+  the venue, and the nightly rollup only covers days that have finished.
+- **`test_local_day()`** is now the way a test says "a day at the venue".
+  Every date the suite builds from the clock was read and classified one at
+  a time — 75 lines, which is what the new gate below flags on the tree
+  before this change. The ones that reach a venue day were converted; the 29
+  that remain are UTC on purpose, and each carries a line saying so, because
+  the alternative is every future reader deriving it again. They are not all
+  the same case: `SegmentEngine` windows really are `UTC_TIMESTAMP()`, the
+  importer refuses a future date against its own `gmdate('Y-m-d')`, and a
+  `visit_date` posted to the API and compared only with itself has no
+  calendar in it at all.
+- **A build failure rather than a comment.** `static/quality-gates` refuses a
+  test that builds a day from UTC unless a comment next to it says why UTC is
+  right. The datetime form is flagged only when the offset is a whole number
+  of days, which is the shape that means "N days ago" — and the shape the
+  membership tests were written in.
+- **`CC_TEST_VENUE_TZ` runs the whole suite in another venue's calendar**, so
+  this class of bug can be reproduced on demand instead of waiting for the
+  evening. The suite is green in four positions: the Castle inside its bad
+  window, the Castle at midday, a venue 11 hours behind UTC, and a venue 14
+  hours ahead. The last of those found two tests that failed on their own
+  preconditions rather than standing down, which read as a timezone bug
+  rather than as a case that does not apply.
+
 ---
 
 ## Unreleased — next

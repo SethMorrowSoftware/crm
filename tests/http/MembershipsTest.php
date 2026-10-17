@@ -272,8 +272,10 @@ Harness::test('freezing and unfreezing move the end date', function () use ($own
     Assert::same(200, $frozen['status']);
     Assert::contains('Frozen', $frozen['body']);
 
+    // Seven days ago at the venue, not in UTC: unfreeze() measures from here
+    // to MembershipLifecycle::today(), which is the venue's calendar day.
     DB::update('memberships', [
-        'updated_at' => gmdate('Y-m-d H:i:s', time() - (7 * 86400)),
+        'updated_at' => test_local_day(7, ' 12:00:00'),
     ], 'id = :id', ['id' => $id]);
 
     $thawed = $owner->postWithToken('/memberships/' . $id, '/memberships/' . $id . '/unfreeze', [], true);

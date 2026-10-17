@@ -356,8 +356,11 @@ Harness::test('FREEZING GIVES THE TIME BACK', function (): void {
     Assert::same('frozen', (string) mi_row($id)['status']);
 
     // Frozen ten days ago, so unfreezing should move the end date on by ten.
+    // Ten days ago AT THE VENUE: unfreeze() counts from the date part of this
+    // column to MembershipLifecycle::today(), which is the venue's day, so a
+    // UTC date here asks for nine days back between 8pm and midnight Eastern.
     DB::update('memberships', [
-        'updated_at' => gmdate('Y-m-d H:i:s', time() - (10 * 86400)),
+        'updated_at' => test_local_day(10, ' 12:00:00'),
     ], 'id = :id', ['id' => $id]);
 
     $result = MembershipLifecycle::unfreeze($id);

@@ -32,6 +32,20 @@ if (!test_boot()) {
     return;
 }
 
+/*
+ * This file is the one place where the venue's own zone is the subject rather
+ * than the setting, so it cannot run under the CC_TEST_VENUE_TZ override the
+ * bootstrap offers — every expected offset below is -4 or -5. Under an
+ * explicit override it stands down and says so; without one, a zone that is
+ * not New York is still the hard stop it has always been, because then the
+ * seeds have changed under it and every assertion here is measuring nothing.
+ */
+if (getenv('CC_TEST_VENUE_TZ')) {
+    Harness::skip('booking availability suite', 'CC_TEST_VENUE_TZ is set: these tests are written against America/New_York');
+
+    return;
+}
+
 Assert::same(
     'America/New_York',
     Settings::timezone(),
