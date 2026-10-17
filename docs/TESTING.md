@@ -471,6 +471,48 @@ Two things worth knowing from that:
   Worth doing before any push that touches a JSON column, a `GROUP BY`, a
   `DISTINCT`, or anything near a date or a decimal.
 
+### In a Claude Code cloud session, the database builds itself
+
+`.claude/hooks/session-start.sh` is a `SessionStart` hook that installs MariaDB
+and prepares `castle_crm_test` before the session starts, so `php tests/run.php`
+works with no setup. It is registered in `.claude/settings.json`, does nothing
+unless `CLAUDE_CODE_REMOTE=true`, and prints one line naming the engine, the
+connection and the `LocalDay` mode it got. Measured: ~18s on a cold container,
+~1s on a resumed one, then 1,765 tests passing with nothing skipped.
+
+**The Docker recipe above cannot be used there**, so don't reach for it: the
+Docker daemon will not start in a cloud container (`service docker start` fails
+with `ulimit: error setting limit (Operation not permitted)`, and `docker info`
+then reports no `/var/run/docker.sock`). The hook installs MariaDB from Ubuntu's
+archive and starts it by calling `mysqld_safe` directly, because the packaged
+service scripts are refused too — `invoke-rc.d` by `policy-rc.d`, and
+`/etc/init.d/mysql` by the same ulimit wall as Docker.
+
+Two consequences worth keeping in mind:
+
+- **A cloud session is a MariaDB session.** It is the same engine as local
+  development and one of CI's four database jobs, so a green run there means
+  exactly what a green local run means and no more. The MySQL-only differences
+  above are still invisible until CI runs.
+- **The hook never fails the session.** If it cannot deliver a database it exits
+  0 and says so loudly on both stdout and stderr, naming
+  `storage/logs/session-start-hook.log`. A silent skip would read as a broken
+  test suite rather than a missing database, which is why that message exists —
+  and why `--require-db` is the honest way to run while it is broken.
+
+One trap is recorded in the hook's own comments and is worth knowing if you ever
+set this up by hand: creating `'root'@'127.0.0.1'` is **not** enough. The server
+resolves a 127.0.0.1 connection back to `localhost` and matches
+`'root'@'localhost'`, which authenticates via `unix_socket` — so the `mysql` CLI
+works over its socket while PDO keeps failing with `SQLSTATE[HY000] [1698]
+Access denied for user 'root'@'localhost'`. The fix is to switch that account's
+plugin:
+
+    ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('');
+
+The hook therefore verifies itself through PDO over TCP rather than through the
+CLI, since a passing CLI is precisely the false positive to avoid.
+
 ### A green test can sit on top of a 500
 
 Every test in `tests/http/WaiversTest.php` posted to the publish route and
