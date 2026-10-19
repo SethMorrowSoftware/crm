@@ -76,12 +76,7 @@ $query = static fn (array $extra = []): string => url('/memberships?' . http_bui
             </select>
         </div>
 
-        <div class="field field-actions">
-            <button type="submit" class="btn btn-sm">Filter</button>
-            <?php if (request()->str('q') !== '' || request()->int('plan') > 0): ?>
-                <a class="btn btn-ghost btn-sm" href="<?= e(url('/memberships?show=' . $view)) ?>">Clear</a>
-            <?php endif; ?>
-        </div>
+        <button type="submit" class="btn btn-ghost">Filter</button>
     </form>
 
     <?php if ($rows === []): ?>

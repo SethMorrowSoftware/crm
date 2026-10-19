@@ -337,15 +337,6 @@ if (!function_exists('local_time')) {
             return '—';
         }
 
-        // A bare date is a day on the calendar, not an instant, so it has no
-        // timezone to convert out of. Read as midnight UTC it became the
-        // evening BEFORE in New York, and every birthday and party date on
-        // the page showed a day early. calendar_date() is the right call for
-        // a DATE column; this keeps a stray one from going wrong.
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $utc) === 1) {
-            return calendar_date($utc, $format);
-        }
-
         try {
             return (new DateTimeImmutable($utc, new DateTimeZone('UTC')))
                 ->setTimezone(venue_tz())
@@ -353,74 +344,6 @@ if (!function_exists('local_time')) {
         } catch (Exception) {
             return '—';
         }
-    }
-}
-
-if (!function_exists('calendar_date')) {
-    /**
-     * A calendar day, as stored: a DATE column, or the date part of a
-     * DATETIME that only ever holds midnight (a visit has no clock time).
-     *
-     * NEVER converted between timezones, because there is nothing to convert:
-     * a child born on 21 October was born on 21 October in Chester. local_date()
-     * is for INSTANTS stored in UTC, and given a day it moved it to the evening
-     * before — which on a birthday-party venue's guest page is the one date
-     * that must not be wrong.
-     */
-    function calendar_date(?string $value, string $format = 'M j, Y'): string
-    {
-        if ($value === null || $value === '' || str_starts_with($value, '0000')) {
-            return '—';
-        }
-
-        $day = DateTimeImmutable::createFromFormat('!Y-m-d', substr($value, 0, 10));
-
-        return $day === false ? '—' : $day->format($format);
-    }
-}
-
-if (!function_exists('birthday_next')) {
-    /**
-     * The next birthday on or after today, and the age it brings.
-     *
-     * Today is the VENUE'S day unless one is given. A 29 February birthday
-     * falls on the 28th in a year without one, which is when a family would
-     * expect the card.
-     *
-     * @return array{date:string,turns:int,days:int}|null
-     */
-    function birthday_next(?string $birthDate, ?string $today = null): ?array
-    {
-        $born = $birthDate === null ? false : DateTimeImmutable::createFromFormat('!Y-m-d', substr($birthDate, 0, 10));
-        $now  = DateTimeImmutable::createFromFormat(
-            '!Y-m-d',
-            $today ?? (new DateTimeImmutable('now', venue_tz()))->format('Y-m-d')
-        );
-
-        if ($born === false || $now === false || $born > $now) {
-            return null;
-        }
-
-        $month = (int) $born->format('n');
-        $day   = (int) $born->format('j');
-
-        $on = static function (int $year) use ($month, $day): DateTimeImmutable {
-            $useDay = ($month === 2 && $day === 29 && !checkdate(2, 29, $year)) ? 28 : $day;
-
-            return (new DateTimeImmutable())->setDate($year, $month, $useDay)->setTime(0, 0);
-        };
-
-        $next = $on((int) $now->format('Y'));
-
-        if ($next < $now) {
-            $next = $on((int) $now->format('Y') + 1);
-        }
-
-        return [
-            'date'  => $next->format('Y-m-d'),
-            'turns' => (int) $next->format('Y') - (int) $born->format('Y'),
-            'days'  => (int) $now->diff($next)->days,
-        ];
     }
 }
 

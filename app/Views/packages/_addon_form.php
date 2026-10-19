@@ -14,7 +14,7 @@ declare(strict_types=1);
 $id = (int) ($a['id'] ?? 0);
 $f  = static fn (string $name): string => 'addon-' . $name . '-' . ($id === 0 ? 'new' : (string) $id);
 ?>
-<form method="post" action="<?= e($action) ?>" class="form">
+<form method="post" action="<?= e($action) ?>">
     <?= csrf_field() ?>
 
     <div class="field-row">

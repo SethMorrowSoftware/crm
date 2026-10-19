@@ -91,7 +91,6 @@ final class TextClubController extends Controller
         $month    = TextClub::monthIn(now_utc(), Settings::timezone());
 
         return $this->view('text-club/index', [
-            'pageTitle'  => 'Text Club',
             'title'      => 'Text Club',
             'rows'       => $rows,
             'stats'      => $stats,

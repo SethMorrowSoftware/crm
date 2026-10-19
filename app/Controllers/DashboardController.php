@@ -265,16 +265,11 @@ final class DashboardController extends Controller
     private function recentActivity(): array
     {
         return DB::all(
-            // Changes, not sign-ins. Every page load of a busy desk is a
-            // login somewhere, and eight of them filled the card on every
-            // screenshot ever taken of it — "Who changed what" answered with
-            // "somebody signed in". The audit log keeps them, one click away.
-            "SELECT a.action, a.entity_type, a.entity_id, a.created_at, u.name AS user_name
+            'SELECT a.action, a.entity_type, a.entity_id, a.created_at, u.name AS user_name
                FROM {audit_log} a
                LEFT JOIN {users} u ON u.id = a.user_id
-              WHERE a.action NOT LIKE 'login.%' AND a.action <> 'logout'
               ORDER BY a.id DESC
-              LIMIT 8"
+              LIMIT 8'
         );
     }
 }

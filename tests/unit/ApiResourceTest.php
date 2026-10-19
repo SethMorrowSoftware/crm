@@ -44,6 +44,16 @@ Harness::test('every resource declares the keys the controller relies on', funct
     }
 });
 
+Harness::test('AN EXACT FILTER IS ON A FIELD THE CALLER COULD READ ANYWAY', function (): void {
+    // Otherwise `?some_hidden_column=x` answers "is there a row where it is
+    // x?" one guess at a time, about a column the allowlist exists to hide.
+    foreach (ApiResource::RESOURCES as $name => $definition) {
+        foreach ($definition['exact'] ?? [] as $field) {
+            Assert::inArray($field, $definition['fields'], $name . ' filters on "' . $field . '", which it does not expose');
+        }
+    }
+});
+
 Harness::test('every permission a resource names is in the ACL catalogue', function (): void {
     // A typo here is not a locked door, it is an UNLOCKED one: `Acl::can()`
     // on an unknown permission returns false for a normal role but TRUE for
@@ -454,6 +464,13 @@ Harness::test('every foreign key in a writable list is covered by that rule', fu
                 continue;
             }
 
+            // A foreign system's own identifier, exempt by name and on
+            // purpose: a CenterEdge customer number is whatever CenterEdge
+            // says it is, not the id of a row here.
+            if (in_array($field, ['external_pos_id', 'external_ref'], true)) {
+                continue;
+            }
+
             // A field that LOOKS like a reference but is not covered.
             if (preg_match('/(^|_)(id|ref|key)$/', $field) === 1) {
                 $uncovered[] = $name . '.' . $field;
@@ -465,10 +482,11 @@ Harness::test('every foreign key in a writable list is covered by that rule', fu
 
     /*
      * EMPTY, and that is the assertion. Every writable field that reads like a
-     * reference ends in `_id` and is therefore covered. The helper's two
-     * exemptions — `external_pos_id` and `external_ref`, a foreign system's
-     * own strings, which may be anything at all — turn out not to be writable
-     * through the API at all, so they never reach the rule either way.
+     * reference ends in `_id` and is therefore covered, except the helper's
+     * two named exemptions — `external_pos_id` and `external_ref`, a foreign
+     * system's own strings, which may be anything at all. `external_pos_id`
+     * became writable on contacts so the CenterEdge bridge can record the
+     * customer number it matches on.
      *
      * If this ever fails it is naming a foreign key the id rule does not
      * protect, which is the hole this whole family of bugs came through.

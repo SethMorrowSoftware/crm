@@ -74,7 +74,7 @@ $memberName = static function (array $row): string {
         <span class="stat-value"><?= number_format((int) $contact['visit_count']) ?></span>
         <span class="stat-note">
             <?= !empty($contact['last_visit_at'])
-                ? 'Last ' . e(calendar_date((string) $contact['last_visit_at']))
+                ? 'Last ' . e(local_date((string) $contact['last_visit_at']))
                 : 'None recorded yet' ?>
         </span>
     </div>
@@ -82,7 +82,7 @@ $memberName = static function (array $row): string {
         <span class="stat-label">First visit</span>
         <span class="stat-value">
             <?= !empty($contact['first_visit_at'])
-                ? e(calendar_date((string) $contact['first_visit_at']))
+                ? e(local_date((string) $contact['first_visit_at']))
                 : '&mdash;' ?>
         </span>
         <span class="stat-note">From the POS card ledger, once connected</span>
@@ -149,7 +149,7 @@ $memberName = static function (array $row): string {
             <div>
                 <dt>Date of birth</dt>
                 <dd><?= !empty($contact['birth_date'])
-                        ? e(calendar_date((string) $contact['birth_date']))
+                        ? e(local_date((string) $contact['birth_date']))
                         : '<span class="muted">Not known</span>' ?></dd>
             </div>
             <div>
@@ -241,24 +241,12 @@ $memberName = static function (array $row): string {
 
         <?php if ($children !== []): ?>
             <p class="form-section-title">Children</p>
-            <ul class="child-list">
+            <ul class="feature-list">
                 <?php foreach ($children as $child): ?>
-                    <?php $next = birthday_next($child['birth_date'] ?? null); ?>
                     <li>
-                        <strong><?= e($child['first_name']) ?></strong>
-                        <?php if ($next !== null): ?>
-                            <span class="<?= $next['days'] <= 30 ? 'child-soon' : 'child-when' ?>"
-                                  title="Born <?= e(calendar_date((string) $child['birth_date'])) ?>">
-                                <?= e(match (true) {
-                                    $next['days'] === 0 => 'turns ' . $next['turns'] . ' today',
-                                    $next['days'] === 1 => 'turns ' . $next['turns'] . ' tomorrow',
-                                    $next['days'] <= 30 => 'turns ' . $next['turns'] . ' in ' . $next['days'] . ' days',
-                                    default             => 'turns ' . $next['turns'] . ' on '
-                                        . calendar_date($next['date'], 'M j'),
-                                }) ?>
-                            </span>
-                        <?php elseif (!empty($child['birth_date'])): ?>
-                            <span class="child-when"><?= e(calendar_date((string) $child['birth_date'])) ?></span>
+                        <?= e($child['first_name']) ?>
+                        <?php if (!empty($child['birth_date'])): ?>
+                            <span class="muted"><?= e(local_date((string) $child['birth_date'])) ?></span>
                         <?php endif; ?>
                         <?php if (!empty($child['allergies'])): ?>
                             <strong class="badge badge-warn">Allergies: <?= e($child['allergies']) ?></strong>

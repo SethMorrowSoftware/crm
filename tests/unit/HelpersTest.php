@@ -202,31 +202,3 @@ Harness::test('icon() returns SVG for a known name and nothing for an unknown on
     Assert::contains('aria-hidden="true"', icon('check'), 'icons are decorative');
     Assert::same('', icon('no-such-icon'), 'an unknown icon must not break a page');
 });
-
-Harness::test('a calendar day is shown as the day it is, in any timezone', function (): void {
-    // The bug this pins: local_date('2018-10-21') read the day as midnight
-    // UTC and moved it to New York, so every child's birthday and every
-    // party date on the page showed the day BEFORE.
-    Assert::same('Oct 21, 2018', calendar_date('2018-10-21'));
-    Assert::same('Oct 10, 2026', calendar_date('2026-10-10 00:00:00'), 'a visit stored as a midnight DATETIME');
-    Assert::same('Saturday 24 October', calendar_date('2026-10-24', 'l j F'));
-    Assert::same('—', calendar_date(null));
-    Assert::same('—', calendar_date('0000-00-00'));
-    Assert::same('—', calendar_date('not a date'));
-
-    // And the instant formatter no longer moves a bare day either.
-    Assert::same('Oct 21, 2018', local_date('2018-10-21'));
-});
-
-Harness::test('the next birthday, and the age it brings', function (): void {
-    Assert::same(['date' => '2026-10-21', 'turns' => 8, 'days' => 2], birthday_next('2018-10-21', '2026-10-19'));
-    Assert::same(['date' => '2026-10-19', 'turns' => 12, 'days' => 0], birthday_next('2014-10-19', '2026-10-19'), 'today counts');
-    Assert::same(['date' => '2027-10-18', 'turns' => 13, 'days' => 364], birthday_next('2014-10-18', '2026-10-19'), 'yesterday is next year');
-
-    // 29 February falls on the 28th in a year without one.
-    Assert::same(['date' => '2027-02-28', 'turns' => 11, 'days' => 58], birthday_next('2016-02-29', '2027-01-01'));
-    Assert::same('2028-02-29', birthday_next('2016-02-29', '2028-01-01')['date'] ?? null);
-
-    Assert::null(birthday_next(null, '2026-10-19'));
-    Assert::null(birthday_next('2030-01-01', '2026-10-19'), 'not born yet');
-});

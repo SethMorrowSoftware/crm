@@ -69,25 +69,25 @@ $link = static function (string $targetView, string $targetDate) use ($view, $da
     <?php endif; ?>
 </div>
 
-<div class="card cal-toolbar">
-    <div class="cal-toolbar-group" role="group" aria-label="View">
+<div class="card filter-bar">
+    <p class="page-lede">
         <?php foreach (['month' => 'Month', 'week' => 'Week', 'day' => 'Day'] as $key => $label): ?>
             <a class="btn btn-sm <?= $view === $key ? '' : 'btn-ghost' ?>"
                href="<?= e($link($key, $date)) ?>"
                 <?= $view === $key ? 'aria-current="page"' : '' ?>><?= e($label) ?></a>
         <?php endforeach; ?>
-    </div>
+    </p>
 
-    <div class="cal-toolbar-group">
+    <p class="page-lede">
         <a class="btn btn-ghost btn-sm" href="<?= e($link($view, $previous)) ?>"
            rel="prev">&larr; <span class="sr-only">Previous <?= e($view) ?></span></a>
-        <strong class="cal-toolbar-title"><?= e($title) ?></strong>
+        <strong><?= e($title) ?></strong>
         <a class="btn btn-ghost btn-sm" href="<?= e($link($view, $next)) ?>"
            rel="next"><span class="sr-only">Next <?= e($view) ?></span> &rarr;</a>
         <a class="btn btn-ghost btn-sm" href="<?= e($link($view, $today)) ?>">Today</a>
-    </div>
+    </p>
 
-    <form method="get" action="<?= e(url('/calendar')) ?>" class="cal-toolbar-group field">
+    <form method="get" action="<?= e(url('/calendar')) ?>" class="field field-actions">
         <input type="hidden" name="view" value="<?= e($view) ?>">
         <label for="jump" class="sr-only">Jump to a date</label>
         <input type="date" id="jump" name="date" value="<?= e($date) ?>">
