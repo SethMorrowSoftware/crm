@@ -476,7 +476,7 @@ final class Backup
         // Excel reads a bare UTF-8 CSV as Windows-1252 and mangles every
         // accented name in the file. A BOM is the only thing that stops it.
         fwrite($handle, "\xEF\xBB\xBF");
-        fputcsv($handle, array_map([Response::class, 'csvCell'], $columns));
+        fputcsv($handle, array_map([Response::class, 'csvCell'], $columns), escape: '');
 
         $written = 0;
 
@@ -486,7 +486,7 @@ final class Backup
             // code that runs when a member of staff opens the download. This
             // path wrote raw values until the review caught it, under a UI hint
             // on the Backups page that promised otherwise.
-            fputcsv($handle, array_map([Response::class, 'csvCell'], $row));
+            fputcsv($handle, array_map([Response::class, 'csvCell'], $row), escape: '');
 
             $written++;
 

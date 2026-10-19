@@ -1110,6 +1110,37 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Fixed: nobody could sign in on a PHP built without Argon2
+
+`Auth::attempt()` checked whether a stored hash needed upgrading by naming
+`PASSWORD_ARGON2ID` directly. `Auth::hash()` had always fallen back to bcrypt
+when that constant is missing, but the rehash check did not — so on a PHP
+built without libargon2 the constant was undefined, the check threw AFTER the
+password had verified, and every correct sign-in ended in a 500. Wrong
+passwords still failed politely, which is what made it look like a working
+login screen. Found by running the suite on PHP 8.1, where it took down 497
+tests at once. `Auth::needsRehash()` now makes the same choice `hash()` does.
+
+The timing decoy for an unknown address had the same blind spot: it verified
+against an Argon2 hash, which on such a PHP returns at once — so a response
+that came back fast meant "no account with that address". It now verifies
+against a hash of whichever algorithm the server actually uses.
+
+### Fixed: every import, export and backup failed on PHP 8.4
+
+PHP 8.4 deprecates calling `fputcsv()`, `fgetcsv()` and `str_getcsv()`
+without `$escape`, and the error handler turns a deprecation into an
+exception. On a host that upgraded to 8.4 the guest import, every CSV export
+and the backup download all failed. Every call now passes `escape: ''` — RFC
+4180, what Excel writes, and PHP 9's default — and a static gate fails the
+build if a call ever relies on the default again.
+
+### Added: CI that runs locally
+
+`tools/ci-local.sh` runs what the workflow runs — lint, the full suite on
+every PHP version installed, and the installer walk-through — without GitHub
+Actions. See `docs/TESTING.md`.
+
 ### Fixed: the app was telling venues to break their own email
 
 **`Settings → Email` printed `v=spf1 +a +mx ~all` for the domain whatever the

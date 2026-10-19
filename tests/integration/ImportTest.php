@@ -79,7 +79,7 @@ function imp_job(string $entity, array $rows, array $mapping, array $options = [
     Assert::true($handle !== false, 'the test file could be written');
 
     foreach ($rows as $row) {
-        fputcsv($handle, $row);
+        fputcsv($handle, $row, escape: '');
     }
 
     fclose($handle);

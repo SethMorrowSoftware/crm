@@ -207,7 +207,7 @@ function hi_job(string $entity, string $csv, array $mapping, string $status = 'm
     $name = 'import-' . gmdate('Ymd-His') . '-' . bin2hex(random_bytes(8)) . '.csv';
     file_put_contents(ImportRunner::directory() . '/' . $name, $csv);
 
-    $header = str_getcsv((string) strstr($csv, "\n", true));
+    $header = str_getcsv((string) strstr($csv, "\n", true), escape: '');
 
     return (int) DB::insert('imports', [
         'entity'        => $entity,

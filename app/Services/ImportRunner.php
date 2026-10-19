@@ -127,7 +127,7 @@ final class ImportRunner
          * the data.
          */
         if ($cursor === 0) {
-            $header = fgetcsv($handle);
+            $header = fgetcsv($handle, escape: '');
 
             if ($header === false) {
                 fclose($handle);
@@ -186,7 +186,7 @@ final class ImportRunner
                     break;
                 }
 
-                $row = fgetcsv($handle);
+                $row = fgetcsv($handle, escape: '');
 
                 if ($row === false) {
                     $finished = true;

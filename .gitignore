@@ -1,4 +1,7 @@
 config/config.php
+# What tests/run.php sets a real config aside as. A run killed mid-way leaves
+# it behind, and it must never be committed.
+config/config.php.testbackup
 install/.lock
 storage/logs/*
 storage/cache/*

@@ -40,6 +40,18 @@ final class Auth
         'threads'     => 1,
     ];
 
+    /** Bcrypt cost, for a PHP built without libargon2. */
+    private const BCRYPT_OPTIONS = ['cost' => 12];
+
+    /**
+     * Hashes of a fixed string, verified against for an unknown address so the
+     * response takes as long as a real check. One per algorithm, because
+     * verifying an Argon2 hash on a PHP that has no Argon2 returns at once —
+     * which is the timing difference this exists to remove.
+     */
+    private const DECOY_ARGON2ID = '$argon2id$v=19$m=47104,t=3,p=1$aaaaaaaaaaaaaaaaaaaaaa$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    private const DECOY_BCRYPT = '$2y$12$2ml1Ed55iiudNz0QIGqZoOooMOjZy2I.5wG2.k2Hchyg7Rp8Cl7YS';
+
     // -----------------------------------------------------------------
     // Current user
     // -----------------------------------------------------------------
@@ -191,7 +203,7 @@ final class Auth
         // Always spend time hashing, even for an unknown address, so response
         // timing does not reveal which accounts exist.
         if ($user === null) {
-            password_verify($password, '$argon2id$v=19$m=47104,t=3,p=1$aaaaaaaaaaaaaaaaaaaaaa$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+            password_verify($password, self::hasArgon2() ? self::DECOY_ARGON2ID : self::DECOY_BCRYPT);
             self::recordFailure($email, $request);
 
             return ['ok' => false, 'error' => 'Those credentials do not match our records.'];
@@ -228,7 +240,7 @@ final class Auth
 
         // Upgrade the stored hash if the cost parameters have changed since it
         // was written. Safe here because we hold the plaintext exactly once.
-        if (password_needs_rehash((string) $user['password_hash'], PASSWORD_ARGON2ID, self::HASH_OPTIONS)) {
+        if (self::needsRehash((string) $user['password_hash'])) {
             DB::update('users', [
                 'password_hash' => self::hash($password),
             ], 'id = :id', ['id' => (int) $user['id']]);
@@ -277,7 +289,7 @@ final class Auth
 
     public static function hash(string $password): string
     {
-        if (defined('PASSWORD_ARGON2ID')) {
+        if (self::hasArgon2()) {
             $hash = password_hash($password, PASSWORD_ARGON2ID, self::HASH_OPTIONS);
 
             if (is_string($hash)) {
@@ -286,7 +298,28 @@ final class Auth
         }
 
         // Argon2 needs libargon2 at compile time; bcrypt is always available.
-        return (string) password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
+        return (string) password_hash($password, PASSWORD_BCRYPT, self::BCRYPT_OPTIONS);
+    }
+
+    /**
+     * Whether a stored hash should be rewritten with today's algorithm.
+     *
+     * The same choice hash() makes, and it has to be: naming PASSWORD_ARGON2ID
+     * here directly is an undefined-constant Error on a PHP built without
+     * libargon2, thrown AFTER the password verified — so every correct sign-in
+     * failed with a 500 and nobody could get in at all. The static PHP 8.1–8.3
+     * builds used for local CI are exactly that build, and so are some hosts.
+     */
+    public static function needsRehash(string $hash): bool
+    {
+        return self::hasArgon2()
+            ? password_needs_rehash($hash, PASSWORD_ARGON2ID, self::HASH_OPTIONS)
+            : password_needs_rehash($hash, PASSWORD_BCRYPT, self::BCRYPT_OPTIONS);
+    }
+
+    private static function hasArgon2(): bool
+    {
+        return defined('PASSWORD_ARGON2ID');
     }
 
     /**

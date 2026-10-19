@@ -927,6 +927,41 @@ Harness::test('no file contains a leftover debugging call', function (): void {
     Assert::same([], $offenders, "debugging left in:\n   " . implode("\n   ", $offenders));
 });
 
+Harness::test('every CSV call names its escape character', function (): void {
+    // PHP 8.4 deprecates leaving `$escape` to its default, and the error
+    // handler promotes a deprecation to an exception — so on a host that
+    // upgrades to 8.4 under the venue, every import, export and backup dies.
+    // That is not hypothetical: 42 tests errored the first time the suite ran
+    // on 8.4. The answer is `escape: ''`, which is RFC 4180 and what Excel
+    // writes; the old default of a backslash misreads a cell ending in `\"`.
+    //
+    // The tests are read too, because a test that builds its fixture with the
+    // default dies on 8.4 the same way and reads as a broken feature.
+    $offenders = [];
+    $files = project_php_files();
+
+    foreach (['tests/unit', 'tests/integration', 'tests/http', 'tests/static'] as $directory) {
+        $files = array_merge($files, glob(CC_ROOT . '/' . $directory . '/*.php') ?: []);
+    }
+
+    foreach ($files as $file) {
+        $lines = preg_split('/\R/', (string) file_get_contents($file)) ?: [];
+
+        foreach ($lines as $number => $line) {
+            if (preg_match('/^\s*(\*|\/\/)/', $line) === 1) {
+                continue; // a comment may name one
+            }
+
+            if (preg_match('/(?<![A-Za-z0-9_>:])(fputcsv|fgetcsv|str_getcsv)\s*\(/', $line) === 1
+                && !str_contains($line, 'escape:')) {
+                $offenders[] = relative_path($file) . ':' . ($number + 1);
+            }
+        }
+    }
+
+    Assert::same([], $offenders, "CSV calls relying on the default escape:\n   " . implode("\n   ", $offenders));
+});
+
 Harness::test('no file has a UTF-8 BOM', function (): void {
     // A BOM emits bytes before headers, which breaks every redirect and cookie.
     $offenders = [];

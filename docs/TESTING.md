@@ -368,6 +368,33 @@ works — including signing in as the account the installer created.
 | **test** | The full suite on PHP 8.1 / 8.2 / 8.3 against MySQL 8.0, plus MariaDB 10.11 and MySQL 5.7 — the two things a cPanel host actually offers. |
 | **install** | The installer walk-through, using an unprivileged database user created the way cPanel would. |
 
+### Running the same thing locally
+
+The repository is private, so Actions minutes are not something to lean on.
+`tools/ci-local.sh` runs the same three jobs on whatever machine it is on:
+
+```bash
+tools/ci-local.sh                         # every php8.x on PATH, else `php`
+PHP_BINS="php8.1 php8.4" tools/ci-local.sh
+tools/ci-local.sh --quick                 # lint, unit and static only
+```
+
+It runs the full suite once per PHP binary, then walks the installer as an
+unprivileged user it creates. `walk-installer.php` deletes
+`config/config.php` and `install/.lock`, so the script sets both aside first
+and puts them back on exit, Ctrl-C included.
+
+What it does not cover: the database matrix. It tests whichever server is
+listening, so on a MariaDB machine a MySQL-only regression still needs the
+workflow, or a MySQL server pointed at with `CC_TEST_DB_*`.
+
+**Several PHP versions without root.** Self-contained CLI builds from
+[static-php-cli](https://static-php.dev) drop into `~/.local/bin` as `php8.1`,
+`php8.2`… and carry `pdo_mysql`. One difference from a distribution PHP is
+worth knowing, because it found a real bug: the 8.1–8.3 builds have no
+libargon2, so `PASSWORD_ARGON2ID` is undefined — and the login path named it
+directly, so on such a host every correct password ended in a 500.
+
 ### One thing the runner does that is easy to miss
 
 It flushes the file cache before the HTTP suite. The rate-limit counters live

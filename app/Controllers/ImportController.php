@@ -116,7 +116,7 @@ final class ImportController extends Controller
          * row of column names in it.
          */
         $handle = @fopen($temp, 'rb');
-        $header = $handle === false ? false : fgetcsv($handle);
+        $header = $handle === false ? false : fgetcsv($handle, escape: '');
 
         if ($handle !== false) {
             fclose($handle);
