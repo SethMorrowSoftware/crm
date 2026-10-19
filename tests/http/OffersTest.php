@@ -64,9 +64,9 @@ Harness::test('the list shows the seeded offers, and the front desk cannot open 
 Harness::test('a new offer is saved in capitals, good until the end of its last day here', function () use ($owner): void {
     of_clear();
 
-    $owner->postWithToken('/settings/offers', '/settings/offers', of_form([
+    Assert::same(302, $owner->postWithToken('/settings/offers', '/settings/offers', of_form([
         'code' => 'oftest-fall', 'expires_on' => '2026-12-31', 'min_spend' => '50',
-    ]));
+    ]))['status'], 'the save redirects rather than failing');
 
     $row = DB::first("SELECT * FROM {coupons} WHERE code = 'OFTEST-FALL'");
     Assert::notNull($row, 'created, in capitals');
@@ -85,9 +85,9 @@ Harness::test('a new offer is saved in capitals, good until the end of its last 
 Harness::test('a code is never reused, and a bad one is refused', function () use ($owner): void {
     of_clear();
 
-    $owner->postWithToken('/settings/offers', '/settings/offers', of_form(['code' => 'OFTEST1']));
-    $owner->postWithToken('/settings/offers', '/settings/offers', of_form(['code' => 'OFTEST1', 'name' => 'Second']));
-    $owner->postWithToken('/settings/offers', '/settings/offers', of_form(['code' => 'OF TEST!']));
+    Assert::same(302, $owner->postWithToken('/settings/offers', '/settings/offers', of_form(['code' => 'OFTEST1']))['status'], 'the save redirects rather than failing');
+    Assert::same(302, $owner->postWithToken('/settings/offers', '/settings/offers', of_form(['code' => 'OFTEST1', 'name' => 'Second']))['status'], 'the save redirects rather than failing');
+    Assert::same(302, $owner->postWithToken('/settings/offers', '/settings/offers', of_form(['code' => 'OF TEST!']))['status'], 'the save redirects rather than failing');
 
     Assert::same(1, (int) DB::value("SELECT COUNT(*) FROM {coupons} WHERE code = 'OFTEST1'"));
     Assert::same('Test offer', (string) DB::value("SELECT name FROM {coupons} WHERE code = 'OFTEST1'"), 'the first kept');
@@ -99,7 +99,7 @@ Harness::test('a code is never reused, and a bad one is refused', function () us
 Harness::test('a percentage over 100 is refused', function () use ($owner): void {
     of_clear();
 
-    $owner->postWithToken('/settings/offers', '/settings/offers', of_form(['code' => 'OFTEST-BIG', 'value' => '150']));
+    Assert::same(302, $owner->postWithToken('/settings/offers', '/settings/offers', of_form(['code' => 'OFTEST-BIG', 'value' => '150']))['status'], 'the save redirects rather than failing');
 
     Assert::same(0, (int) DB::value("SELECT COUNT(*) FROM {coupons} WHERE code = 'OFTEST-BIG'"));
 });
@@ -107,12 +107,12 @@ Harness::test('a percentage over 100 is refused', function () use ($owner): void
 Harness::test('editing an offer cannot change its code', function () use ($owner): void {
     of_clear();
 
-    $owner->postWithToken('/settings/offers', '/settings/offers', of_form(['code' => 'OFTEST-KEEP']));
+    Assert::same(302, $owner->postWithToken('/settings/offers', '/settings/offers', of_form(['code' => 'OFTEST-KEEP']))['status'], 'the save redirects rather than failing');
     $id = (int) DB::value("SELECT id FROM {coupons} WHERE code = 'OFTEST-KEEP'");
 
-    $owner->postWithToken('/settings/offers/' . $id, '/settings/offers/' . $id, of_form([
+    Assert::same(302, $owner->postWithToken('/settings/offers/' . $id, '/settings/offers/' . $id, of_form([
         'code' => 'OFTEST-CHANGED', 'value' => '25',
-    ]));
+    ]))['status'], 'the save redirects rather than failing');
 
     $row = DB::first('SELECT code, value FROM {coupons} WHERE id = :id', ['id' => $id]);
     Assert::same('OFTEST-KEEP', (string) $row['code']);
