@@ -1566,3 +1566,34 @@ body.embed .review-wall { padding: .25rem; }
     .content { padding: 0; max-width: none; }
     a { color: #000; text-decoration: underline; }
 }
+
+/* -------------------------------------------------------- Message templates */
+
+/* The editor on the left, what a guest sees on the right; stacked on a
+   narrower screen, preview second. */
+.template-layout {
+    display: grid; gap: var(--gap); align-items: start;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 27rem);
+}
+.template-side { min-width: 0; }
+.template-preview {
+    display: block; width: 100%; height: 36rem;
+    border: 1px solid var(--line); border-radius: var(--radius-sm);
+    /* The email's own background, whatever the app's theme. */
+    background: #fff;
+}
+/* A text is a bubble or two, not a letter. */
+.template-preview-sms { height: 15rem; }
+.field textarea.code-input {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .78rem; line-height: 1.5; tab-size: 2;
+}
+.tag-list { list-style: none; margin: .5rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: .35rem; }
+.tag-list code {
+    display: inline-block; padding: .15rem .4rem; border-radius: var(--radius-sm);
+    background: var(--panel-soft); border: 1px solid var(--line); font-size: .76rem;
+}
+
+@media (max-width: 70rem) {
+    .template-layout { grid-template-columns: minmax(0, 1fr); }
+}
