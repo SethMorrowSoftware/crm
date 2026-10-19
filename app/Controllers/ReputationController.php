@@ -1164,7 +1164,7 @@ final class ReputationController extends Controller
                 continue;
             }
 
-            $rows[] = array_map(static fn ($cell): string => (string) $cell, str_getcsv($line));
+            $rows[] = array_map(static fn ($cell): string => (string) $cell, str_getcsv($line, escape: ''));
         }
 
         return $rows;

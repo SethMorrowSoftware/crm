@@ -115,11 +115,11 @@ final class Response
         fwrite($handle, "\xEF\xBB\xBF");
 
         if ($headerRow !== []) {
-            fputcsv($handle, $headerRow);
+            fputcsv($handle, $headerRow, escape: '');
         }
 
         foreach ($rows as $row) {
-            fputcsv($handle, array_map(static fn (mixed $v): string => self::csvCell($v), $row));
+            fputcsv($handle, array_map(static fn (mixed $v): string => self::csvCell($v), $row), escape: '');
         }
 
         rewind($handle);

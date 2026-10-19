@@ -127,6 +127,20 @@ Harness::test('hashing produces a verifiable, salted hash', function (): void {
     Assert::notSame($hash, Auth::hash('a-reasonable-passphrase'), 'each hash must be salted');
 });
 
+Harness::test('a fresh hash never needs rehashing, on any build of PHP', function (): void {
+    // Whichever algorithm this PHP has, the hash it just wrote is current.
+    // The first version of the rehash check named PASSWORD_ARGON2ID outright,
+    // which is an Error on a PHP without libargon2 — thrown after a correct
+    // password verified, so nobody could sign in.
+    Assert::false(Auth::needsRehash(Auth::hash('a-reasonable-passphrase')));
+});
+
+Harness::test('a weaker stored hash is upgraded to the strongest available', function (): void {
+    $cheap = (string) password_hash('a-reasonable-passphrase', PASSWORD_BCRYPT, ['cost' => 4]);
+
+    Assert::true(Auth::needsRehash($cheap), 'a cost-4 bcrypt hash is below today\'s standard everywhere');
+});
+
 Harness::test('the password policy requires length', function (): void {
     Assert::notEmpty(Auth::passwordProblems('short'), '5 characters must be rejected');
     Assert::notEmpty(Auth::passwordProblems('elevenchars'), '11 characters must be rejected');

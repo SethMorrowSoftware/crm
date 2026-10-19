@@ -521,5 +521,11 @@ function stop_test_server(mixed $process, array $pipes): void
     if (is_file($backupPath)) {
         @unlink($configPath);
         @rename($backupPath, $configPath);
+    } elseif (str_contains((string) @file_get_contents($configPath, false, null, 0, 200), 'Written by tests/run.php')) {
+        // There was no config before the run, so the one there now is ours.
+        // Left behind, it points a local dev server at the database this
+        // runner wipes — so the next `php -S` looks installed, with nothing
+        // in it that the developer put there.
+        @unlink($configPath);
     }
 }
