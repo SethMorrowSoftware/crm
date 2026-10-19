@@ -14,6 +14,7 @@ $sections = [
     ['Email', '/settings/mail', $mailDriverLabel, 'message', 'integrations_manage'],
     ['API tokens', '/settings/api-tokens', $apiTokenLabel, 'external', 'integrations_manage'],
     ['Webhooks', '/settings/webhooks', $webhookLabel, 'zap', 'integrations_manage'],
+    ['Hours', '/settings/hours', 'When you are open, seasons, holidays and rides down for the day.', 'clock', 'hours_manage'],
     ['Message templates', '/settings/templates', 'The emails and texts guests receive, with a preview.', 'edit', 'templates_manage'],
     ['Party packages', '/settings/packages', 'Parties, prices and add-ons — and which are bookable online.', 'cake', 'attractions_manage'],
     ['Users', '/settings/users', $counts['users'] . ' accounts.', 'users', 'users_manage'],

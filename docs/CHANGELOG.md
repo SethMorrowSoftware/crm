@@ -1110,6 +1110,23 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Added: Settings → Hours
+
+When the venue is open is what the online booking page offers, and nothing
+but the installer's seed could set it — so every holiday was a normal day to
+the booking page, and summer hours were whatever the website said the day the
+seed was written. `hours_manage` had been in the permission catalogue since
+phase 1, used by nothing.
+
+One page now edits all three things the availability engine reads: the
+standard week (a day ticked closed is closed), dated seasons with their own
+week, closures and special hours for single dates, and an attraction down for
+the day. It explains the engine's precedence in words — a season beats the
+standard week, a single date beats both — and a season offers no "closed"
+box, because in the engine a day missing from a season falls back to the
+standard week: closing one date is what a closure is for. Tests drive the
+page and then ask the availability engine itself what it would offer.
+
 ### Added: Settings → Message templates
 
 The words guests receive — 38 emails and 11 texts — could not be changed

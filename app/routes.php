@@ -210,6 +210,24 @@ $router->group('/settings/roles', ['auth', 'can:roles_manage'], function ($route
 });
 
 // ---------------------------------------------------------------------------
+// Opening hours, closures and attraction outages
+//
+// `hours_manage`: when the venue is open is what the booking page offers, so
+// it is its own decision, not a general setting.
+// ---------------------------------------------------------------------------
+
+$router->group('/settings/hours', ['auth', 'can:hours_manage'], function ($router): void {
+    $router->get('', ['HoursController', 'index'], [], 'hours');
+    $router->post('/seasons', ['HoursController', 'saveSeason'], ['csrf']);
+    $router->post('/seasons/{id:\d+}', ['HoursController', 'saveSeason'], ['csrf']);
+    $router->post('/seasons/{id:\d+}/delete', ['HoursController', 'deleteSeason'], ['csrf']);
+    $router->post('/exceptions', ['HoursController', 'saveException'], ['csrf']);
+    $router->post('/exceptions/{id:\d+}/delete', ['HoursController', 'deleteException'], ['csrf']);
+    $router->post('/outages', ['HoursController', 'saveOutage'], ['csrf']);
+    $router->post('/outages/{id:\d+}/delete', ['HoursController', 'deleteOutage'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Message templates
 //
 // `templates_manage`: the words guests receive are a decision of their own,
