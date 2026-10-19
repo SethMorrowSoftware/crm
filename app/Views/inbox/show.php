@@ -335,7 +335,7 @@ $canManage = can('inbox_assign');
                                 <?= e((string) $booking['booking_number']) ?>
                             </a>
                             <span class="muted">
-                                <?= e(local_date((string) $booking['event_date'])) ?>
+                                <?= e(calendar_date((string) $booking['event_date'])) ?>
                                 &middot; <?= e(ucfirst(str_replace('_', ' ', (string) $booking['status']))) ?>
                             </span>
                         </li>

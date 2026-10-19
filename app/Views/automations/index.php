@@ -87,7 +87,9 @@ declare(strict_types=1);
             </select>
         </div>
 
-        <button type="submit" class="btn btn-ghost">Filter</button>
+        <div class="field field-actions">
+            <button type="submit" class="btn btn-sm">Filter</button>
+        </div>
     </form>
 
     <?php if ($automations === []): ?>
