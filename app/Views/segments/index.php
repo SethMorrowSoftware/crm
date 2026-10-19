@@ -37,7 +37,7 @@ declare(strict_types=1);
 <?php else: ?>
     <div class="card">
         <div class="table-wrap">
-            <table>
+            <table class="table">
                 <caption class="sr-only"><?= e((string) count($segments)) ?> segments</caption>
                 <thead>
                     <tr>

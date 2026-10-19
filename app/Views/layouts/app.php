@@ -40,9 +40,9 @@ $nav = [
         'items' => [
             ['Contacts', '/contacts', 'view_contacts', 'users'],
             ['Pipelines', '/deals', 'view_deals', 'trending'],
-            ['Bookings', '/bookings', 'view_bookings', 'calendar'],
+            ['Bookings', '/bookings', 'view_bookings', 'cake'],
             ['Calendar', '/calendar', 'view_bookings', 'calendar'],
-            ['Check-in', '/checkin', 'checkin', 'check'],
+            ['Check-in', '/checkin', 'checkin', 'ticket'],
             ['Memberships', '/memberships', 'view_memberships', 'card'],
         ],
     ],

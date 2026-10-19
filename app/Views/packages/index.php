@@ -121,6 +121,7 @@ $unitLabel = static fn (string $unit): string => match ($unit) {
                         <th scope="col">Charged</th>
                         <th scope="col" class="td-right">On bookings</th>
                         <th scope="col">State</th>
+                        <th scope="col"><span class="sr-only">Actions</span></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -141,25 +142,10 @@ $unitLabel = static fn (string $unit): string => match ($unit) {
                                     <?= $active ? 'Offered' : 'Retired' ?>
                                 </span>
                             </td>
-                        </tr>
-                        <tr>
-                            <td colspan="5">
-                                <details>
-                                    <summary>Edit <?= e((string) $addon['name']) ?></summary>
-                                    <?php
-                                    $a = $addon;
-                                    $action = url('/settings/packages/addons/' . (int) $addon['id']);
-                                    include __DIR__ . '/_addon_form.php';
-                                    ?>
-                                    <?php if ((int) $addon['used'] === 0): ?>
-                                        <form method="post" class="inline-form"
-                                              action="<?= e(url('/settings/packages/addons/' . (int) $addon['id'] . '/delete')) ?>"
-                                              data-confirm="Delete <?= e((string) $addon['name']) ?>? This cannot be undone.">
-                                            <?= csrf_field() ?>
-                                            <button type="submit" class="btn btn-danger-text btn-sm">Delete this add-on</button>
-                                        </form>
-                                    <?php endif; ?>
-                                </details>
+                            <td class="row-actions">
+                                <a class="btn btn-ghost btn-sm" href="<?= e(url('/settings/packages/addons/' . (int) $addon['id'])) ?>">
+                                    Edit<span class="sr-only"> <?= e((string) $addon['name']) ?></span>
+                                </a>
                             </td>
                         </tr>
                     <?php endforeach; ?>

@@ -22,20 +22,21 @@ declare(strict_types=1);
  */
 
 ?>
-<div class="page-actions">
-    <p class="page-lede">
-        <strong><?= e($label) ?></strong>
-        <?= $date === $today ? '' : '— not today' ?>
-    </p>
-    <a class="btn btn-ghost btn-sm" href="<?= e(url('/checkin?date=' . $previous)) ?>" rel="prev">
-        &larr; <span class="sr-only">Previous day</span>
-    </a>
-    <a class="btn btn-ghost btn-sm" href="<?= e(url('/checkin?date=' . $next)) ?>" rel="next">
-        <span class="sr-only">Next day</span> &rarr;
-    </a>
-    <?php if ($date !== $today): ?>
-        <a class="btn btn-sm" href="<?= e(url('/checkin')) ?>">Today</a>
-    <?php endif; ?>
+<div class="cal-toolbar">
+    <div class="cal-toolbar-group">
+        <a class="btn btn-ghost btn-sm" href="<?= e(url('/checkin?date=' . $previous)) ?>" rel="prev">
+            &larr; <span class="sr-only">Previous day</span>
+        </a>
+        <strong class="cal-toolbar-title">
+            <?= e($label) ?><?= $date === $today ? '' : '<span class="td-sub">not today</span>' ?>
+        </strong>
+        <a class="btn btn-ghost btn-sm" href="<?= e(url('/checkin?date=' . $next)) ?>" rel="next">
+            <span class="sr-only">Next day</span> &rarr;
+        </a>
+        <?php if ($date !== $today): ?>
+            <a class="btn btn-sm" href="<?= e(url('/checkin')) ?>">Today</a>
+        <?php endif; ?>
+    </div>
 </div>
 
 <?php if (!$hasWaiver): ?>
