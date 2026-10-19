@@ -1,0 +1,4 @@
+# Every branch adds its entries at the top of "Unreleased", so two branches
+# always conflict there. A union merge keeps both sides, which for a list of
+# entries is the right answer.
+docs/CHANGELOG.md merge=union

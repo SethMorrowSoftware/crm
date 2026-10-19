@@ -1567,6 +1567,16 @@ body.embed .review-wall { padding: .25rem; }
     a { color: #000; text-decoration: underline; }
 }
 
+/* ------------------------------------------------------------------ Hours */
+
+.hours-table td.field { margin: 0; }
+.hours-table td, .hours-table tbody th { vertical-align: middle; }
+.hours-table .field input[type=time] { width: auto; min-width: 8.5rem; }
+.hours-closed {
+    display: inline-flex; gap: .35rem; align-items: center;
+    font-size: .85rem; color: var(--ink-soft); cursor: pointer;
+}
+
 /* -------------------------------------------------------- Message templates */
 
 /* The editor on the left, what a guest sees on the right; stacked on a
