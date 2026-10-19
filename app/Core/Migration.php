@@ -197,7 +197,14 @@ final class Migration
             }
         }
 
-        DB::insert('migrations', [
+        // Into THIS run's migrations table. DB::insert() would expand the
+        // global prefix, so a run against another prefix applied its
+        // statements there and recorded them here — and the next run under
+        // the global prefix believed files applied that never were.
+        DB::pdo()->prepare(sprintf(
+            'INSERT INTO `%smigrations` (`filename`, `batch`, `ran_at`) VALUES (:filename, :batch, :ran_at)',
+            $this->prefix
+        ))->execute([
             'filename' => $name,
             'batch'    => $batch,
             'ran_at'   => gmdate('Y-m-d H:i:s'),

@@ -255,14 +255,13 @@ if ($port === null) {
 
 $logPath = CC_ROOT . '/storage/logs/installer-server.log';
 
+// An ARRAY, not a command string. A string runs through `sh -c`, so the
+// shutdown handler's proc_terminate() killed the shell and the PHP server
+// it had started lived on — one orphan per run, each still holding the
+// caller's output open, which is how a piped run of this script hung after
+// printing PASS. tests/run.php has always started its server this way.
 $process = proc_open(
-    sprintf(
-        '%s -S 127.0.0.1:%d -t %s %s',
-        escapeshellarg(PHP_BINARY),
-        $port,
-        escapeshellarg(CC_ROOT),
-        escapeshellarg(CC_ROOT . '/tools/dev-server.php')
-    ),
+    [PHP_BINARY, '-S', '127.0.0.1:' . $port, '-t', CC_ROOT, CC_ROOT . '/tools/dev-server.php'],
     [0 => ['pipe', 'r'], 1 => ['file', $logPath, 'a'], 2 => ['file', $logPath, 'a']],
     $pipes,
     CC_ROOT
@@ -620,7 +619,7 @@ $counts = [
     'users'       => 1,
     'roles'       => 8,
     'attractions' => 16,
-    'party_packages' => 4,
+    'party_packages' => 11, // every party CenterEdge sells (013, install/seeds/venue.php)
     'playbooks'   => 8,
 ];
 

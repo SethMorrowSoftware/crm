@@ -94,21 +94,83 @@ return static function (): array {
     // Party packages (spec §3.3)
     // ------------------------------------------------------------------
 
+    // Every party The Castle sells, as CenterEdge's GroupEventTypes held them
+    // on 19 October 2026 — the venue's own price list, not the website. In the
+    // order the venue sells them: InflataPark alone was 792 of the year's
+    // parties, roughly half, and it was missing from the first version of
+    // this list entirely.
+    //
+    // Prices are the LIST price. CenterEdge charges cards 3.5% more (a
+    // $399.00 party rings up at $412.97), which is the POS's business, not a
+    // second price list here.
+    //
+    // CenterEdge kept older price points as separate event types ("Laser Tag
+    // Party $299" beside "$349"). Those are one product at two prices, so
+    // they are one package; a historical booking keeps its own total.
+    //
+    // `online` is CenterEdge's WebEnabled: what a family can book on the
+    // website. The rest the venue books by phone or at the desk.
+    //
+    // install/schema/013_castle_party_packages.sql brings an existing install
+    // to this same list, and a test holds the two to producing identical rows.
+    // Change one, change both.
+    $standard = static fn (int $notice): string => 'Approximately two hours. Starts with the main activity; '
+        . 'add further attractions as add-ons. Online booking requires '
+        . $notice . ' or more days notice — inside that window the family must call.';
+
     $packages = [
         // name, slug, main attraction, base cents, included, extra cents,
-        // duration, min notice days, seasonal, deposit cents
-        ['Roller Skating Birthday', 'roller-skating-birthday', 'roller-skating', 34900, 8, 2699, 120, 7, 0, 10000],
-        ['Laser Tag Birthday',      'laser-tag-birthday',      'laser-tag',      34900, 8, 2699, 120, 7, 0, 10000],
-        ['Bowling Birthday',        'bowling-birthday',        'bowling',        39900, 8, 2999, 120, 7, 0, 10000],
+        // duration, min notice days, seasonal, deposit cents, [options]
+        ['InflataPark Birthday',      'inflatapark-birthday',      'inflatapark',    39900,  8, 2999, 100, 7, 0, 10000, [
+            'description' => 'Up to 8 kids, $29.99 each additional child. Guests must be 42" or taller '
+                . 'for the main InflataPark floor. Under 42" have the Toddler Zone. Online booking requires '
+                . '7 or more days notice — inside that window the family must call.',
+            'includes'    => ['60 minutes of InflataPark', 'A pizza slice and soft drink for each child',
+                '40 minutes in the party room', '1,000 arcade points'],
+        ]],
+        ['Roller Skating Birthday',   'roller-skating-birthday',   'roller-skating', 34900,  8, 2699, 120, 7, 0, 10000, []],
+        ['Laser Tag Birthday',        'laser-tag-birthday',        'laser-tag',      34999,  8, 2699, 120, 7, 0, 10000, []],
+        ['Bowling Birthday',          'bowling-birthday',          'bowling',        39900,  8, 2999, 120, 7, 0, 10000, []],
+        ['All Access Party',          'all-access-party',          null,             44999, 10, 3999, 120, 7, 0, 10000, [
+            'online'      => 0,
+            'description' => 'Up to 10 guests, $39.99 each additional person. Booked by phone or at the front desk.',
+        ]],
+        ['All Access Party (Winter)', 'all-access-party-winter',   null,             39900, 10, 3999, 120, 7, 0, 10000, [
+            'online'      => 0,
+            'description' => 'Winter pricing. Up to 10 guests, $39.99 each additional person. '
+                . 'Booked by phone or at the front desk.',
+        ]],
+        ['Ballocity Birthday',        'ballocity-birthday',        'ballocity',      34999,  8, 2699, 120, 7, 0, 10000, [
+            'description' => 'Up to 8 kids, $26.99 each additional child. Online booking requires '
+                . '7 or more days notice — inside that window the family must call.',
+        ]],
         // Seasonal: the availability engine will not offer this in winter.
-        ['Mini Golf Birthday',      'mini-golf-birthday',      'mini-golf',      34900, 8, 2699, 120, 7, 1, 10000],
+        ['Mini Golf Birthday',        'mini-golf-birthday',        'mini-golf',      34999,  8, 2699, 120, 7, 1, 10000, []],
+        ['InflataPark Toddler Party', 'inflatapark-toddler-party', 'inflatapark',    29900,  8, 2699, 100, 7, 0, 10000, [
+            'online'      => 0,
+            'description' => 'For guests 42" and under. Up to 8 kids, $26.99 each additional child. '
+                . 'Saturday and Sunday at 10:00, 10:30 and 11:00 am only, with the full InflataPark '
+                . 'floor during Toddler Hours. Booked by phone or at the front desk.',
+            'includes'    => ['60 minutes of InflataPark', 'A pizza slice, soft drink and ice cream cup for each child',
+                '40 minutes in the party room', '500 arcade points'],
+        ]],
+        ['Glow Room Party',           'glow-room-party',           null,             19900,  8,  300, 120, 7, 0,     0, [
+            'online'      => 0,
+            'description' => 'Up to 8 kids, $3.00 each additional child. Booked by phone or at the front desk.',
+        ]],
+        ['Bounce Party',              'bounce-party',              null,             29900,  8, 2699, 120, 7, 0, 10000, [
+            'online'      => 0,
+            'description' => 'Up to 8 kids, $26.99 each additional child. Booked by phone or at the front desk.',
+        ]],
     ];
 
     $packageCount = 0;
     $sort = 0;
 
     foreach ($packages as $row) {
-        [$name, $slug, $mainSlug, $base, $included, $extra, $duration, $notice, $seasonal, $deposit] = $row;
+        [$name, $slug, $mainSlug, $base, $included, $extra, $duration, $notice, $seasonal, $deposit, $options] = $row;
+
+        $sort += 10;
 
         if (DB::exists('SELECT id FROM {party_packages} WHERE slug = :slug', ['slug' => $slug])) {
             continue;
@@ -117,7 +179,7 @@ return static function (): array {
         DB::insert('party_packages', [
             'name'                   => $name,
             'slug'                   => $slug,
-            'main_attraction_id'     => $attractionIds[$mainSlug] ?? null,
+            'main_attraction_id'     => $mainSlug === null ? null : ($attractionIds[$mainSlug] ?? null),
             'base_price_cents'       => $base,
             'included_guests'        => $included,
             'additional_guest_cents' => $extra,
@@ -125,11 +187,13 @@ return static function (): array {
             'min_notice_days'        => $notice,
             'is_seasonal'            => $seasonal,
             'deposit_cents'          => $deposit,
-            'description'            => 'Approximately two hours. Starts with the main activity; '
-                . 'add further attractions as add-ons. Online booking requires '
-                . $notice . ' or more days notice — inside that window the family must call.',
+            'includes'               => isset($options['includes'])
+                ? json_encode($options['includes'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                : null,
+            'description'            => $options['description'] ?? $standard($notice),
             'is_active'              => 1,
-            'sort_order'             => $sort += 10,
+            'is_online'              => $options['online'] ?? 1,
+            'sort_order'             => $sort,
             'created_at'             => $now,
             'updated_at'             => $now,
         ]);

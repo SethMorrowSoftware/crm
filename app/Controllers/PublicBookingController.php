@@ -449,7 +449,7 @@ final class PublicBookingController extends Controller
                     additional_guest_cents, duration_minutes, min_notice_days,
                     deposit_cents, deposit_percent, main_attraction_id, includes
                FROM {party_packages}
-              WHERE is_active = 1
+              WHERE is_active = 1 AND is_online = 1
               ORDER BY sort_order, name'
         );
     }

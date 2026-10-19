@@ -211,32 +211,180 @@ Harness::test('the arcade cannot be a party main activity', function (): void {
     Assert::equals(1, $arcade['is_party_eligible'], 'but it can be added to one');
 });
 
+Harness::test('every party CenterEdge sells is a package, in the order the venue sells them', function (): void {
+    // CenterEdge's GroupEventTypes on 19 October 2026, older price points
+    // folded into one product each. InflataPark first: about half the year's
+    // parties, and missing from the first seed altogether.
+    Assert::same(
+        [
+            'inflatapark-birthday', 'roller-skating-birthday', 'laser-tag-birthday', 'bowling-birthday',
+            'all-access-party', 'all-access-party-winter', 'ballocity-birthday', 'mini-golf-birthday',
+            'inflatapark-toddler-party', 'glow-room-party', 'bounce-party',
+        ],
+        DB::column('SELECT slug FROM {party_packages} ORDER BY sort_order')
+    );
+});
+
 Harness::test('party packages carry the venue 7-day notice rule', function (): void {
-    $packages = DB::all('SELECT * FROM {party_packages} ORDER BY sort_order');
-
-    Assert::same(4, count($packages));
-
-    foreach ($packages as $package) {
+    foreach (DB::all('SELECT * FROM {party_packages}') as $package) {
         Assert::equals(7, $package['min_notice_days'], $package['name'] . ' needs the notice rule');
         Assert::greaterThan(0, (int) $package['base_price_cents'], $package['name'] . ' needs a price');
-        Assert::greaterThan(0, (int) $package['additional_guest_cents']);
-        Assert::equals(8, $package['included_guests']);
-        Assert::equals(120, $package['duration_minutes'], 'parties run about two hours');
+        Assert::greaterThan(0, (int) $package['additional_guest_cents'], $package['name'] . ' needs an extra-guest price');
+        Assert::true(in_array((int) $package['included_guests'], [8, 10], true), $package['name'] . ' includes 8 kids, or 10 guests');
+        Assert::true(in_array((int) $package['duration_minutes'], [100, 120], true), $package['name'] . ' runs about two hours');
     }
 });
 
-Harness::test('bowling is the most expensive package, as published', function (): void {
-    $bowling = (int) DB::value("SELECT base_price_cents FROM {party_packages} WHERE slug = 'bowling-birthday'");
-    $laser   = (int) DB::value("SELECT base_price_cents FROM {party_packages} WHERE slug = 'laser-tag-birthday'");
+Harness::test('prices are CenterEdge list prices, to the cent', function (): void {
+    $prices = [];
 
-    Assert::same(39900, $bowling, '$399');
-    Assert::same(34900, $laser, '$349');
+    foreach (DB::all('SELECT slug, base_price_cents, additional_guest_cents FROM {party_packages}') as $row) {
+        $prices[$row['slug']] = [(int) $row['base_price_cents'], (int) $row['additional_guest_cents']];
+    }
+
+    // $349.99, not $349: the website rounds, the POS does not.
+    Assert::same([34999, 2699], $prices['laser-tag-birthday']);
+    Assert::same([34999, 2699], $prices['mini-golf-birthday']);
+    Assert::same([34999, 2699], $prices['ballocity-birthday']);
+    Assert::same([34900, 2699], $prices['roller-skating-birthday']);
+    Assert::same([39900, 2999], $prices['bowling-birthday']);
+    Assert::same([39900, 2999], $prices['inflatapark-birthday']);
+    Assert::same([44999, 3999], $prices['all-access-party']);
+});
+
+Harness::test('only what CenterEdge sells on the web is bookable online', function (): void {
+    Assert::same(
+        ['inflatapark-birthday', 'roller-skating-birthday', 'laser-tag-birthday', 'bowling-birthday',
+            'ballocity-birthday', 'mini-golf-birthday'],
+        DB::column('SELECT slug FROM {party_packages} WHERE is_online = 1 ORDER BY sort_order')
+    );
+    Assert::same(
+        0,
+        (int) DB::value('SELECT COUNT(*) FROM {party_packages} WHERE is_active = 0'),
+        'a phone-only party is still active: staff book it'
+    );
 });
 
 Harness::test('mini golf is marked seasonal', function (): void {
     $seasonal = DB::value("SELECT is_seasonal FROM {party_packages} WHERE slug = 'mini-golf-birthday'");
 
     Assert::equals(1, $seasonal);
+});
+
+/**
+ * Apply 013 on its own to this database, as an upgrade would.
+ *
+ * @return array{applied:list<string>,messages:list<string>}
+ */
+function schema_apply_013(string $prefix = ''): array
+{
+    $file = '013_castle_party_packages.sql';
+    $directory = sys_get_temp_dir() . '/cc-upgrade-013-' . bin2hex(random_bytes(4));
+    mkdir($directory);
+    copy(CC_ROOT . '/install/schema/' . $file, $directory . '/' . $file);
+
+    DB::query("DELETE FROM {migrations} WHERE filename = :file", ['file' => $file]);
+
+    try {
+        return (new Migration($directory, $prefix === '' ? null : $prefix))->run();
+    } finally {
+        unlink($directory . '/' . $file);
+        rmdir($directory);
+    }
+}
+
+/** @return array<string,array<string,mixed>> */
+function schema_package_rows(): array
+{
+    $rows = [];
+
+    foreach (DB::all('SELECT * FROM {party_packages} ORDER BY slug') as $row) {
+        unset($row['id'], $row['created_at'], $row['updated_at']);
+        // MySQL stores JSON as binary and prints it back with spaces; MariaDB
+        // keeps the text. The list is what matters, not the spelling.
+        $row['includes'] = $row['includes'] === null ? null : json_decode((string) $row['includes'], true);
+        $rows[(string) $row['slug']] = $row;
+    }
+
+    return $rows;
+}
+
+/**
+ * Put this database's packages back to what the ORIGINAL seed made: its
+ * four, at its prices and positions, before 013 existed.
+ */
+function schema_packages_as_first_seeded(): void
+{
+    DB::query(
+        "DELETE FROM {party_packages} WHERE slug NOT IN
+            ('roller-skating-birthday', 'laser-tag-birthday', 'bowling-birthday', 'mini-golf-birthday')"
+    );
+
+    foreach ([['roller-skating-birthday', 34900, 10], ['laser-tag-birthday', 34900, 20],
+        ['bowling-birthday', 39900, 30], ['mini-golf-birthday', 34900, 40]] as [$slug, $price, $sort]) {
+        DB::update('party_packages', [
+            'base_price_cents' => $price,
+            'sort_order'       => $sort,
+            'is_online'        => 1,
+        ], 'slug = :slug', ['slug' => $slug]);
+    }
+}
+
+Harness::test('AN EXISTING INSTALL UPGRADES TO EXACTLY THE PACKAGES A FRESH ONE SEEDS', function (): void {
+    // Fresh installs get the packages from install/seeds/venue.php and
+    // existing ones from 013's SQL: two copies of one list. A copy that drifts
+    // is a live site selling a different party from a reinstall of itself.
+    $fresh = schema_package_rows();
+
+    schema_packages_as_first_seeded();
+    $result = schema_apply_013();
+
+    Assert::same(['013_castle_party_packages.sql'], $result['applied'], implode('; ', $result['messages']));
+    Assert::same($fresh, schema_package_rows());
+});
+
+Harness::test('the upgrade leaves a price the venue set alone', function (): void {
+    schema_packages_as_first_seeded();
+    DB::update('party_packages', ['base_price_cents' => 37500], 'slug = :slug', ['slug' => 'laser-tag-birthday']);
+
+    schema_apply_013();
+
+    Assert::same(37500, (int) DB::value("SELECT base_price_cents FROM {party_packages} WHERE slug = 'laser-tag-birthday'"));
+    Assert::same(34999, (int) DB::value("SELECT base_price_cents FROM {party_packages} WHERE slug = 'mini-golf-birthday'"), 'while an untouched one is corrected');
+    Assert::same(11, (int) DB::value('SELECT COUNT(*) FROM {party_packages}'), 'and what is missing is still added');
+
+    DB::update('party_packages', ['base_price_cents' => 34999], 'slug = :slug', ['slug' => 'laser-tag-birthday']);
+});
+
+Harness::test('A FRESH INSTALL\'S SCHEMA ADDS NO PACKAGE BEFORE THE SEED CAN', function (): void {
+    // On a fresh install every schema file runs before the venue seed, so
+    // there is no attraction to link InflataPark to yet. If 013 inserted
+    // anyway, the seed would find the slug taken and skip it, and the venue's
+    // best-selling party would be the one with no attraction attached.
+    //
+    // So: every schema file, under a prefix of its own, with no seed — which
+    // is exactly the database a fresh install has at that moment.
+    $prefix = 'tfresh' . bin2hex(random_bytes(2)) . '_';
+
+    try {
+        $result = (new Migration(null, $prefix))->run();
+
+        Assert::true(in_array('013_castle_party_packages.sql', $result['applied'], true), implode('; ', $result['messages']));
+        Assert::same(0, (int) DB::value('SELECT COUNT(*) FROM ' . DB::quoteIdentifier($prefix . 'party_packages')));
+    } finally {
+        $tables = DB::column(
+            'SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name LIKE :p',
+            ['p' => $prefix . '%']
+        );
+
+        DB::pdo()->exec('SET FOREIGN_KEY_CHECKS = 0');
+
+        foreach ($tables as $table) {
+            DB::pdo()->exec('DROP TABLE ' . DB::quoteIdentifier((string) $table));
+        }
+
+        DB::pdo()->exec('SET FOREIGN_KEY_CHECKS = 1');
+    }
 });
 
 Harness::test('resources cover rooms, lanes and the rink', function (): void {
