@@ -16,6 +16,7 @@ $sections = [
     ['Webhooks', '/settings/webhooks', $webhookLabel, 'zap', 'integrations_manage'],
     ['Hours', '/settings/hours', 'When you are open, seasons, holidays and rides down for the day.', 'clock', 'hours_manage'],
     ['Message templates', '/settings/templates', 'The emails and texts guests receive, with a preview.', 'edit', 'templates_manage'],
+    ['Offers', '/settings/offers', 'The codes automations hand out and the desk redeems.', 'gift', 'coupons_manage'],
     ['Party packages', '/settings/packages', 'Parties, prices and add-ons — and which are bookable online.', 'cake', 'attractions_manage'],
     ['Users', '/settings/users', $counts['users'] . ' accounts.', 'users', 'users_manage'],
     ['Roles & permissions', '/settings/roles', $counts['roles'] . ' roles.', 'lock', 'roles_manage'],
