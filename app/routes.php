@@ -210,6 +210,23 @@ $router->group('/settings/roles', ['auth', 'can:roles_manage'], function ($route
 });
 
 // ---------------------------------------------------------------------------
+// Message templates
+//
+// `templates_manage`: the words guests receive are a decision of their own,
+// separate from building campaigns or switching automations on.
+// ---------------------------------------------------------------------------
+
+$router->group('/settings/templates', ['auth', 'can:templates_manage'], function ($router): void {
+    $router->get('', ['TemplateController', 'index'], [], 'templates');
+    $router->get('/{id:\d+}', ['TemplateController', 'edit'], [], 'templates.edit');
+    $router->post('/{id:\d+}', ['TemplateController', 'update'], ['csrf']);
+    $router->get('/{id:\d+}/preview', ['TemplateController', 'preview'], [], 'templates.preview');
+    $router->post('/{id:\d+}/preview', ['TemplateController', 'preview'], ['csrf']);
+    $router->post('/{id:\d+}/test', ['TemplateController', 'test'], ['csrf', 'throttle:10,10']);
+    $router->post('/{id:\d+}/duplicate', ['TemplateController', 'duplicate'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Party packages and add-ons
 //
 // `attractions_manage`, not `settings`: what a party COSTS is a pricing

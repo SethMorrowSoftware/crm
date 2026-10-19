@@ -1110,6 +1110,29 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Added: Settings → Message templates
+
+The words guests receive — 38 emails and 11 texts — could not be changed
+without editing the database, though the permission catalogue had described
+`templates_manage` since phase 1 and nothing used it. Now a manager can edit
+any of them with the email rendered beside the form, filled in with a sample
+family, and preview a draft before saving it. A text shows as a bubble with
+its segment count, and says so when a marketing text has no way to opt out.
+
+Three rules keep an edit from breaking a send:
+
+- **A template a switched-on automation sends cannot be switched off**, and
+  the password reset cannot be switched off at all. The step would fail on its
+  next run and the guest would be half-told.
+- **A tag the template is not sent with is named on save.** `{{frist_name}}`
+  comes out blank in every message.
+- **A slug never changes**, because automation steps name templates by it.
+
+New templates start as a copy of one that works. "Email me a test" sends
+through the real path, so Safe Mode still applies. The preview is served with
+a sandbox Content-Security-Policy, so whatever HTML a template holds runs
+nothing.
+
 ### Added: a nightly sync from CenterEdge
 
 `tools/centeredge/ce_sync.py` is the second half of the bridge: after the
