@@ -1110,6 +1110,17 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Added: Settings → Attractions
+
+Every attraction's season, age and height rules, capacity and party role is
+read by the booking page — an outdoor ride out of season is not offered, a
+party is built around a "main" attraction — and only the seed could set
+them. Opening the go-karts a fortnight early was a database edit. Now each is
+editable, a new one can be added, and one can be switched off (never deleted:
+packages, add-ons and past bookings point at it). A season is a month and a
+day, the same every year, and may wrap the new year; the tests save one and
+then ask the availability engine whether a date is in it.
+
 ### Added: Settings → Offers
 
 The seed made three offer codes and nothing could make a fourth, change what

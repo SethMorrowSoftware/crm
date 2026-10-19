@@ -259,6 +259,21 @@ $router->group('/settings/offers', ['auth', 'can:coupons_manage'], function ($ro
 });
 
 // ---------------------------------------------------------------------------
+// Attractions
+//
+// `attractions_manage`, as packages are: seasons, height rules and capacity
+// decide what the booking page offers.
+// ---------------------------------------------------------------------------
+
+$router->group('/settings/attractions', ['auth', 'can:attractions_manage'], function ($router): void {
+    $router->get('', ['AttractionController', 'index'], [], 'attractions');
+    $router->post('', ['AttractionController', 'store'], ['csrf']);
+    $router->get('/new', ['AttractionController', 'create'], [], 'attractions.new');
+    $router->get('/{id:\d+}', ['AttractionController', 'edit'], [], 'attractions.edit');
+    $router->post('/{id:\d+}', ['AttractionController', 'update'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Party packages and add-ons
 //
 // `attractions_manage`, not `settings`: what a party COSTS is a pricing
