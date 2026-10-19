@@ -122,7 +122,7 @@ Harness::test('the page shows the week, and the front desk cannot open it', func
 Harness::test('a changed Monday is what availability then offers', function () use ($owner): void {
     hr_preserving(function () use ($owner): void {
         $path = '/settings/hours/seasons/' . hr_standard_id();
-        $owner->postWithToken('/settings/hours', $path, hr_week([1 => ['opens' => '12:00', 'closes' => '19:30']]));
+        Assert::same(302, $owner->postWithToken('/settings/hours', $path, hr_week([1 => ['opens' => '12:00', 'closes' => '19:30']]))['status'], 'the save redirects rather than failing');
 
         Assert::same(['opens' => 720, 'closes' => 1170], hr_window(hr_next(1)));
     });
@@ -131,7 +131,7 @@ Harness::test('a changed Monday is what availability then offers', function () u
 Harness::test('a standard day ticked closed is closed', function () use ($owner): void {
     hr_preserving(function () use ($owner): void {
         $path = '/settings/hours/seasons/' . hr_standard_id();
-        $owner->postWithToken('/settings/hours', $path, hr_week([2 => ['opens' => '15:00', 'closes' => '20:00', 'closed' => '1']]));
+        Assert::same(302, $owner->postWithToken('/settings/hours', $path, hr_week([2 => ['opens' => '15:00', 'closes' => '20:00', 'closed' => '1']]))['status'], 'the save redirects rather than failing');
 
         Assert::null(hr_window(hr_next(2)), 'Tuesday closed');
         Assert::true(hr_window(hr_next(3)) !== null, 'Wednesday untouched');
@@ -157,12 +157,12 @@ Harness::test('a season beats the standard week for its dates, and a blank day f
         $from   = min($friday, $monday);
         $to     = max($friday, $monday);
 
-        $owner->postWithToken('/settings/hours', '/settings/hours/seasons', [
+        Assert::same(302, $owner->postWithToken('/settings/hours', '/settings/hours/seasons', [
             'season_label'   => 'Test season',
             'effective_from' => $from,
             'effective_to'   => $to,
             'days'           => [5 => ['opens' => '09:00', 'closes' => '23:30']],
-        ]);
+        ])['status'], 'the save redirects rather than failing');
 
         Assert::same(['opens' => 540, 'closes' => 1410], hr_window($friday), 'the season’s Friday');
         Assert::same(['opens' => 900, 'closes' => 1200], hr_window($monday), 'a blank Monday keeps the standard hours');
@@ -171,7 +171,7 @@ Harness::test('a season beats the standard week for its dates, and a blank day f
 
 Harness::test('the standard week cannot be deleted', function () use ($owner): void {
     hr_preserving(function () use ($owner): void {
-        $owner->postWithToken('/settings/hours', '/settings/hours/seasons/' . hr_standard_id() . '/delete', []);
+        Assert::same(302, $owner->postWithToken('/settings/hours', '/settings/hours/seasons/' . hr_standard_id() . '/delete', [])['status'], 'the save redirects rather than failing');
 
         Assert::same(7, (int) DB::value('SELECT COUNT(*) FROM {operating_hours} WHERE effective_from IS NULL'));
     });
@@ -181,19 +181,19 @@ Harness::test('a closure beats every pattern, and removing it restores the day',
     hr_preserving(function () use ($owner): void {
         $day = hr_next(6);
 
-        $owner->postWithToken('/settings/hours', '/settings/hours/exceptions', [
+        Assert::same(302, $owner->postWithToken('/settings/hours', '/settings/hours/exceptions', [
             'date' => $day, 'is_closed' => '1', 'note' => 'Test closure',
-        ]);
+        ])['status'], 'the save redirects rather than failing');
         Assert::null(hr_window($day));
 
-        $owner->postWithToken('/settings/hours', '/settings/hours/exceptions', [
+        Assert::same(302, $owner->postWithToken('/settings/hours', '/settings/hours/exceptions', [
             'date' => $day, 'opens_at' => '10:00', 'closes_at' => '14:00', 'note' => 'Early close',
-        ]);
+        ])['status'], 'the save redirects rather than failing');
         Assert::same(['opens' => 600, 'closes' => 840], hr_window($day), 'saving the date again replaces it');
         Assert::same(1, (int) DB::value('SELECT COUNT(*) FROM {operating_exceptions} WHERE date = :d', ['d' => $day]));
 
         $id = (int) DB::value('SELECT id FROM {operating_exceptions} WHERE date = :d', ['d' => $day]);
-        $owner->postWithToken('/settings/hours', '/settings/hours/exceptions/' . $id . '/delete', []);
+        Assert::same(302, $owner->postWithToken('/settings/hours', '/settings/hours/exceptions/' . $id . '/delete', [])['status'], 'the save redirects rather than failing');
         Assert::same(['opens' => 660, 'closes' => 1380], hr_window($day), 'a Saturday again');
     });
 });
@@ -203,11 +203,40 @@ Harness::test('an attraction marked down is down for that date only', function (
         $attraction = (int) DB::value("SELECT id FROM {attractions} WHERE slug = 'laser-tag'");
         $day = hr_next(6);
 
-        $owner->postWithToken('/settings/hours', '/settings/hours/outages', [
+        Assert::same(302, $owner->postWithToken('/settings/hours', '/settings/hours/outages', [
             'attraction_id' => (string) $attraction, 'date' => $day, 'note' => 'Inspection',
-        ]);
+        ])['status'], 'the save redirects rather than failing');
 
         Assert::same(0, (int) (BookingRepository::attractionOverride($attraction, $day)['is_available'] ?? 1));
         Assert::null(BookingRepository::attractionOverride($attraction, hr_next(5)));
     });
 });
+
+Harness::test('THE PAGE RENDERS WITH A SEASON, A CLOSURE AND AN OUTAGE ON IT', function () use ($owner): void {
+    // The case that crashed: the page and the closure save both format dates
+    // with calendar_date(), and while that helper was missing from main every
+    // save of a closure answered 500 after writing the row — so a test that
+    // only checked the database passed.
+    hr_preserving(function () use ($owner): void {
+        $day = hr_next(6);
+        $attraction = (int) DB::value("SELECT id FROM {attractions} WHERE slug = 'go-karts'");
+
+        $saves = [
+            ['/settings/hours/seasons', ['season_label' => 'Test summer', 'effective_from' => $day, 'effective_to' => $day,
+                'days' => [6 => ['opens' => '09:00', 'closes' => '22:00']]]],
+            ['/settings/hours/exceptions', ['date' => $day, 'is_closed' => '1', 'note' => 'Render test']],
+            ['/settings/hours/outages', ['attraction_id' => (string) $attraction, 'date' => $day, 'note' => 'Render test']],
+        ];
+
+        foreach ($saves as [$path, $form]) {
+            Assert::same(302, $owner->postWithToken('/settings/hours', $path, $form)['status'], $path . ' redirects');
+        }
+
+        $page = $owner->get('/settings/hours');
+        Assert::same(200, $page['status']);
+        Assert::contains('Test summer', $page['body']);
+        Assert::contains('Render test', $page['body']);
+        Assert::notContains('Fatal error', $page['body']);
+    });
+});
+

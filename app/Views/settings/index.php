@@ -19,8 +19,8 @@ $sections = [
     ['Offers', '/settings/offers', 'The codes automations hand out and the desk redeems.', 'gift', 'coupons_manage'],
     ['Attractions', '/settings/attractions', 'Seasons, height rules and how many at a time.', 'star', 'attractions_manage'],
     ['Party packages', '/settings/packages', 'Parties, prices and add-ons — and which are bookable online.', 'cake', 'attractions_manage'],
-    ['Users', '/settings/users', $counts['users'] . ' accounts.', 'users', 'users_manage'],
-    ['Roles & permissions', '/settings/roles', $counts['roles'] . ' roles.', 'lock', 'roles_manage'],
+    ['Users', '/settings/users', $counts['users'] . ($counts['users'] === 1 ? ' account.' : ' accounts.'), 'users', 'users_manage'],
+    ['Roles & permissions', '/settings/roles', $counts['roles'] . ($counts['roles'] === 1 ? ' role.' : ' roles.'), 'lock', 'roles_manage'],
     ['Playbooks', '/playbooks', $counts['playbooks'] . ' of 8 active.', 'book', 'view_automations'],
     ['Backups & export', '/settings/backups', $backupLabel, 'database', 'backup_manage'],
     // Beside the export, behind the same permission, because it is the same

@@ -153,6 +153,24 @@ final class PackageController extends Controller
     // Writing: add-ons
     // =================================================================
 
+    public function editAddon(Request $request): Response
+    {
+        $id = $request->routeInt('id');
+        $addon = DB::first('SELECT * FROM {package_addons} WHERE id = :id', ['id' => $id]);
+
+        if ($addon === null) {
+            return $this->notFound('That add-on does not exist.');
+        }
+
+        return $this->view('packages/addon', [
+            'pageTitle'   => (string) $addon['name'],
+            'addon'       => $addon,
+            'attractions' => $this->attractions(),
+            'units'       => self::ADDON_UNITS,
+            'used'        => (int) DB::value('SELECT COUNT(*) FROM {booking_addons} WHERE addon_id = :id', ['id' => $id]),
+        ]);
+    }
+
     public function storeAddon(Request $request): Response
     {
         return $this->saveAddon($request, 0);

@@ -1212,6 +1212,80 @@ used to ask about a hidden column.
 `tools/centeredge/__pycache__/` came in with the export tool. It is removed
 and ignored.
 
+### Fixed: every birthday and party date showed a day early
+
+`local_date()` is for instants stored in UTC. Given a DATE — a child's birth
+date, a party's `event_date` — it read the day as midnight UTC and moved it to
+New York, which is the evening before. So Lucia, born 21 October, was shown as
+born on the 20th; the date on a family's own booking confirmation page was a
+day out; and a visit, which is stored as a midnight DATETIME because it has no
+clock time, showed as the day before it happened. The demo data hid the last
+one by giving visits afternoon times; an imported visit history would not
+have.
+
+`calendar_date()` formats a day as the day it is, and every DATE now goes
+through it. `local_time()` also leaves a bare `YYYY-MM-DD` alone, so a stray
+one cannot go wrong again.
+
+### Added: when each child next turns a year older
+
+A guardian's page lists their children with the age they are turning and when
+— "turns 8 in 2 days" — in the brand colour inside a month, because that is
+when the birthday playbook is working on them. The household page says the
+same. 29 February falls on the 28th in a year without one.
+
+### Polished
+
+- **The calendar's toolbar is one row**: view, period, and a jump to a date,
+  wrapping as groups on a phone. It borrowed the filter bar's grid, which put
+  the date picker in a column of its own with its button stacked beneath; the
+  day-name headings lose the dotted underline that made them look like links.
+- **Form controls are one height.** A browser draws a select a few pixels
+  taller than a text input, and in a row aligned on its bottom edge that put
+  the contacts filter's "Search" label higher than "Stage" and "Owner". Filter
+  bar buttons now match the controls beside them.
+- **Recent activity shows changes, not sign-ins.** Eight logins filled the
+  dashboard card; the audit log keeps them.
+- **Bookings and Check-in have icons of their own** (a cake and a ticket)
+  instead of sharing Calendar's and Tasks'.
+- The System card's long status wraps on the right instead of squeezing its
+  label onto two lines; "1 accounts" is "1 account"; the household page's
+  children table no longer tells a screen reader it is the household's visits.
+- **Text Club's header said "Castle CRM"**: its controller passed `title`
+  where the layout reads `pageTitle`. The smoke test that walks the sidebar now
+  fails any page whose header is the fallback.
+- **Five tables were unstyled** — Segments, a segment's members, Campaigns,
+  the Inbox and Text Club's list were bare `<table>`s with the browser's
+  centred headings. And a row header (`<th scope="row">`) now reads as the
+  first cell of its row instead of a column heading in small capitals.
+- **Every filter bar lays out the same way.** The Inbox wrapped its form in
+  the grid, so its fields stacked; Memberships, Automations and Reputation
+  feedback put a bare button in the grid, so "Filter" stretched to a whole
+  column.
+- **Check-in's day is between its arrows**, not at one edge of the page with
+  the arrows at the other.
+- **Choosing what kind of file to import is a set of cards**, the chosen one
+  highlighted. The `check` class those labels wore was named in three views
+  and defined nowhere, so the hint under each choice ran on in bold inside the
+  browser's own fieldset frame.
+- **Add-ons have an edit page** like packages, instead of an "Edit" row under
+  every line of the table, and a card after a form no longer sits on the
+  form's buttons.
+
+### Added: a release zip that holds only what the server runs
+
+`tools/build-release.sh` builds the zip an upgrade uploads, from the committed
+tree: 1.2 MB, against GitHub's 9 MB download, without the test suite, the CI
+workflow, the screenshots, the CenterEdge export or the development tools. It
+checks the zip itself for what must never be in it (a config, the tests) and
+for what must (the front controller, cron, the installer, `.htaccess`).
+
+### Added: a demo install in one command
+
+`php tools/dev-install.php` builds what the web installer builds, with the
+example guests, into a `*_dev` database and writes the config to serve it — so
+`tools/screenshots.js` has something to photograph without a browser walk.
+It refuses to overwrite a config or touch a database not named `*_dev`.
 ### Added: The Castle's guests, children and visits, from CenterEdge
 
 The question the deployment runbook said nobody had ever answered — does

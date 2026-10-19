@@ -55,6 +55,8 @@
     /* Geometry */
     --radius:       10px;
     --radius-sm:    6px;
+    /* Every single-line form control, and the buttons that sit beside one. */
+    --control-h:    2.5rem;
     --shadow:       0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .06);
     --shadow-lg:    0 4px 6px -2px rgba(16, 24, 40, .05), 0 12px 16px -4px rgba(16, 24, 40, .08);
 
@@ -331,6 +333,9 @@ body.bare { display: grid; place-items: center; min-height: 100vh; padding: 1rem
 
 .card-accent { border-left: 3px solid var(--brand); }
 .card-danger { border-color: var(--bad); }
+/* A card after a form starts clear of the form's buttons, which otherwise sit
+   on its top edge — the delete card under an edit form most of all. */
+form:not(.card) + .card { margin-top: calc(var(--gap) * 1.5); }
 .card-danger h2 { color: var(--bad); }
 
 .card-head {
@@ -518,8 +523,15 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
     padding: .5rem 0; border-bottom: 1px solid var(--line);
 }
 .health-row:last-child { border-bottom: 0; }
-.health-row dt { color: var(--muted); font-size: .85rem; }
-.health-row dd { margin: 0; font-size: .85rem; font-weight: 600; display: flex; gap: .4rem; align-items: center; }
+.health-row dt { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+/* A long status ("Safe Mode — redirected to the owner") wraps on the right
+   with its dot held to the first line, instead of squeezing the label onto
+   two lines and leaving the dot floating between them. */
+.health-row dd {
+    margin: 0; font-size: .85rem; font-weight: 600; text-align: right;
+    display: flex; gap: .4rem; align-items: flex-start; justify-content: flex-end; min-width: 0;
+}
+.health-row dd .dot { flex: 0 0 auto; margin-top: .4em; }
 
 .health-warning {
     background: var(--warn-bg); color: var(--warn);
@@ -605,6 +617,19 @@ td.row-actions > * + * { margin-left: .4rem; }
     background: var(--panel); color: var(--ink); font: inherit; font-size: .9rem;
 }
 
+/* One height for every single-line control. A browser draws a select a few
+   pixels taller than a text input with the same padding, and in a row aligned
+   on its bottom edge that difference surfaced as labels sitting at different
+   heights — the contacts filter's "Search" label rode above "Stage" and
+   "Owner". Textareas are left to grow. */
+.field input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=hidden]), .field select {
+    min-height: var(--control-h);
+}
+
+/* A filter bar's buttons stand beside those controls, so they match them
+   rather than sitting short at the baseline. */
+.filter-bar .field-actions .btn { min-height: var(--control-h); }
+
 .field input:focus, .field select:focus, .field textarea:focus {
     border-color: var(--brand); outline: 2px solid var(--brand-ring); outline-offset: 0;
 }
@@ -688,12 +713,21 @@ td.row-actions > * + * { margin-left: .4rem; }
 }
 
 .table td { padding: .55rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-.table tbody tr:last-child td { border-bottom: 0; }
+/* A row header (`<th scope="row">`) is the first cell of a row, not a column
+   heading: it reads as a cell, with the weight that says what the row is.
+   Styled like a column heading it shouted the row's name in small capitals
+   and squeezed every other column. */
+.table tbody th {
+    padding: .55rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top;
+    font-size: inherit; font-weight: 600; text-transform: none; letter-spacing: normal;
+    color: var(--ink); white-space: normal;
+}
+.table tbody tr:last-child td, .table tbody tr:last-child th { border-bottom: 0; }
 .table tbody tr:hover { background: var(--panel-soft); }
 
 body[data-density="comfortable"] .table td { padding: .8rem .6rem; }
 
-.td-sub { display: block; font-size: .78rem; color: var(--muted); }
+.td-sub { display: block; font-size: .78rem; font-weight: 400; color: var(--muted); }
 .td-right { text-align: right; }
 /* `.table th` sets text-align and outranks a bare class, so a right-aligned
    number column kept a left-aligned heading. */
@@ -858,6 +892,18 @@ ul.checks li:last-child { border-bottom: 0; }
 }
 .feature-list .icon { color: var(--ok); flex: 0 0 auto; margin-top: .15rem; }
 
+/* A guardian's children: who, when they next turn a year older, and the
+   allergy that has to be on the run sheet. The countdown is coloured inside
+   a month, because that is when the birthday playbook is working on them. */
+.child-list { list-style: none; margin: 0 0 .75rem; padding: 0; }
+.child-list li {
+    display: flex; flex-wrap: wrap; gap: .25rem .6rem; align-items: baseline;
+    padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .87rem;
+}
+.child-list li:last-child { border-bottom: 0; }
+.child-when { color: var(--muted); white-space: nowrap; }
+.child-soon { color: var(--brand-dark); font-weight: 600; white-space: nowrap; }
+
 /* --------------------------------------------------------------- Error page */
 
 .error-page { text-align: center; padding: 1rem 0; }
@@ -896,8 +942,24 @@ ul.checks li:last-child { border-bottom: 0; }
    reader announces "Saturday 11 July, 3 bookings" from one while it announces
    nothing useful from a grid of divs. These rules only lay the table out. */
 
+/* View, the period, and a jump to a date: three groups on one line that wrap
+   as groups on a phone. It used to borrow the filter bar's grid, which put
+   the date picker in a column of its own with its button stacked beneath. */
+.cal-toolbar {
+    display: flex; flex-wrap: wrap; gap: .75rem 1.5rem;
+    align-items: center; justify-content: space-between;
+    margin-bottom: var(--gap);
+}
+.cal-toolbar-group { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin: 0; }
+.cal-toolbar .btn { min-height: var(--control-h); }
+.cal-toolbar .field input[type=date] { width: auto; }
+.cal-toolbar-title { margin: 0 .4rem; font-size: 1.05rem; min-width: 9.5rem; text-align: center; }
+
 .cal-month, .cal-week { table-layout: fixed; }
 .cal-month th, .cal-week th { text-align: left; font-size: .78rem; }
+/* The day names are abbreviations with their full name on hover; the
+   browser's dotted underline made every column heading look like a link. */
+.cal-month th abbr, .cal-week th abbr { text-decoration: none; }
 
 .cal-cell {
     vertical-align: top; height: 6.5rem; padding: .35rem;
@@ -1197,6 +1259,28 @@ ul.checks li:last-child { border-bottom: 0; }
 
 .form-inline { display: flex; gap: .75rem; align-items: flex-start; flex-wrap: wrap; }
 .form-inline .field { margin: 0; }
+
+/* A checkbox or radio with its words beside it. The class was named in three
+   views and defined nowhere, so each label took the bold block style of a
+   field label: hint text in bold, running on from its heading, inside the
+   browser's own fieldset frame. */
+.field label.check {
+    display: flex; gap: .55rem; align-items: flex-start;
+    margin: 0 0 .4rem; font-weight: 400; color: var(--ink); cursor: pointer;
+}
+.field label.check input { flex: 0 0 auto; margin-top: .2rem; }
+.field label.check strong { font-weight: 600; }
+.field label.check .field-hint { display: block; margin-top: .15rem; }
+
+/* A choice between kinds of thing (what is in this file?) reads as cards, so
+   the one picked is obvious at a glance. Checkbox lists stay plain. */
+.field label.check:has(input[type=radio]) {
+    padding: .6rem .75rem; border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+.field label.check:has(input[type=radio]:checked) { border-color: var(--brand); background: var(--brand-light); }
+
+fieldset.field { border: 0; padding: 0; margin: 0; min-width: 0; }
+fieldset.field > legend { padding: 0; margin-bottom: .45rem; font-size: .85rem; font-weight: 600; color: var(--ink-soft); }
 
 .fieldset {
     border: 1px solid var(--line); border-radius: var(--radius-sm);

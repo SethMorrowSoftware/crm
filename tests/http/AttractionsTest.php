@@ -89,7 +89,7 @@ Harness::test('the list shows every attraction with its season, and the desk can
 Harness::test('opening the go-karts a fortnight early is what the season check then says', function () use ($owner): void {
     at_preserving('go-karts', function (array $karts) use ($owner): void {
         $path = '/settings/attractions/' . (int) $karts['id'];
-        $owner->postWithToken($path, $path, at_form($karts, ['season_start_month' => '3', 'season_start_day' => '15']));
+        Assert::same(302, $owner->postWithToken($path, $path, at_form($karts, ['season_start_month' => '3', 'season_start_day' => '15']))['status'], 'the save redirects rather than failing');
 
         $after = DB::first('SELECT * FROM {attractions} WHERE id = :id', ['id' => (int) $karts['id']]);
         Assert::same('03-15', (string) $after['season_start_md']);
@@ -101,11 +101,11 @@ Harness::test('opening the go-karts a fortnight early is what the season check t
 Harness::test('a season may wrap the new year', function () use ($owner): void {
     at_preserving('swing-ride', function (array $ride) use ($owner): void {
         $path = '/settings/attractions/' . (int) $ride['id'];
-        $owner->postWithToken($path, $path, at_form($ride, [
+        Assert::same(302, $owner->postWithToken($path, $path, at_form($ride, [
             'is_seasonal' => '1',
             'season_start_month' => '11', 'season_start_day' => '15',
             'season_end_month' => '3', 'season_end_day' => '15',
-        ]));
+        ]))['status'], 'the save redirects rather than failing');
 
         $after = DB::first('SELECT * FROM {attractions} WHERE id = :id', ['id' => (int) $ride['id']]);
         Assert::same(['11-15', '03-15'], [(string) $after['season_start_md'], (string) $after['season_end_md']]);
@@ -117,16 +117,16 @@ Harness::test('a season may wrap the new year', function () use ($owner): void {
 Harness::test('a maximum height below the minimum is refused', function () use ($owner): void {
     at_preserving('free-fall', function (array $ride) use ($owner): void {
         $path = '/settings/attractions/' . (int) $ride['id'];
-        $owner->postWithToken($path, $path, at_form($ride, ['min_height_in' => '48', 'max_height_in' => '40']));
+        Assert::same(302, $owner->postWithToken($path, $path, at_form($ride, ['min_height_in' => '48', 'max_height_in' => '40']))['status'], 'the save redirects rather than failing');
 
         Assert::null(DB::value('SELECT max_height_in FROM {attractions} WHERE id = :id', ['id' => (int) $ride['id']]));
     });
 });
 
 Harness::test('a new attraction gets a slug and lands last', function () use ($owner): void {
-    $owner->postWithToken('/settings/attractions/new', '/settings/attractions', [
+    Assert::same(302, $owner->postWithToken('/settings/attractions/new', '/settings/attractions', [
         'name' => 'Test Glow Room', 'is_indoor' => '1', 'is_party_main' => '1', 'is_active' => '1', 'capacity_per_slot' => '15',
-    ]);
+    ])['status'], 'the save redirects rather than failing');
 
     $row = DB::first("SELECT * FROM {attractions} WHERE slug = 'test-glow-room'");
     Assert::notNull($row);

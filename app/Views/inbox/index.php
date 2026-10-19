@@ -64,8 +64,7 @@ $withFilter = static function (string $target) use ($channel, $search): string {
     <?php endforeach; ?>
 </nav>
 
-<div class="card filter-bar">
-    <form method="get" action="<?= e(url('/inbox')) ?>" class="inline-form">
+<form method="get" action="<?= e(url('/inbox')) ?>" class="card filter-bar">
         <input type="hidden" name="filter" value="<?= e($filter) ?>">
 
         <div class="field">
@@ -86,14 +85,13 @@ $withFilter = static function (string $target) use ($channel, $search): string {
             </select>
         </div>
 
-        <div class="form-actions">
+        <div class="field field-actions">
             <button type="submit" class="btn btn-sm">Filter</button>
             <?php if ($search !== '' || $channel !== ''): ?>
                 <a class="btn btn-sm btn-ghost" href="<?= e(url('/inbox?filter=' . $filter)) ?>">Clear</a>
             <?php endif; ?>
         </div>
-    </form>
-</div>
+</form>
 
 <?php if ($conversations === []): ?>
     <div class="card">
@@ -110,7 +108,7 @@ $withFilter = static function (string $target) use ($channel, $search): string {
 <?php else: ?>
     <div class="card">
         <div class="table-wrap">
-            <table>
+            <table class="table">
                 <caption class="sr-only">
                     <?= e(number_format($total)) ?> conversations, unread first
                 </caption>
