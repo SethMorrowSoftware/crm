@@ -236,16 +236,3 @@ Harness::test('a price that is not a number is refused with the field named', fu
     Assert::contains('Price', $response['body']);
     Assert::same((int) $package['base_price_cents'], (int) pk_package('roller-skating-birthday')['base_price_cents']);
 });
-
-Harness::test('an add-on has an edit page of its own, closed to the front desk', function () use ($owner, $desk): void {
-    $addon = DB::first("SELECT * FROM {package_addons} WHERE name = 'Goody Bags'");
-    Assert::notNull($addon, 'the seeded add-on');
-
-    $page = $owner->get('/settings/packages/addons/' . (int) $addon['id']);
-    Assert::same(200, $page['status']);
-    Assert::contains('Goody Bags', $page['body']);
-    Assert::contains('name="price"', $page['body']);
-
-    Assert::same(403, $desk->get('/settings/packages/addons/' . (int) $addon['id'])['status']);
-    Assert::same(404, $owner->get('/settings/packages/addons/999999999')['status']);
-});

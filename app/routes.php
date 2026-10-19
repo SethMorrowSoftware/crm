@@ -223,7 +223,6 @@ $router->group('/settings/packages', ['auth', 'can:attractions_manage'], functio
     $router->get('/new', ['PackageController', 'create'], [], 'packages.new');
 
     $router->post('/addons', ['PackageController', 'storeAddon'], ['csrf']);
-    $router->get('/addons/{id:\d+}', ['PackageController', 'editAddon'], [], 'packages.addon');
     $router->post('/addons/{id:\d+}', ['PackageController', 'updateAddon'], ['csrf']);
     $router->post('/addons/{id:\d+}/delete', ['PackageController', 'destroyAddon'], ['csrf']);
 

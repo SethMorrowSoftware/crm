@@ -63,9 +63,9 @@ final class ApiResource
             'fields'   => [
                 'id', 'first_name', 'last_name', 'email', 'phone', 'company_id',
                 'household_id', 'lifecycle_stage', 'source', 'owner_id',
-                'city', 'state', 'postal_code', 'birth_date',
+                'address_1', 'address_2', 'city', 'state', 'postal_code', 'birth_date',
                 'email_consent', 'sms_consent', 'do_not_contact', 'marketing_opt_out_at',
-                'alt_phone', 'country', 'source_detail',
+                'alt_phone', 'country', 'source_detail', 'external_pos_id',
                 'first_visit_at', 'last_visit_at', 'visit_count',
                 'lifetime_value_cents', 'avg_spend_cents',
                 'created_at', 'updated_at',
@@ -78,9 +78,13 @@ final class ApiResource
             'writable' => [
                 'first_name', 'last_name', 'email', 'phone', 'company_id',
                 'household_id', 'lifecycle_stage', 'source', 'owner_id',
-                'city', 'state', 'postal_code', 'birth_date',
-                'alt_phone', 'country', 'source_detail',
+                'address_1', 'address_2', 'city', 'state', 'postal_code', 'birth_date',
+                'alt_phone', 'country', 'source_detail', 'external_pos_id',
             ],
+            // Exact-match filters, `?external_pos_id=4021`. The POS bridge
+            // finds a guest by their CenterEdge customer number; without this
+            // it had to page the whole guest list to learn one id.
+            'exact'    => ['external_pos_id', 'email'],
             'money'       => ['lifetime_value_cents', 'avg_spend_cents'],
             'dates'       => ['birth_date'],
             'soft_delete' => true,
@@ -223,6 +227,7 @@ final class ApiResource
             'fields'      => ['id', 'contact_id', 'household_id', 'visit_date', 'source',
                               'spend_cents', 'party_size', 'booking_id', 'external_ref',
                               'created_at'],
+            'exact'       => ['contact_id', 'external_ref', 'visit_date'],
             // Writing a visit through the API is deliberately NOT a plain
             // insert — it has to go through VisitRecorder so the one-visit-
             // per-guest-per-day rule, the derived figures and the
@@ -590,7 +595,10 @@ final class ApiResource
             return null;
         }
 
-        if (str_ends_with($field, '_id') || $field === 'id') {
+        // A field naming a record here is an integer. A foreign system's own
+        // identifier is NOT, though it ends in `_id` too: cast, a CenterEdge
+        // customer number like "CE-4021" came back as 0.
+        if ($field === 'id' || self::namesARecord($field)) {
             return (int) $value;
         }
 

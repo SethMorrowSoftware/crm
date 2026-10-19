@@ -314,6 +314,25 @@ curl "https://crm.example.com/api/v1/contacts?updated_since=2026-10-16T00:00:00Z
   -H "Authorization: Bearer ..."
 ```
 
+Find one record exactly, by a field the resource allows:
+
+```bash
+curl "https://crm.example.com/api/v1/contacts?external_pos_id=4021" -H "Authorization: Bearer ..."
+curl "https://crm.example.com/api/v1/contacts?email=dana%40example.test" -H "Authorization: Bearer ..."
+curl "https://crm.example.com/api/v1/visits?external_ref=CE-4021-2026-10-15" -H "Authorization: Bearer ..."
+```
+
+| Resource | Exact filters |
+|---|---|
+| contacts | `external_pos_id`, `email` |
+| visits | `contact_id`, `external_ref`, `visit_date` |
+
+`external_pos_id` is the guest's number in the point of sale — a CenterEdge
+customer number here — and is readable and writable on contacts, as are
+`address_1` and `address_2`. It is what `tools/centeredge/ce_sync.py` matches
+on. Every exact filter is on a field the resource already returns, so a filter
+cannot be used to ask about a column a caller is not shown.
+
 `updated_since` is what an incremental sync needs; without it every poll is a
 full table read. An unparseable value is **422**, never silently ignored — an
 ignored filter returns the whole table and the integration re-imports

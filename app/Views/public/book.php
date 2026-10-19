@@ -102,7 +102,7 @@ $link = static function (array $changes) use ($package, $guests, $date, $startVa
             </div>
             <div>
                 <dt>Day</dt>
-                <dd><?= e(calendar_date((string) $booking['event_date'])) ?></dd>
+                <dd><?= e(local_date((string) $booking['event_date'])) ?></dd>
             </div>
             <div>
                 <dt>Time</dt>

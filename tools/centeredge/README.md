@@ -57,6 +57,59 @@ visit already here is matched, not duplicated.
 
 **Delete the export folder once imported.** It is the guest list.
 
+## After that: the nightly sync
+
+`ce_sync.py` keeps the CRM current without another export. It reads what
+changed in CenterEdge since its last run — new and edited guests, and the
+visits since — and pushes it to the CRM's REST API over HTTPS. Same machine,
+same read-only connection, same rules about minors and placeholder phones.
+
+1. In the CRM, **Settings → API tokens** → a token for a dedicated user,
+   ticked for **contacts: read** and **contacts: write** and nothing else.
+2. On the venue machine:
+
+   ```bash
+   cat > ~/.config/castle-crm/crm-api.env <<'ENV'
+   CRM_URL=https://thecastletechteam.com/crm
+   CRM_TOKEN=cc_live_...
+   ENV
+   chmod 600 ~/.config/castle-crm/crm-api.env
+   ```
+
+3. Once by hand, from the day of the CSV import, with `--dry-run` first:
+
+   ```bash
+   ~/.local/share/castle-crm/ce-venv/bin/python tools/centeredge/ce_sync.py --since 2026-10-19 --dry-run
+   ~/.local/share/castle-crm/ce-venv/bin/python tools/centeredge/ce_sync.py --since 2026-10-19
+   ```
+
+4. Then nightly, with `crontab -e` (no root needed):
+
+   ```
+   15 3 * * * $HOME/.local/share/castle-crm/ce-venv/bin/python $HOME/crm/tools/centeredge/ce_sync.py >> $HOME/.local/share/castle-crm/ce-sync.log 2>&1
+   ```
+
+What it does to a guest who is already in the CRM: it fills in **blank**
+fields only. A phone number somebody corrected in the CRM is not put back to
+the till's copy. Visits are one per guest per day and the API is idempotent
+by the day, so overlapping runs change nothing.
+
+**Consent is not synced unless you say so.** CenterEdge's bulk-email box is
+evidence of consent only if the desk actually asks; if it does, add both
+lines to `crm-api.env`:
+
+```
+CE_CONSENT_SYNC=1
+CE_CONSENT_DISCLOSURE='The words the guest agreed to at the counter.'
+```
+
+and new opt-ins are recorded with that wording as their evidence, in the
+consent log. A guest who unsubscribed in the CRM is never re-subscribed.
+
+It paces itself under the API's limits (600 reads and 300 writes a minute)
+and remembers guests CenterEdge has that the CRM does not — minors, people
+with no email or phone — so it does not look them up again every night.
+
 ## What it deliberately leaves out
 
 - **Under-18s' own accounts are never contacts.** CenterEdge holds about

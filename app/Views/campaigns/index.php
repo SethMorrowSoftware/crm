@@ -42,7 +42,7 @@ $badge = static fn (string $status): string => match ($status) {
 <?php else: ?>
     <div class="card">
         <div class="table-wrap">
-            <table class="table">
+            <table>
                 <caption class="sr-only"><?= e((string) count($campaigns)) ?> campaigns</caption>
                 <thead>
                     <tr>

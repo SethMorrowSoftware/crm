@@ -135,7 +135,7 @@ $stageLabels = [
                         </td>
                         <td>
                             <?php if (!empty($row['last_visit_at'])): ?>
-                                <?= e(calendar_date((string) $row['last_visit_at'])) ?>
+                                <?= e(local_date((string) $row['last_visit_at'])) ?>
                                 <span class="td-sub"><?= (int) $row['visit_count'] ?> visit<?= (int) $row['visit_count'] === 1 ? '' : 's' ?></span>
                             <?php else: ?>
                                 <span class="muted">No visit recorded</span>

@@ -64,9 +64,7 @@ $badge = [
             </select>
         </div>
 
-        <div class="field field-actions">
-            <button type="submit" class="btn btn-sm">Filter</button>
-        </div>
+        <button type="submit" class="btn btn-ghost">Filter</button>
     </form>
 
     <?php if ($filter === 'open'): ?>

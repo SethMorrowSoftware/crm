@@ -440,10 +440,7 @@ authorisation.
 1. Take a backup first (**Settings → Backups → Back up now**) and download it.
 2. Upload and extract the new version over the old one, overwriting.
    `config/config.php` and `storage/` are not in the archive, so your
-   configuration and data survive. Build the archive with
-   `tools/build-release.sh` from a checkout of the repository: it holds only
-   what the server runs (about 1 MB), where GitHub's "Download ZIP" also
-   carries the test suite and the screenshots.
+   configuration and data survive.
 3. Visit any page. Pending database migrations run automatically and are
    recorded, so a half-finished upgrade can be completed rather than redone.
 4. Check **Settings → System health**.

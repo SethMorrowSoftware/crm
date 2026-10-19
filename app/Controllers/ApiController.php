@@ -178,6 +178,20 @@ final class ApiController extends Controller
             $clauses[] = '(' . implode(' OR ', $ors) . ')';
         }
 
+        // Exact matches, on the fields the definition allows and no others.
+        // Every one is also a READABLE field (a test holds that), so a filter
+        // can never be used to probe a column the caller is not shown.
+        foreach ($definition['exact'] ?? [] as $i => $field) {
+            $value = $request->query($field);
+
+            if (!is_string($value) || $value === '') {
+                continue;
+            }
+
+            $clauses[]                = $alias . '.' . $field . ' = :exact' . $i;
+            $params['exact' . $i]     = $value;
+        }
+
         // `updated_since`, which is what an integration syncing incrementally
         // actually needs — without it every poll is a full table read.
         $since = trim($request->str('updated_since', ''));

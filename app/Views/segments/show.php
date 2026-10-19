@@ -106,7 +106,7 @@ $id = (int) $segment['id'];
         </p>
 
         <div class="table-wrap">
-            <table class="table">
+            <table>
                 <caption class="sr-only">A sample of the guests this segment matches</caption>
                 <thead>
                     <tr>

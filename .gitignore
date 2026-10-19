@@ -24,3 +24,7 @@ storage/sessions/*
 # config (skills, settings), but worktrees/ holds throwaway git worktrees —
 # nested checkouts of this same repository, created and removed automatically.
 /.claude/worktrees/
+
+# Python bytecode from the CenterEdge tools, written beside them on every run.
+__pycache__/
+*.pyc

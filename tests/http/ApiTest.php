@@ -1736,6 +1736,47 @@ Harness::test('CONSENT IS NEVER WITHDRAWN BY A VALUE NOBODY MEANT AS "NO"', func
     ha_clear();
 });
 
+Harness::test('A POS BRIDGE FINDS A GUEST BY CARD NUMBER, AND ONLY THAT GUEST', function () use ($full): void {
+    // The CenterEdge sync matches by customer number. Before the exact
+    // filter it had to page the whole guest list to learn one id.
+    $made = ha_call('POST', '/api/v1/contacts', $full, [
+        'first_name'      => 'Card',
+        'last_name'       => 'Holder',
+        'email'           => 'card.holder@example.test',
+        'external_pos_id' => 'HA-4021',
+        'address_1'       => '1 Test Lane',
+        'source'          => 'hatest',
+    ]);
+
+    Assert::same(201, $made['status'], $made['body']);
+    Assert::same('HA-4021', $made['json']['data']['external_pos_id'] ?? null, 'the card number is readable back');
+    Assert::same('1 Test Lane', $made['json']['data']['address_1'] ?? null);
+
+    ha_call('POST', '/api/v1/contacts', $full, [
+        'first_name' => 'Other', 'last_name' => 'Guest', 'external_pos_id' => 'HA-40210', 'source' => 'hatest',
+    ]);
+
+    $found = ha_call('GET', '/api/v1/contacts?external_pos_id=HA-4021', $full);
+
+    Assert::same(200, $found['status']);
+    Assert::same(['HA-4021'], array_column($found['json']['data'], 'external_pos_id'), 'exact, not a prefix or a LIKE');
+
+    $byEmail = ha_call('GET', '/api/v1/contacts?email=' . urlencode('card.holder@example.test'), $full);
+    Assert::same(1, count($byEmail['json']['data']));
+
+    // A visit can be looked up by the reference the bridge sent with it.
+    $id = (int) $made['json']['data']['id'];
+    ha_call('POST', '/api/v1/visits', $full, [
+        'contact_id' => $id, 'visit_date' => '2026-10-01', 'source' => 'pos_import',
+        'spend_cents' => 1250, 'external_ref' => 'CE-HA-4021-2026-10-01',
+    ]);
+
+    $visit = ha_call('GET', '/api/v1/visits?external_ref=CE-HA-4021-2026-10-01', $full);
+    Assert::same([$id], array_map('intval', array_column($visit['json']['data'], 'contact_id')));
+
+    ha_clear();
+});
+
 ha_clear();
 ha_clear_users();
 ha_clear_tokens();
