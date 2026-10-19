@@ -313,6 +313,12 @@ function start_test_server(): ?array
         return null;
     }
 
+    // What THIS run wrote, so the clean-up removes this file and nothing else.
+    // A second run in the same checkout — a quick --unit pass while the full
+    // suite is going — used to delete or swap out the config the first run's
+    // server was reading, and every request after that failed.
+    $GLOBALS['cc_test_config_written'] = $contents;
+
     putenv('CC_TEST_CRON_TOKEN=' . $cronToken);
 
     // The installer must be locked, or the front controller redirects to it.
@@ -357,6 +363,15 @@ function start_test_server(): ?array
     if (!is_resource($process)) {
         return null;
     }
+
+    // Stopped even if a suite dies. An uncaught throw at a test file's top
+    // level (a login in its set-up, say) ended the run before the clean-up at
+    // the bottom of this file, and the server lived on, holding its port and
+    // the throwaway config. Calling it twice is harmless: both halves check
+    // what is still theirs.
+    register_shutdown_function(static function () use ($process, $pipes): void {
+        stop_test_server($process, $pipes);
+    });
 
     $baseUrl = 'http://127.0.0.1:' . $port;
 
@@ -514,18 +529,23 @@ function stop_test_server(mixed $process, array $pipes): void
         @proc_close($process);
     }
 
-    // Restore whatever config was there before the run.
+    // Restore whatever config was there before the run — but only if the
+    // config there now is the one THIS run wrote. A run that never started a
+    // server (--unit) wrote none and touches nothing; one whose file has been
+    // replaced since leaves the replacement alone.
     $configPath = CC_ROOT . '/config/config.php';
     $backupPath = CC_ROOT . '/config/config.php.testbackup';
+    $written    = $GLOBALS['cc_test_config_written'] ?? null;
 
-    if (is_file($backupPath)) {
+    if (is_string($written) && @file_get_contents($configPath) === $written) {
+        // Removed even when nothing was stashed: left behind, it pointed a
+        // local dev server at the database this runner wipes.
         @unlink($configPath);
-        @rename($backupPath, $configPath);
-    } elseif (str_contains((string) @file_get_contents($configPath, false, null, 0, 200), 'Written by tests/run.php')) {
-        // There was no config before the run, so the one there now is ours.
-        // Left behind, it points a local dev server at the database this
-        // runner wipes — so the next `php -S` looks installed, with nothing
-        // in it that the developer put there.
-        @unlink($configPath);
+
+        if (is_file($backupPath)) {
+            @rename($backupPath, $configPath);
+        }
+
+        unset($GLOBALS['cc_test_config_written']);
     }
 }

@@ -1110,6 +1110,56 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Added: The Castle's guests, children and visits, from CenterEdge
+
+The question the deployment runbook said nobody had ever answered — does
+CenterEdge hold usable guest email at all? — is answered, read-only, against
+the live database on 19 October 2026: 74,607 of 137,879 accounts carry an
+email and 45,163 of those ticked CenterEdge's bulk-email box. So the bridge is
+worth building, and `tools/centeredge/ce_export.py` is its first half.
+
+It runs on a machine at the venue (the CRM is on shared hosting and the POS is
+on the LAN) and writes three files the importer takes as they are: about
+85,000 adult guests, 32,000 children, and 134,000 guest-days of visit
+history, in five seconds. Every statement is a SELECT, read uncommitted so the
+till never waits behind it, and it refuses to write inside the repository.
+`tools/centeredge/README.md` is the procedure.
+
+**A minor's own account is never a contact.** CenterEdge holds 35,000 accounts
+for under-18s, many with a parent's email. `docs/PRIVACY.md` allows a child
+only as a first name and a birth date under a guardian, so a minor linked to a
+parent becomes a child record under that parent, and one with no parent is
+left out and counted.
+
+**Phone numbers that are nobody's own are dropped.** 123-456-xxxx was on 150
+accounts and the venue's own main line on 112. The importer treats a phone as
+identity, so a number on more than ten accounts is blanked; the guest is kept
+if they have an email.
+
+### Added: importing children
+
+A third kind of import file, beside guests and visit history: a child's first
+name and date of birth, with their guardian's email, phone or card number.
+It is how a venue's party history reaches the birthday campaign.
+
+The guardian must already be here — a row whose guardian is not is refused,
+never used to invent one. Only the first word of a name is kept, because a
+child's surname is one of the things the record does not hold. One child per
+guardian, name and birthday: a duplicate in the file or a re-import is
+skipped, so a family is never written to twice about one child. Somebody 18 or
+over is refused as "import them as a guest instead".
+### Fixed: two test runs in one checkout broke each other, and a crash orphaned the server
+
+The runner's clean-up restored "whatever config was there before" without
+asking whether it had put anything there. So a quick `--unit` pass, which
+never writes a config, deleted or swapped out the one a concurrent full run's
+server was reading, and that run failed from then on with "No CSRF token
+found on /login" — at a test file's top level, which ended the runner before
+its clean-up, so its web server lived on as an orphan holding the port. The
+runner now records the exact config it wrote and removes or restores only
+that, and stops its server from a shutdown handler too, so a crash cannot
+leave one running.
+
 ### Added: every party The Castle sells, at CenterEdge's prices
 
 The first seed carried four birthday packages copied off the website. The

@@ -912,3 +912,44 @@ Harness::test('the caps are set where a mistake cannot run for a day', function 
         'the report stops before the file does, because a wrong mapping refuses every row'
     );
 });
+
+Harness::test('a child row keeps the first name only, and never the child as a contact', function (): void {
+    $read = Importer::childRow(
+        ['external_pos_id' => '4021', 'first_name' => '  Emma Rose Smith. ', 'birth_date' => '2019-03-04'],
+        ['today' => '2026-10-19']
+    );
+
+    Assert::true($read['ok']);
+    Assert::same('Emma', $read['child']['first_name'], 'docs/PRIVACY.md: no surname for a child');
+    Assert::same(3, $read['child']['birth_month']);
+    Assert::same('4021', $read['identity']['external_pos_id'], 'the identity is the GUARDIAN\'S');
+    Assert::false(array_key_exists('email', $read['child']), 'there is no field that could reach the child');
+    Assert::false(array_key_exists('phone', $read['child']));
+});
+
+Harness::test('a child row is refused, not repaired', function (): void {
+    $today = ['today' => '2026-10-19'];
+    $reason = static fn (array $values): ?string => Importer::childRow($values, $today)['reason'] ?? null;
+
+    Assert::same('no_name', $reason(['external_pos_id' => '1', 'birth_date' => '2019-03-04']));
+    Assert::same('bad_date', $reason(['external_pos_id' => '1', 'first_name' => 'Ava']));
+    Assert::same('bad_date', $reason(['external_pos_id' => '1', 'first_name' => 'Ava', 'birth_date' => 'soon']));
+    Assert::same('future_birth', $reason(['external_pos_id' => '1', 'first_name' => 'Ava', 'birth_date' => '2027-01-01']));
+    Assert::same('no_identity', $reason(['first_name' => 'Ava', 'birth_date' => '2019-03-04']));
+
+    // Eighteen on the day is an adult: a guest of their own, not a child record.
+    Assert::same('not_a_child', $reason(['external_pos_id' => '1', 'first_name' => 'Ava', 'birth_date' => '2008-10-19']));
+    Assert::true(Importer::childRow(
+        ['external_pos_id' => '1', 'first_name' => 'Ava', 'birth_date' => '2008-10-20'],
+        $today
+    )['ok'], 'the day before their eighteenth birthday they are still a child');
+});
+
+Harness::test('a child row\'s label shows only what the record will hold', function (): void {
+    $read = Importer::childRow(
+        ['email' => 'parent@example.test', 'first_name' => 'Noah Smith', 'birth_date' => '2020-01-01'],
+        ['today' => '2026-10-19']
+    );
+
+    Assert::same('Noah · guardian parent@example.test', $read['label']);
+});

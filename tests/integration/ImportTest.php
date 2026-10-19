@@ -733,4 +733,109 @@ Harness::test('a path from the database cannot escape the import directory', fun
     }
 });
 
+// ------------------------------------------------------------------ children
+
+/** A guardian to attach children to, matched by the card number a POS export carries. */
+function imp_guardian(string $card): int
+{
+    return (int) DB::insert('contacts', [
+        'first_name'      => 'Parent',
+        'last_name'       => 'ImptestChildren',
+        'email'           => 'imp-' . strtolower($card) . '@test.invalid',
+        'external_pos_id' => $card,
+        'country'         => 'US',
+        'lifecycle_stage' => 'customer',
+        'created_at'      => now_utc(),
+        'updated_at'      => now_utc(),
+    ]);
+}
+
+const IMP_CHILD_MAP = [0 => 'external_pos_id', 1 => 'first_name', 2 => 'birth_date'];
+
+Harness::test('children attach to their guardian, with a first name and a birthday only', function (): void {
+    imp_clear();
+
+    $guardian = imp_guardian('IMPKID-1');
+    $born     = test_local_day(365 * 6);
+
+    $job = imp_finish(imp_job('children', [
+        ['Guardian Customer ID', 'Child First Name', 'Child Birth Date'],
+        ['IMPKID-1', 'Emma Imptest', $born],
+        ['IMPKID-1', 'Noah', test_local_day(365 * 3)],
+    ], IMP_CHILD_MAP, [], 'importing'));
+
+    Assert::same(2, (int) $job['created']);
+
+    $children = DB::all('SELECT * FROM {children} WHERE contact_id = :c ORDER BY first_name', ['c' => $guardian]);
+
+    Assert::same(['Emma', 'Noah'], array_column($children, 'first_name'), 'the surname a POS field carries is not stored');
+    Assert::same($born, (string) $children[0]['birth_date']);
+    Assert::same((int) substr($born, 5, 2), (int) $children[0]['birth_month'], 'the birthday campaign reads the month');
+
+    imp_clear();
+});
+
+Harness::test('ONE CHILD IS ONE RECORD, however many times the file or a re-import says so', function (): void {
+    // The export carries a child from a linked POS account AND from a party
+    // booking; a family must never get two birthday messages about one child.
+    imp_clear();
+
+    $guardian = imp_guardian('IMPKID-2');
+    $born     = test_local_day(365 * 8);
+    $rows     = [
+        ['Guardian Customer ID', 'Child First Name', 'Child Birth Date'],
+        ['IMPKID-2', 'Liam', $born],
+        ['IMPKID-2', 'liam', $born],
+    ];
+
+    $first = imp_finish(imp_job('children', $rows, IMP_CHILD_MAP, [], 'importing'));
+    Assert::same(1, (int) $first['created']);
+    Assert::same(1, (int) $first['skipped']);
+
+    $again = imp_finish(imp_job('children', $rows, IMP_CHILD_MAP, [], 'importing'));
+    Assert::same(0, (int) $again['created'], 're-importing the same file adds nobody');
+
+    Assert::same(1, (int) DB::value('SELECT COUNT(*) FROM {children} WHERE contact_id = :c', ['c' => $guardian]));
+
+    imp_clear();
+});
+
+Harness::test('a child whose guardian is not here, or who is an adult, is refused and says why', function (): void {
+    imp_clear();
+
+    imp_guardian('IMPKID-3');
+
+    $job = imp_finish(imp_job('children', [
+        ['Guardian Customer ID', 'Child First Name', 'Child Birth Date'],
+        ['IMPKID-NOBODY', 'Ava', test_local_day(365 * 5)],
+        ['IMPKID-3', 'Grownup', test_local_day(365 * 19)],
+        ['IMPKID-3', '', test_local_day(365 * 5)],
+        ['IMPKID-3', 'Mia', ''],
+    ], IMP_CHILD_MAP, [], 'importing'));
+
+    Assert::same(0, (int) $job['created']);
+
+    $reasons = DB::column(
+        "SELECT reason FROM {import_rows} WHERE import_id = :i AND outcome = 'refused' ORDER BY line",
+        ['i' => (int) $job['id']]
+    );
+
+    Assert::same(['no_such_contact', 'not_a_child', 'no_name', 'bad_date'], $reasons);
+    Assert::same(0, (int) DB::value("SELECT COUNT(*) FROM {contacts} WHERE external_pos_id = 'IMPKID-NOBODY'"), 'no guardian is invented');
+
+    imp_clear();
+});
+
+Harness::test('a children file maps itself from the CenterEdge export headers', function (): void {
+    Assert::same(
+        [0 => 'external_pos_id', 1 => 'first_name', 2 => 'birth_date'],
+        Importer::guessMapping(['Guardian Customer ID', 'Child First Name', 'Child Birth Date'], 'children')
+    );
+    Assert::same([], Importer::blockers(Importer::mappingProblems(IMP_CHILD_MAP, 'children')));
+    Assert::notEmpty(
+        Importer::blockers(Importer::mappingProblems([0 => 'first_name', 1 => 'birth_date'], 'children')),
+        'a file with no guardian column cannot start'
+    );
+});
+
 imp_clear();

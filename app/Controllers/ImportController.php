@@ -71,7 +71,7 @@ final class ImportController extends Controller
         $entity = (string) $request->input('entity', 'contacts');
 
         if (!Importer::isEntity($entity)) {
-            flash('error', 'Pick whether this file is contacts or visits.');
+            flash('error', 'Pick whether this file is guests, visits or children.');
 
             return $this->redirect('/imports');
         }

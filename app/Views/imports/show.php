@@ -64,7 +64,7 @@ $outcomeWords = [
         <div>
             <h2><?= e((string) $summary['headline']) ?></h2>
             <p class="card-sub">
-                <?= $entity === 'visits' ? 'Visit history' : 'Guests' ?>
+                <?= e(match ($entity) { 'visits' => 'Visit history', 'children' => 'Children', default => 'Guests' }) ?>
                 from <?= e((string) $job['original_name']) ?>
                 (<?= e(bytes_human((int) $job['bytes'])) ?>)<?php
                 ?><?php if (($job['created_by_name'] ?? null) !== null): ?>,
