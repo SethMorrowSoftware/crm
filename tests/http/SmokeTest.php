@@ -269,6 +269,15 @@ Harness::test('EVERY SIDEBAR LINK GOES SOMEWHERE REAL', function () use ($owner)
 
         Assert::notContains('Fatal error', $response['body'], $href);
         Assert::notContains('Undefined ', $response['body'], $href);
+
+        // The page names itself. The layout falls back to "Castle CRM" when a
+        // controller passes no pageTitle, and Text Club did exactly that —
+        // passing `title` — so its header read "Castle CRM" for a phase.
+        Assert::notContains(
+            '<h1 class="page-title">Castle CRM</h1>',
+            $response['body'],
+            '"' . $label . '" has no page title of its own'
+        );
     }
 });
 

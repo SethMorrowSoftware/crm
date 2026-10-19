@@ -155,7 +155,7 @@ $address = array_filter([
         </div>
         <div class="table-wrap">
             <table class="table">
-                <caption class="sr-only">This household’s visits</caption>
+                <caption class="sr-only">This household’s children</caption>
                 <thead>
                 <tr>
                     <th scope="col">Name</th>
@@ -168,9 +168,18 @@ $address = array_filter([
                     <tr>
                         <td><strong><?= e($child['first_name']) ?></strong></td>
                         <td>
+                            <?php $next = birthday_next($child['birth_date'] ?? null); ?>
                             <?= !empty($child['birth_date'])
-                                ? e(local_date((string) $child['birth_date']))
+                                ? e(calendar_date((string) $child['birth_date']))
                                 : '<span class="muted">Not known</span>' ?>
+                            <?php if ($next !== null): ?>
+                                <span class="td-sub">
+                                    <?= e('Turns ' . $next['turns'] . ($next['days'] === 0
+                                        ? ' today'
+                                        : ' on ' . calendar_date($next['date'], 'M j')
+                                            . ($next['days'] <= 30 ? ' (' . $next['days'] . ($next['days'] === 1 ? ' day)' : ' days)') : ''))) ?>
+                                </span>
+                            <?php endif; ?>
                         </td>
                         <td>
                             <?php if (!empty($child['allergies'])): ?>

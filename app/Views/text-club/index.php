@@ -182,7 +182,7 @@ $rate = static fn (?float $value): string => $value === null ? '—' : number_fo
                 </p>
             <?php else: ?>
                 <div class="table-wrap">
-                    <table>
+                    <table class="table">
                         <caption class="sr-only"><?= e((string) count($rows)) ?> Text Club members</caption>
                         <thead>
                             <tr>

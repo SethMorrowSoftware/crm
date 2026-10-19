@@ -62,7 +62,7 @@ $error = static function (string $field): string {
     <?= $editing ? e((string) $package['name']) : 'New' ?>
 </p>
 
-<form method="post" action="<?= e($action) ?>" class="stack-lg">
+<form method="post" action="<?= e($action) ?>" class="form">
     <?= csrf_field() ?>
 
     <section class="card">
