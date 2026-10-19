@@ -108,6 +108,8 @@ today. [Spec §3.8](docs/SPEC.md) draws the line precisely.
 
 ## Documentation
 
+- [docs/HANDOVER.md](docs/HANDOVER.md) — **start here:** where things stand,
+  setting up a new computer, and what is left to do (deploy, import, sync)
 - [docs/INSTALL.md](docs/INSTALL.md) — installing, upgrading, backups, recovery
 - [docs/SPEC.md](docs/SPEC.md) — product and technical specification
 - [docs/PRIVACY.md](docs/PRIVACY.md) — what data is held, consent, retention,
