@@ -252,10 +252,16 @@ flag overrides every consent flag, every channel and every message kind,
 transactional included. It is the one switch that stops everything.
 
 **"Delete me."** — soft-delete removes the record from every list and report
-while keeping referential integrity for historical bookings. A hard erase
-exists behind its own permission (`contacts_erase`) and is audited. Decide
-before you are asked which of the two your policy promises: a venue that
-promised deletion and performed a soft delete has made a false statement.
+while keeping referential integrity for historical bookings. **A hard erase
+is not built yet.** The permission for it (`contacts_erase`) is in the
+catalogue, and this page said until October 2026 that the erase existed; it
+did not, and nothing used the permission. Until it is built, the honest
+answer to an erasure request is: soft-delete the record, set **do not
+contact** before deleting it so no import or automation can reach the
+address again, and tell the guest that booking and payment history is kept
+for the venue's records. Decide before you are asked which your policy
+promises: a venue that promised deletion and performed a soft delete has
+made a false statement.
 
 **"Correct my details."** — ordinary editing. Every change is audited with
 the before and after values.
