@@ -210,6 +210,28 @@ $router->group('/settings/roles', ['auth', 'can:roles_manage'], function ($route
 });
 
 // ---------------------------------------------------------------------------
+// Party packages and add-ons
+//
+// `attractions_manage`, not `settings`: what a party COSTS is a pricing
+// decision, and a front desk that books parties must not be able to make it.
+// `/new` is declared before `/{id}` so it is never read as an id.
+// ---------------------------------------------------------------------------
+
+$router->group('/settings/packages', ['auth', 'can:attractions_manage'], function ($router): void {
+    $router->get('', ['PackageController', 'index'], [], 'packages');
+    $router->post('', ['PackageController', 'store'], ['csrf']);
+    $router->get('/new', ['PackageController', 'create'], [], 'packages.new');
+
+    $router->post('/addons', ['PackageController', 'storeAddon'], ['csrf']);
+    $router->post('/addons/{id:\d+}', ['PackageController', 'updateAddon'], ['csrf']);
+    $router->post('/addons/{id:\d+}/delete', ['PackageController', 'destroyAddon'], ['csrf']);
+
+    $router->get('/{id:\d+}', ['PackageController', 'edit'], [], 'packages.edit');
+    $router->post('/{id:\d+}', ['PackageController', 'update'], ['csrf']);
+    $router->post('/{id:\d+}/delete', ['PackageController', 'destroy'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Backups & data export
 //
 // `backup_manage` rather than `settings`: a downloaded backup is the whole

@@ -1110,6 +1110,68 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Added: every party The Castle sells, at CenterEdge's prices
+
+The first seed carried four birthday packages copied off the website. The
+venue's own system sells eleven, and the one it sells most — **InflataPark,
+792 of the year's parties, about half** — was not among them. The list now
+comes from CenterEdge's `GroupEventTypes` (read 19 October 2026): InflataPark,
+Roller Skating, Laser Tag, Bowling, All Access and its winter price,
+Ballocity, Mini Golf, the InflataPark Toddler Party, Glow Room and Bounce.
+
+Three of the original four were a cent out: CenterEdge lists Laser Tag, Mini
+Golf and Ballocity at $349.99, where the website rounds to $349. Older price
+points CenterEdge kept as separate event types ("Laser Tag Party $299") are
+one product, so one package; a historical booking keeps its own total.
+
+`install/schema/013_castle_party_packages.sql` brings an existing install to
+the same list without trampling it: a package is added only if its slug is
+free, and a price or position is corrected only where it still holds the
+original seed's value, so a price the venue has set is theirs. On a fresh
+install it inserts nothing — the schema runs before the venue seed, and the
+seed writes the same rows with their attractions linked. A test builds the
+list both ways and holds them identical.
+
+### Added: what a family can book online is the venue's choice
+
+`party_packages.is_online`. CenterEdge sells six of the eleven on the web; the
+All Access, Toddler, Glow Room and Bounce parties are booked by phone or at
+the desk. `is_active` could not say that — switching a package off took it
+out of the staff booking form too. The public booking page now offers only
+online packages.
+
+### Added: Settings → Party packages
+
+There was no screen for prices at all: the permission catalogue had described
+`attractions_manage` as "Edit attractions, packages and resources" since phase
+1, and nothing used it. Now a manager can edit every package — price, guests
+included, each additional guest, deposit, length, notice, what is included,
+online or desk-only — add one, and add, edit or retire add-ons.
+
+A package or add-on that is on a booking cannot be deleted, only taken off
+sale: the foreign key would allow it, but `ON DELETE SET NULL` would quietly
+turn every one of those bookings into "no package". A slug never changes after
+creation, because the upgrade files and the CenterEdge import find a package
+by it. Prices are stored with `round()`, not a cast, because 409.99 × 100 is
+40998.999… in floating point.
+
+### Fixed: a migration run against another prefix recorded itself in the wrong table
+
+`Migration` applied a file's statements under its own prefix and then recorded
+the file with `DB::insert('migrations')`, which expands the GLOBAL prefix. In
+production the two are always the same, so it never showed; under any other
+prefix a run recorded files as applied in a table that had not received them.
+It now records into its own prefix's table.
+
+### Fixed: the installer walk-through left its web server running
+
+`tests/install/walk-installer.php` started its server through a shell
+command, so the shutdown handler's `proc_terminate()` killed the shell and the
+PHP server it had launched lived on — one orphan per run, each still holding
+the caller's output open, so a piped run hung after printing PASS. It now
+starts the server the way `tests/run.php` always has, as an argument array
+with no shell in between.
+
 ### Fixed: nobody could sign in on a PHP built without Argon2
 
 `Auth::attempt()` checked whether a stored hash needed upgrading by naming

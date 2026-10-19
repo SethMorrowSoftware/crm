@@ -14,6 +14,7 @@ $sections = [
     ['Email', '/settings/mail', $mailDriverLabel, 'message', 'integrations_manage'],
     ['API tokens', '/settings/api-tokens', $apiTokenLabel, 'external', 'integrations_manage'],
     ['Webhooks', '/settings/webhooks', $webhookLabel, 'zap', 'integrations_manage'],
+    ['Party packages', '/settings/packages', 'Parties, prices and add-ons — and which are bookable online.', 'cake', 'attractions_manage'],
     ['Users', '/settings/users', $counts['users'] . ' accounts.', 'users', 'users_manage'],
     ['Roles & permissions', '/settings/roles', $counts['roles'] . ' roles.', 'lock', 'roles_manage'],
     ['Playbooks', '/playbooks', $counts['playbooks'] . ' of 8 active.', 'book', 'view_automations'],
