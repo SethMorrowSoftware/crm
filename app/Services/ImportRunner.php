@@ -304,11 +304,13 @@ final class ImportRunner
         bool $dryRun,
         array &$seenInFile
     ): array {
-        $values = Importer::readRow($row, $mapping);
+        $cells = Importer::readRow($row, $mapping);
 
-        return $entity === 'visits'
-            ? self::handleVisit($values, $options, $dryRun, $seenInFile)
-            : self::handleContact($values, $options, $dryRun, $seenInFile);
+        return match ($entity) {
+            'visits'   => self::handleVisit($cells, $options, $dryRun, $seenInFile),
+            'children' => self::handleChild($cells, $options, $dryRun, $seenInFile),
+            default    => self::handleContact($cells, $options, $dryRun, $seenInFile),
+        };
     }
 
     /**
@@ -548,6 +550,124 @@ final class ImportRunner
                 . ' ' . implode(' ', $read['warnings'])),
             'label'     => $read['label'],
             'entity_id' => (int) $result['visit_id'],
+        ];
+    }
+
+    /**
+     * A child, attached to a guardian who is already here.
+     *
+     * The guardian is matched exactly as a visit's guest is, and for the same
+     * reason a missing one is REFUSED rather than created: a contact made out
+     * of a child row would be a nameless record whose only purpose is to hold
+     * a birthday. Import the guests first; then this file matches.
+     *
+     * One child per guardian, first name and date of birth. A second row for
+     * the same child — the export carries a child from both a linked POS
+     * account and a party booking — is skipped, not doubled, so a re-import
+     * changes nothing and the birthday campaign never writes to a family twice
+     * about one child.
+     *
+     * @param array<string,string> $values
+     * @param array<string,mixed> $options
+     * @param array<string,true> $seenInFile
+     * @return array{outcome:string,reason:?string,message:string,label:string,entity_id:?int}
+     */
+    private static function handleChild(
+        array $values,
+        array $options,
+        bool $dryRun,
+        array &$seenInFile
+    ): array {
+        $read = Importer::childRow($values, [
+            'date_order' => (string) ($options['date_order'] ?? ''),
+            'today'      => (new \DateTimeImmutable('now', venue_tz()))->format('Y-m-d'),
+        ]);
+
+        if (!$read['ok']) {
+            return [
+                'outcome'   => 'refused',
+                'reason'    => (string) $read['reason'],
+                'message'   => (string) $read['message'],
+                'label'     => $read['label'],
+                'entity_id' => null,
+            ];
+        }
+
+        $contactId = self::findContactId(
+            $read['identity']['email'],
+            $read['identity']['phone'],
+            $read['identity']['external_pos_id']
+        );
+
+        if ($contactId === null) {
+            return [
+                'outcome'   => 'refused',
+                'reason'    => 'no_such_contact',
+                'message'   => 'Nobody here matches this child’s guardian. Import your contacts first, '
+                    . 'then this file will find them.',
+                'label'     => $read['label'],
+                'entity_id' => null,
+            ];
+        }
+
+        $child = $read['child'];
+        $key   = 'child:' . $contactId . '|' . mb_strtolower((string) $child['first_name']) . '|' . $child['birth_date'];
+
+        if (isset($seenInFile[$key])) {
+            return [
+                'outcome'   => 'skipped',
+                'reason'    => 'duplicate_in_file',
+                'message'   => 'This child is already in this file for the same guardian.',
+                'label'     => $read['label'],
+                'entity_id' => null,
+            ];
+        }
+
+        $seenInFile[$key] = true;
+
+        $already = DB::first(
+            'SELECT id FROM {children}
+              WHERE contact_id = :c AND first_name = :n AND birth_date = :b AND deleted_at IS NULL
+              ORDER BY id LIMIT 1',
+            ['c' => $contactId, 'n' => $child['first_name'], 'b' => $child['birth_date']]
+        );
+
+        if ($already !== null) {
+            return [
+                'outcome'   => 'skipped',
+                'reason'    => 'already_here',
+                'message'   => 'This guardian already has this child on their record.',
+                'label'     => $read['label'],
+                'entity_id' => (int) $already['id'],
+            ];
+        }
+
+        if ($dryRun) {
+            return [
+                'outcome'   => 'created',
+                'reason'    => null,
+                'message'   => trim(implode(' ', $read['warnings'])),
+                'label'     => $read['label'],
+                'entity_id' => null,
+            ];
+        }
+
+        $household = DB::value('SELECT household_id FROM {contacts} WHERE id = :id', ['id' => $contactId]);
+        $now = now_utc();
+
+        $childId = (int) DB::insert('children', $child + [
+            'contact_id'   => $contactId,
+            'household_id' => $household === null ? null : (int) $household,
+            'created_at'   => $now,
+            'updated_at'   => $now,
+        ]);
+
+        return [
+            'outcome'   => 'created',
+            'reason'    => null,
+            'message'   => trim(implode(' ', $read['warnings'])),
+            'label'     => $read['label'],
+            'entity_id' => $childId,
         ];
     }
 

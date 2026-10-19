@@ -203,6 +203,56 @@ final class Importer
         ],
     ];
 
+    /**
+     * What a child row can carry: a first name, a date of birth, allergies,
+     * and who their guardian is.
+     *
+     * docs/PRIVACY.md is the contract here. A child is stored with a first
+     * name and a birth date under a guardian's record, and NOTHING that could
+     * reach the child — so there is no email, phone or surname field for the
+     * child at all. The identity columns are the GUARDIAN'S, matched against a
+     * contact already here, exactly as a visit is; a row whose guardian is not
+     * here is refused rather than inventing one.
+     *
+     * The aliases are the guardian- and child-prefixed spellings first, so a
+     * file with both a "Customer ID" and a "Child First Name" maps without
+     * help — and a bare "Email" or "Name" still lands somewhere sensible.
+     *
+     * @var array<string,array{label:string,aliases:list<string>,note?:string}>
+     */
+    public const CHILD_FIELDS = [
+        'email' => [
+            'label'   => 'Guardian email (to match an existing contact)',
+            'aliases' => ['guardianemail', 'parentemail', 'email', 'emailaddress'],
+        ],
+        'phone' => [
+            'label'   => 'Guardian phone (to match an existing contact)',
+            'aliases' => ['guardianphone', 'parentphone', 'phone', 'phonenumber', 'mobile', 'cell'],
+        ],
+        'external_pos_id' => [
+            'label'   => 'Guardian card or account number (to match an existing contact)',
+            'aliases' => ['guardiancustomerid', 'parentcustomerid', 'guardianid', 'parentid', 'customerid',
+                'cardnumber', 'accountnumber'],
+        ],
+        'first_name' => [
+            'label'   => 'Child first name',
+            'aliases' => ['childfirstname', 'childname', 'child', 'kidname', 'firstname', 'name'],
+            'note'    => 'Only the first word is kept: a child’s surname is not stored.',
+        ],
+        'birth_date' => [
+            'label'   => 'Child date of birth',
+            'aliases' => ['childbirthdate', 'childdob', 'childbirthday', 'birthdate', 'dateofbirth', 'dob', 'birthday'],
+        ],
+        'allergies' => [
+            'label'   => 'Allergies',
+            'aliases' => ['allergies', 'allergy', 'childallergies'],
+            'note'    => 'Printed in bold on the party run sheet.',
+        ],
+    ];
+
+    /** The oldest a child record can be; past this they are a guest of their own. */
+    public const CHILD_MAX_AGE = 18;
+
     /** @var list<string> */
     public const LIFECYCLE_STAGES = ['lead', 'prospect', 'customer', 'member', 'lapsed', 'advocate'];
 
@@ -235,13 +285,17 @@ final class Importer
      */
     public static function fields(string $entity): array
     {
-        return $entity === 'visits' ? self::VISIT_FIELDS : self::CONTACT_FIELDS;
+        return match ($entity) {
+            'visits'   => self::VISIT_FIELDS,
+            'children' => self::CHILD_FIELDS,
+            default    => self::CONTACT_FIELDS,
+        };
     }
 
     /** Is this an entity this importer knows? */
     public static function isEntity(string $entity): bool
     {
-        return in_array($entity, ['contacts', 'visits'], true);
+        return in_array($entity, ['contacts', 'visits', 'children'], true);
     }
 
     /**
@@ -365,6 +419,24 @@ final class Importer
                 $label = self::fields($entity)[$field]['label'] ?? $field;
                 $blocker('Two columns are both mapped to “' . $label . '”. Pick one.');
             }
+        }
+
+        if ($entity === 'children') {
+            if (!in_array('first_name', $fields, true)) {
+                $blocker('No column is mapped to the child’s first name.');
+            }
+
+            if (!in_array('birth_date', $fields, true)) {
+                $blocker('No column is mapped to the child’s date of birth. It is what the birthday '
+                    . 'campaign runs on, so a child without one is not worth importing.');
+            }
+
+            if (!array_intersect(['email', 'phone', 'external_pos_id'], $fields)) {
+                $blocker('Nothing identifies the guardian. Map their email, phone number or card '
+                    . 'number, so each child can be attached to a contact who is already here.');
+            }
+
+            return $problems;
         }
 
         if ($entity === 'visits') {
@@ -1068,6 +1140,113 @@ final class Importer
             ],
             'warnings' => $warnings,
         ];
+    }
+
+    /**
+     * Turn a child row into a `children` row, minus the guardian's contact id,
+     * which only the runner can resolve.
+     *
+     * @param array<string,string> $values
+     * @param array{date_order?:string,today?:string} $options `today` is the
+     *     venue's date, for the age check; it defaults to UTC's.
+     * @return array{ok:bool,reason?:string,message?:string,label:string,child?:array<string,mixed>,identity:array{email:?string,phone:?string,external_pos_id:?string},warnings:list<string>}
+     */
+    public static function childRow(array $values, array $options = []): array
+    {
+        $warnings = [];
+
+        // The first word only, and stripped of the punctuation a POS field
+        // collects: "Emma Smith" is stored as Emma, because a surname is one
+        // of the things this record does not hold.
+        $name  = trim((string) (preg_split('/\s+/u', trim($values['first_name'] ?? ''))[0] ?? ''), " \t.,;:-");
+        $label = self::childLabel($name, $values);
+
+        if ($name === '') {
+            return self::visitRefusal('no_name', 'No first name for the child.', $label);
+        }
+
+        $raw  = trim($values['birth_date'] ?? '');
+        $born = self::readDate($raw, (string) ($options['date_order'] ?? ''));
+
+        if ($born === null) {
+            return self::visitRefusal(
+                'bad_date',
+                $raw === ''
+                    ? 'No date of birth, and the birthday campaign is the reason to import a child.'
+                    : 'Could not read “' . self::clip($raw) . '” as a date of birth.',
+                $label
+            );
+        }
+
+        $today = (string) ($options['today'] ?? gmdate('Y-m-d'));
+
+        if ($born > $today) {
+            return self::visitRefusal('future_birth', 'That date of birth is in the future (' . $born . ').', $label);
+        }
+
+        $adult = (new \DateTimeImmutable($today))->modify('-' . self::CHILD_MAX_AGE . ' years')->format('Y-m-d');
+
+        if ($born <= $adult) {
+            // Not a child. They are a guest in their own right, and a
+            // birthday message about them addressed to a parent would be odd
+            // at best.
+            return self::visitRefusal(
+                'not_a_child',
+                'Born ' . $born . ', so ' . self::CHILD_MAX_AGE . ' or older: import them as a guest instead.',
+                $label
+            );
+        }
+
+        $email = strtolower(trim($values['email'] ?? ''));
+        $phone = normalize_phone(($values['phone'] ?? '') === '' ? null : $values['phone']);
+        $card  = trim($values['external_pos_id'] ?? '');
+
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $email = '';
+            $warnings[] = 'The guardian email in this row is not an address, so it was not used to match.';
+        }
+
+        if ($email === '' && $phone === null && $card === '') {
+            return self::visitRefusal(
+                'no_identity',
+                'Nothing in this row identifies the guardian, so the child has nobody to belong to.',
+                $label
+            );
+        }
+
+        $allergies = trim($values['allergies'] ?? '');
+
+        return [
+            'ok'       => true,
+            'label'    => $label,
+            'child'    => [
+                'first_name'  => self::cap($name, 80),
+                'birth_date'  => $born,
+                'birth_month' => (int) substr($born, 5, 2),
+                'allergies'   => $allergies === '' ? null : self::cap($allergies, 500),
+            ],
+            'identity' => [
+                'email' => $email === '' ? null : $email,
+                'phone' => $phone,
+                'external_pos_id' => $card === '' ? null : self::cap($card, 64),
+            ],
+            'warnings' => $warnings,
+        ];
+    }
+
+    /**
+     * A child row's label: the child's first name and the guardian it is
+     * looking for. Never more of the child than the record will hold.
+     *
+     * @param array<string,string> $values
+     */
+    private static function childLabel(string $name, array $values): string
+    {
+        $guardian = trim($values['email'] ?? '') !== ''
+            ? trim($values['email'])
+            : (trim($values['phone'] ?? '') !== '' ? trim($values['phone']) : trim($values['external_pos_id'] ?? ''));
+
+        return self::cap(trim(($name === '' ? '(no name)' : $name) . ($guardian === '' ? '' : ' · guardian ' . $guardian)), 191);
     }
 
     /**

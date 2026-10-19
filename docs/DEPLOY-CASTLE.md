@@ -286,6 +286,14 @@ Visit history, if you have it, imports the same way and goes through the same
 recorder the front desk uses — one guest on one day is one visit however many
 transactions the file holds.
 
+### From CenterEdge
+
+`tools/centeredge/ce_export.py` writes the three files from CenterEdge itself
+— guests, their children's birthdays, and visit history — read-only, from a
+machine on the venue LAN. `tools/centeredge/README.md` is the whole procedure:
+setup, the order to import them in, and what is deliberately left out
+(under-18s are never contacts; placeholder phone numbers are dropped).
+
 ---
 
 ## 8. The POS feed: push from CEplay, do not pull from here
@@ -312,40 +320,34 @@ To prepare for it:
    and nothing else. Copy it once; it is not shown again.
 2. Keep the token on the CEplay box, not in a repository.
 
-### Before building that, answer one question
+### The question this waited on is answered
 
-**Does CenterEdge hold usable guest email and phone numbers at all?** Nobody
-has ever looked, and the answer changes how much the bridge is worth. It
-takes five minutes in a tool you already have:
+**Does CenterEdge hold usable guest email and phone numbers?** Yes — measured
+on 19 October 2026, read-only, against the live database:
 
-1. Open CEplay → **Database Explorer** (`#/explorer`).
-2. Browse to the **`Customers`** table (~131,000 rows) and read its column
-   names off the table browser. CEplay's notes mark this table as a candidate
-   whose columns have never been verified, so read them rather than assuming.
-3. In the guarded SELECT box, count how many of those rows carry a real
-   address — something along the lines of:
+| | Accounts |
+|---|---|
+| Customer records | 137,879 (since 2006) |
+| With an email address | 74,607 |
+| With an email **and** CenterEdge's bulk-email box ticked | 45,163 |
+| Visited in the last two years, with an email | 22,925 |
+| Text-message opt-in | 2,474 |
+| Under-18 accounts linked to a parent | 32,083 |
+| Party bookings with a birthday child (`GroupBirthdays`) | 25,051 |
 
-   ```sql
-   SELECT COUNT(*) AS rows_total,
-          SUM(CASE WHEN <email column> LIKE '%@%.%' THEN 1 ELSE 0 END) AS with_email,
-          SUM(CASE WHEN LEN(<phone column>) >= 10 THEN 1 ELSE 0 END)   AS with_phone
-     FROM Customers
-   ```
+So the bridge is worth building properly, for both contacts and visit
+history. Two things follow from the numbers:
 
-   substituting the column names from step 2.
+- **Email is the channel.** Text opt-ins are a rounding error; Text Club has
+  to build that list itself, and 10DLC registration gates it anyway.
+- **The children are the prize.** A child's first name and birthday under the
+  parent who booked their party is exactly what the birthday playbook runs on.
+  `ce_export.py` writes them, and the importer's **Children** file type takes
+  them.
 
-**What the answer means.** Near zero, and importing contacts is worth little:
-the CSV lists you already have plus list-building through Text Club and the
-web forms is the whole plan, and the bridge is only worth building for visit
-history. A decent fill rate, and the bridge is worth building properly for
-both.
-
-**Also worth ten minutes while you are there:** `GroupBirthdays` (~24,000
-rows). For a birthday-party venue, a child's name and birthday with the
-booking parent attached may be the most valuable list in the building, and it
-is not the one anybody thinks to look for. `CustVisits` (~173,000) and
-`CustSales` (~545,000) tie visit and spend history to a *person* rather than
-a card number, which is the thing the card ledger cannot do.
+The one-off load is `ce_export.py` plus the importer. A nightly push of new
+guests and visits through the REST API, from the same machine, is the next
+step; the export is the shape it will take.
 
 ---
 

@@ -70,6 +70,18 @@ $statusWords = [
                         </span>
                     </span>
                 </label>
+
+                <label class="check">
+                    <input type="radio" name="entity" value="children">
+                    <span>
+                        <strong>Children</strong>
+                        <span class="field-hint">
+                            A child&rsquo;s first name and date of birth, with their parent&rsquo;s
+                            email, phone or card number. Feeds the birthday campaign. Import your
+                            guests first &mdash; each child is attached to a parent already here.
+                        </span>
+                    </span>
+                </label>
             </fieldset>
 
             <div class="field">
@@ -185,7 +197,7 @@ $statusWords = [
                                     <?php endif; ?>
                                 </span>
                             </th>
-                            <td><?= (string) $job['entity'] === 'visits' ? 'Visits' : 'Guests' ?></td>
+                            <td><?= e(match ((string) $job['entity']) { 'visits' => 'Visits', 'children' => 'Children', default => 'Guests' }) ?></td>
                             <td>
                                 <span class="badge <?= e($badge) ?>"><?= e($words) ?></span>
                                 <?php if (($job['error'] ?? null) !== null): ?>
