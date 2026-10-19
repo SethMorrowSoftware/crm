@@ -245,6 +245,20 @@ $router->group('/settings/templates', ['auth', 'can:templates_manage'], function
 });
 
 // ---------------------------------------------------------------------------
+// Offers (coupons)
+//
+// `coupons_manage`: what an offer is worth is a pricing decision, like a
+// package's price, so it is not a general setting.
+// ---------------------------------------------------------------------------
+
+$router->group('/settings/offers', ['auth', 'can:coupons_manage'], function ($router): void {
+    $router->get('', ['CouponController', 'index'], [], 'offers');
+    $router->post('', ['CouponController', 'store'], ['csrf']);
+    $router->get('/{id:\d+}', ['CouponController', 'edit'], [], 'offers.edit');
+    $router->post('/{id:\d+}', ['CouponController', 'update'], ['csrf']);
+});
+
+// ---------------------------------------------------------------------------
 // Party packages and add-ons
 //
 // `attractions_manage`, not `settings`: what a party COSTS is a pricing

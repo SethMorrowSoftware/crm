@@ -1110,6 +1110,21 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Added: Settings → Offers
+
+The seed made three offer codes and nothing could make a fourth, change what
+one is worth or when it ends, though `coupons_manage` had been in the
+permission catalogue since phase 1. Now a manager can add an offer (percent
+off, dollars off, a free item, buy-one-get-one), set a minimum spend, limits
+per guest and in total, and the days it runs; and see how many each has handed
+out and how many were redeemed.
+
+A code never changes once it exists — a guest may be holding it in a text —
+and an offer a switched-on automation hands out cannot be switched off. "Good
+until December 31" means until the end of the 31st in Chester: stored as UTC
+from the venue's own day, where a bare date would have ended it at 7pm on
+the 30th.
+
 ### Added: Settings → Hours
 
 When the venue is open is what the online booking page offers, and nothing

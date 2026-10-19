@@ -572,6 +572,11 @@ a.stat:hover { border-color: var(--brand); text-decoration: none; }
 
 /* Buttons sitting side by side in a table cell. */
 .row-actions { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; white-space: nowrap; }
+/* On the cell itself the flex box stopped it being a cell: its border and
+   height came loose from the rest of the row, so every Edit button sat on a
+   line of its own. A cell stays a cell and spaces its buttons with margins. */
+td.row-actions { display: table-cell; }
+td.row-actions > * + * { margin-left: .4rem; }
 .inline-form { display: inline; margin: 0; }
 
 .btn-icon {
@@ -690,6 +695,9 @@ body[data-density="comfortable"] .table td { padding: .8rem .6rem; }
 
 .td-sub { display: block; font-size: .78rem; color: var(--muted); }
 .td-right { text-align: right; }
+/* `.table th` sets text-align and outranks a bare class, so a right-aligned
+   number column kept a left-aligned heading. */
+.table th.td-right { text-align: right; }
 .row-muted td { opacity: .6; }
 
 /*
