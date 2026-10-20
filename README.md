@@ -57,6 +57,20 @@ The long version, written for somebody who has only ever used cPanel to upload
 files, is [docs/INSTALL.md](docs/INSTALL.md) — including backups, restoring,
 and what to do when nobody can sign in.
 
+### On a plain Ubuntu server
+
+No cPanel? On Ubuntu 22.04 or 24.04 LTS, one script installs Apache, PHP,
+MariaDB, the cron job and (given a domain) an HTTPS certificate, then hands
+you to the same web installer:
+
+```bash
+git clone https://github.com/SethMorrowSoftware/crm.git
+cd crm
+sudo ./install.sh --domain crm.example.com --email you@example.com
+```
+
+See [docs/INSTALL-UBUNTU.md](docs/INSTALL-UBUNTU.md).
+
 Requirements: PHP 8.1+, MySQL 5.7.8+/MariaDB 10.3+, and the extensions
 `pdo_mysql`, `mbstring`, `json`, `openssl`, `curl`, `fileinfo` — all standard.
 The installer checks each one and names the cPanel screen that fixes it.
@@ -111,6 +125,7 @@ today. [Spec §3.8](docs/SPEC.md) draws the line precisely.
 - [docs/HANDOVER.md](docs/HANDOVER.md) — **start here:** where things stand,
   setting up a new computer, and what is left to do (deploy, import, sync)
 - [docs/INSTALL.md](docs/INSTALL.md) — installing, upgrading, backups, recovery
+- [docs/INSTALL-UBUNTU.md](docs/INSTALL-UBUNTU.md) — installing on a plain Ubuntu server with `install.sh`
 - [docs/SPEC.md](docs/SPEC.md) — product and technical specification
 - [docs/PRIVACY.md](docs/PRIVACY.md) — what data is held, consent, retention,
   and what the software refuses to do
