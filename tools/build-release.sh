@@ -24,6 +24,12 @@
 #
 # What it keeps: everything the application, the installer and the remaining
 # CLI tools (backup.php, reset-password.php) need, and docs/ for the operator.
+#
+# That includes install.sh, tools/cli-install.php and tools/server/, which a
+# cPanel venue cannot use — no root, no apt — but which are the whole install
+# on a server, and somebody deploying this zip onto one would otherwise have
+# no installer at all. They are inert where they cannot run, and .htaccess
+# denies both the .sh and tools/ anyway.
 
 set -euo pipefail
 

@@ -1110,6 +1110,79 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Added: `install.sh` — Castle CRM on an Ubuntu server, from a clone
+
+Until now the only supported install was cPanel: upload a zip, walk eight
+screens, paste a cron line into a form. On a server there was no path at all —
+no vhost to copy, no nginx recipe despite `SPEC.md` promising one, nothing to
+create the database, and the one piece of configuration the application cannot
+do for itself (the cron line) was a sentence in a document.
+
+```bash
+sudo git clone …/crm.git /var/www/castle-crm && cd /var/www/castle-crm
+sudo ./install.sh --domain crm.example.com --admin-email you@example.com
+```
+
+Three minutes, most of it `apt`. It installs Apache (or nginx, with
+`--web-server nginx`), PHP 8.1+ with the extensions the application requires,
+and MariaDB; creates the database and a user with a generated password granted
+on that database only; gives `storage/` to the web server and makes `.git`
+unreadable to everybody else, because a clone in a web root otherwise
+publishes its own history; writes the vhost, the PHP settings `.htaccess`
+cannot set under PHP-FPM, and `/etc/cron.d/castle-crm`; sets the application
+up; and prints the address and a generated passphrase to sign in with.
+`--letsencrypt you@example.com` then gets a certificate. An upgrade is
+`git pull` — the schema applies itself on the next request, as it already did
+after a cPanel unzip.
+
+It is re-runnable as the repair path: it detects an existing install, keeps the
+database, the configuration and every account, and refreshes the packages,
+permissions, vhost and cron line around them.
+
+**The setup itself is not a second implementation.** `install/engine.php` is
+the half of the web installer that asks nothing — connect, seed, create the
+owner, write `config/config.php`, lock up — split out of `install/index.php`
+and now shared with `tools/cli-install.php`. Two implementations of "a
+finished install is in Safe Mode with every automation off" would have drifted
+in the direction of the one nobody walks in CI; CI now walks both
+(`tests/install/cli-install.php` beside the existing browser walk-through).
+
+Things found by doing it rather than by reasoning about it, each now handled
+and commented where it bit:
+
+- `DateTimeZone::listIdentifiers()` leaves out `Etc/UTC`, which is what
+  `timedatectl` reports on a stock server, so the commonest machine there is
+  was refused with "not a timezone PHP knows" about a zone PHP plainly knows.
+  A venue left on UTC is worse than wrong-looking, though: after 8pm Eastern
+  the CRM's "today" is tomorrow, so the script now uses `America/New_York`
+  when the machine is on UTC and says it has.
+- `listen [::]:80` — in every stock Ubuntu site — is an `[emerg]` on a host
+  with no IPv6 stack, and nginx then serves nothing over either protocol. It
+  is commented out when `/proc/net/if_inet6` is missing.
+- The `ServerTokens` drop-in has to sort *after* Ubuntu's `security.conf`, or
+  the last `ServerTokens` wins and the version goes on being announced.
+- `install/.lock` closes the web installer, and the engine's write of it is a
+  silenced one. The directory is handed to the web server for exactly that
+  command and taken straight back, because removing a file needs write
+  permission on its *directory*: an `install/` left writable by `www-data` is
+  a lock anything running as the web server can delete.
+- Secrets never travel as options, to this script or to the installer: a
+  command line is readable by every account on the machine.
+
+`tools/server/` holds the four templates (Apache vhost, nginx site, cron file,
+PHP ini) and two new quality gates hold them to the application's own policy:
+the nginx site must deny everything the `.htaccess` denies — evaluated against
+real paths through a model of nginx's own matching order, because `^~` is what
+stops `/tests/run.php` reaching the `\.php$` handler and executing the test
+runner against live data — and no placeholder may exist in a template that
+`install.sh` does not substitute. CI also runs `bash -n` and `shellcheck` over
+the shell scripts.
+
+The guide is [`docs/INSTALL-UBUNTU.md`](INSTALL-UBUNTU.md), including nginx,
+an external database, Ubuntu 20.04, the troubleshooting list, and what the
+script deliberately does not do (off-site backups, OS hardening, monitoring,
+a mail server).
+
 ### Added: Settings → Attractions
 
 Every attraction's season, age and height rules, capacity and party role is

@@ -3,8 +3,9 @@
 # Run what .github/workflows/ci.yml runs, on this machine.
 #
 # The repository is private, so Actions minutes are not something to lean on.
-# This script is the same three jobs — lint, the full suite, and the web
-# installer walk-through — against whatever PHP binaries and database are here.
+# This script is the same three jobs — lint, the full suite, and both
+# installers end to end (the eight-screen web one, and the headless one
+# install.sh uses) — against whatever PHP binaries and database are here.
 #
 #   tools/ci-local.sh                    # every php8.x on PATH, else `php`
 #   PHP_BINS="php8.1 php8.4" tools/ci-local.sh
@@ -88,6 +89,18 @@ else
   RESULTS+=("SKIP  JavaScript syntax (no node on PATH)")
 fi
 
+section "Lint: shell syntax"
+sh_lint=0
+for file in install.sh tools/*.sh; do
+  bash -n "$file" || sh_lint=1
+done
+if command -v shellcheck > /dev/null 2>&1; then
+  shellcheck -S warning install.sh tools/*.sh || sh_lint=1
+else
+  echo "(no shellcheck on PATH — syntax only)"
+fi
+record "shell syntax" $sh_lint
+
 section "Unit and static suites (${BINS[0]})"
 "${BINS[0]}" tests/run.php --unit --min-tests=670
 record "unit + static (${BINS[0]})" $?
@@ -152,5 +165,15 @@ CC_INSTALL_DB_NAME="$INSTALL_DB" CC_INSTALL_DB_USER="$INSTALL_USER" \
 CC_INSTALL_DB_PASS="$INSTALL_PASS" \
   "${BINS[0]}" tests/install/walk-installer.php
 record "web installer (${BINS[0]})" $?
+
+# ── and the same install without a browser, the way install.sh finishes ─────
+
+section "Headless install end-to-end (${BINS[0]})"
+
+CC_INSTALL_DB_HOST="$DB_HOST" CC_INSTALL_DB_PORT="$DB_PORT" \
+CC_INSTALL_DB_NAME="$INSTALL_DB" CC_INSTALL_DB_USER="$INSTALL_USER" \
+CC_INSTALL_DB_PASS="$INSTALL_PASS" \
+  "${BINS[0]}" tests/install/cli-install.php
+record "headless install (${BINS[0]})" $?
 
 summary

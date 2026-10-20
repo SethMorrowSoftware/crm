@@ -2638,3 +2638,292 @@ Harness::test('the .htaccess deny patterns match what they are meant to, and not
         Assert::false($denied($path), 'reachable: ' . $path);
     }
 });
+
+/**
+ * The deny/allow verdicts of a shipped nginx site, in the order nginx applies.
+ *
+ * A small model of nginx's own matching rules, which are what make this file
+ * correct or not: an exact `=` location wins outright; otherwise the longest
+ * matching `^~` prefix wins and regexes are never consulted; otherwise the
+ * FIRST matching regex in file order wins; otherwise the longest plain prefix.
+ *
+ * @return list<array{kind:string,match:string,deny:bool}>
+ */
+function nginx_locations(string $config): array
+{
+    $locations = [];
+    $offset = 0;
+
+    while (preg_match(
+        '/location\s+(=|\^~|~\*|~)?\s*([^\s{]+)\s*\{/',
+        $config,
+        $match,
+        PREG_OFFSET_CAPTURE,
+        $offset
+    ) === 1) {
+        $start = $match[0][1] + strlen($match[0][0]);
+        $depth = 1;
+        $index = $start;
+        $length = strlen($config);
+
+        while ($index < $length && $depth > 0) {
+            if ($config[$index] === '{') {
+                $depth++;
+            } elseif ($config[$index] === '}') {
+                $depth--;
+            }
+
+            $index++;
+        }
+
+        $body = substr($config, $start, $index - $start - 1);
+
+        $locations[] = [
+            'kind'  => $match[1][0] ?? '',
+            'match' => $match[2][0],
+            'deny'  => preg_match('/return\s+404/', $body) === 1,
+        ];
+
+        $offset = $index;
+    }
+
+    return $locations;
+}
+
+/** @param list<array{kind:string,match:string,deny:bool}> $locations */
+function nginx_denies(array $locations, string $path): bool
+{
+    foreach ($locations as $location) {
+        if ($location['kind'] === '=' && $location['match'] === $path) {
+            return $location['deny'];
+        }
+    }
+
+    $prefix = null;
+
+    foreach ($locations as $location) {
+        if (($location['kind'] === '^~' || $location['kind'] === '')
+            && str_starts_with($path, $location['match'])
+            && ($prefix === null || strlen($location['match']) > strlen($prefix['match']))
+        ) {
+            $prefix = $location;
+        }
+    }
+
+    if ($prefix !== null && $prefix['kind'] === '^~') {
+        return $prefix['deny'];
+    }
+
+    foreach ($locations as $location) {
+        if ($location['kind'] !== '~' && $location['kind'] !== '~*') {
+            continue;
+        }
+
+        $flags = $location['kind'] === '~*' ? 'i' : '';
+
+        if (@preg_match('#' . $location['match'] . '#' . $flags, $path) === 1) {
+            return $location['deny'];
+        }
+    }
+
+    return $prefix !== null && $prefix['deny'];
+}
+
+Harness::test('THE SHIPPED SERVER CONFIGS DENY WHAT THE .HTACCESS DENIES', function (): void {
+    /*
+     * install.sh writes one of these two files into /etc, and on a server
+     * neither of them is the `.htaccess`. That matters most for nginx, which
+     * never reads one at all: every deny rule the application relies on has
+     * to be restated in tools/server/nginx-site.conf, and a rule missing
+     * there is `GET /tests/run.php` executing the test runner against the
+     * venue's own database — which is exactly what a live probe found on
+     * Apache before the `.htaccess` named `tests` and `tools`.
+     *
+     * Same method as the `.htaccess` gate above: the rules are pulled out of
+     * the real files and run against real paths, because nothing in CI starts
+     * Apache or nginx.
+     */
+    $mustDeny = [
+        '/tests/run.php',
+        '/tests/install/walk-installer.php',
+        '/tools/backup.php',
+        '/tools/cli-install.php',
+        '/.git/config',
+        '/.git/HEAD',
+        '/.env',
+        '/app/Core/DB.php',
+        '/config/config.php',
+        '/config/config.sample.php',
+        '/storage/logs/castle.log',
+        '/storage/backups/castle-crm-20260101-000000.sql.gz',
+        '/install/schema/001_core.sql',
+        '/install/seeds/demo.php',
+        '/docs/AUDIT.md',
+    ];
+
+    $mustReach = [
+        '/',
+        '/index.php',
+        '/contacts',
+        '/contacts/42',
+        '/api/v1/contacts',
+        '/cron.php',
+        '/assets/css/app.css',
+        '/assets/js/app.js',
+        '/assets/img/favicon.svg',
+        // The web installer, which --finish-in-browser hands over to.
+        '/install/',
+        '/install/index.php',
+        '/install/probe.php',
+        // And the ACME challenge, or TLS renewal stops ninety days later.
+        '/.well-known/acme-challenge/abc123',
+    ];
+
+    // ---------------------------------------------------------------- Apache
+    $vhost = (string) file_get_contents(CC_ROOT . '/tools/server/apache-vhost.conf');
+
+    // The vhost lets the shipped .htaccess be the policy; without this the
+    // front controller rewrite never runs and every page but / is a 404.
+    Assert::contains('AllowOverride All', $vhost, 'the .htaccess is read');
+    Assert::contains('DocumentRoot __CC_PATH__', $vhost, 'install.sh fills in the path');
+    Assert::contains('ServerName __CC_DOMAIN__', $vhost, 'and the domain');
+
+    preg_match_all('/^\s*RedirectMatch\s+404\s+(\S.*)$/m', $vhost, $matches);
+    $patterns = array_map('trim', $matches[1]);
+
+    Assert::greaterThan(1, count($patterns), 'the vhost denies by path as well');
+
+    $apacheDenies = static function (string $path) use ($patterns): bool {
+        foreach ($patterns as $pattern) {
+            if (@preg_match('#' . $pattern . '#', $path) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    foreach ($patterns as $pattern) {
+        Assert::true(
+            @preg_match('#' . $pattern . '#', '/probe') !== false,
+            'this vhost pattern compiles: ' . $pattern
+        );
+    }
+
+    foreach ($mustDeny as $path) {
+        // The vhost repeats the path and dotted-directory denials; the
+        // extension rules (.md, .sql) are the .htaccess's job, and
+        // AllowOverride All above is what makes them apply.
+        if (str_ends_with($path, '.md') || str_ends_with($path, '.sql')) {
+            continue;
+        }
+
+        Assert::true($apacheDenies($path), 'Apache denies: ' . $path);
+    }
+
+    foreach ($mustReach as $path) {
+        Assert::false($apacheDenies($path), 'Apache serves: ' . $path);
+    }
+
+    // ----------------------------------------------------------------- nginx
+    $site = (string) file_get_contents(CC_ROOT . '/tools/server/nginx-site.conf');
+    $locations = nginx_locations($site);
+
+    Assert::greaterThan(5, count($locations), 'the nginx site was parsed');
+    Assert::contains('root __CC_PATH__', $site, 'install.sh fills in the path');
+    Assert::contains('server_name __CC_DOMAIN__', $site, 'and the domain');
+    Assert::contains(
+        'php__CC_PHP_VERSION__-fpm.sock',
+        $site,
+        'and the PHP-FPM pool, which is version-numbered on Debian and Ubuntu'
+    );
+    Assert::contains('try_files $uri $uri/ /index.php', $site, 'the front controller is reachable');
+
+    foreach (array_merge($mustDeny, ['/VERSION.md', '/install.sh', '/package.json']) as $path) {
+        Assert::true(nginx_denies($locations, $path), 'nginx denies: ' . $path);
+    }
+
+    foreach ($mustReach as $path) {
+        Assert::false(nginx_denies($locations, $path), 'nginx serves: ' . $path);
+    }
+});
+
+Harness::test('the Ubuntu installer and its templates cannot drift apart', function (): void {
+    /*
+     * install.sh fills placeholders in the files under tools/server/ and
+     * writes the result into /etc. A placeholder the script does not
+     * substitute ships LITERALLY: `root __CC_PATH__;` in an nginx site is a
+     * configuration test failure at install time, and `__CC_PHP__
+     * /cron.php` in a cron file is scheduled work that never runs and says
+     * nothing about it.
+     */
+    $script = (string) file_get_contents(CC_ROOT . '/install.sh');
+
+    Assert::contains('set -euo pipefail', $script, 'the script stops at the first failure');
+    Assert::contains('tools/cli-install.php', $script, 'and finishes through the shared engine');
+
+    $permissions = fileperms(CC_ROOT . '/install.sh');
+
+    Assert::true(
+        $permissions !== false && ($permissions & 0o111) !== 0,
+        'install.sh is executable, because the instruction everywhere is ./install.sh'
+    );
+
+    $templates = glob(CC_ROOT . '/tools/server/*') ?: [];
+
+    Assert::greaterThan(2, count($templates), 'the server templates are there');
+
+    $placeholders = [];
+
+    foreach ($templates as $template) {
+        preg_match_all('/__CC_[A-Z_]+__/', (string) file_get_contents($template), $found);
+
+        foreach ($found[0] as $placeholder) {
+            $placeholders[$placeholder] = relative_path($template);
+        }
+    }
+
+    Assert::greaterThan(1, count($placeholders), 'the templates carry placeholders');
+
+    foreach ($placeholders as $placeholder => $where) {
+        Assert::contains(
+            $placeholder,
+            $script,
+            $placeholder . ' (in ' . $where . ') is substituted by install.sh'
+        );
+    }
+
+    // The PHP settings installed for the web SAPI have to agree with the ones
+    // the .htaccess asks mod_php for. They are two spellings of one decision,
+    // and an upload limit that differs between them is an import that works
+    // on cPanel and fails on the server, or the reverse.
+    $htaccess = (string) file_get_contents(CC_ROOT . '/.htaccess');
+    $ini = (string) file_get_contents(CC_ROOT . '/tools/server/php-castle-crm.ini');
+
+    foreach (['upload_max_filesize', 'post_max_size', 'max_execution_time'] as $directive) {
+        Assert::true(
+            preg_match('/php_value\s+' . $directive . '\s+(\S+)/', $htaccess, $apache) === 1,
+            $directive . ' is set for mod_php'
+        );
+        Assert::true(
+            preg_match('/^\s*' . $directive . '\s*=\s*(\S+)/m', $ini, $server) === 1,
+            $directive . ' is set for the server'
+        );
+        Assert::same(
+            strtolower($apache[1]),
+            strtolower($server[1]),
+            $directive . ' agrees between the .htaccess and the server ini'
+        );
+    }
+
+    // And the cron line, which is the one piece of configuration the
+    // application cannot do for itself. Every minute, as the web server's
+    // user — see the template's own note.
+    $cron = (string) file_get_contents(CC_ROOT . '/tools/server/cron.d-castle-crm');
+
+    Assert::matches(
+        '/^\* \* \* \* \* __CC_USER__ __CC_PHP__ __CC_PATH__\/cron\.php/m',
+        $cron,
+        'cron.php runs every minute as the web server user'
+    );
+});

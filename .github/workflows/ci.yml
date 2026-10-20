@@ -65,6 +65,19 @@ jobs:
           done
           exit $failed
 
+      - name: Check shell syntax
+        # install.sh is how the application gets onto an Ubuntu server, and a
+        # typo in it is not something the PHP suite can see. shellcheck is
+        # pre-installed on the runner; -S warning skips the two information
+        # notices about single-quoted PHP passed to `php -r`.
+        run: |
+          failed=0
+          for file in install.sh tools/*.sh; do
+            bash -n "$file" || failed=1
+          done
+          shellcheck -S warning install.sh tools/*.sh || failed=1
+          exit $failed
+
       - name: Unit and static suites
         # --min-tests guards against a green run that tested nothing.
         run: php tests/run.php --unit --min-tests=670 --junit=tests/junit-unit.xml
@@ -193,11 +206,12 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------
-  # Prove the thing the product actually promises: that it installs on a
-  # bare host through the web installer, with no shell access.
+  # Prove the two things the product promises about getting installed: that
+  # it installs on a bare shared host through the web installer with no shell
+  # access, and that it installs on a server from a clone and one command.
   # ---------------------------------------------------------------------
   install:
-    name: Web installer end-to-end
+    name: Installers end-to-end
     runs-on: ubuntu-latest
     needs: lint
 
@@ -257,6 +271,18 @@ jobs:
           CC_INSTALL_DB_USER: castle_ci
           CC_INSTALL_DB_PASS: castle-ci-password
         run: php tests/install/walk-installer.php
+
+      - name: Install the same thing headlessly
+        # What install.sh does on an Ubuntu server once the packages are in
+        # place: tools/cli-install.php, through the engine the web installer
+        # shares with it. Run after the walk, from the same empty database —
+        # the script drops every table itself.
+        env:
+          CC_INSTALL_DB_HOST: 127.0.0.1
+          CC_INSTALL_DB_NAME: castle_install_test
+          CC_INSTALL_DB_USER: castle_ci
+          CC_INSTALL_DB_PASS: castle-ci-password
+        run: php tests/install/cli-install.php
 
       - name: Show logs on failure
         if: failure()

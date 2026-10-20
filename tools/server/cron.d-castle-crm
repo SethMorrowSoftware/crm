@@ -1,0 +1,29 @@
+# Castle CRM scheduled work — /etc/cron.d/castle-crm
+#
+# install.sh writes this file with the placeholders filled in:
+#   __CC_USER__   the user the web server runs as, e.g. www-data
+#   __CC_PHP__    the PHP CLI binary, e.g. /usr/bin/php8.3
+#   __CC_PATH__   the checkout, e.g. /var/www/castle-crm
+#
+# EVERY MINUTE, and that is not a typo. cron.php works to a wall-clock budget
+# and stops cleanly when it runs out; a lock file stops two ticks overlapping.
+# Automation delays, nurture sequences, reminders and the manager digest are
+# all measured in minutes, so a five-minute tick would make every one of them
+# late by up to five.
+#
+# It runs as the web server's user, not as root: everything it writes —
+# storage/logs, storage/cache, storage/exports, a backup — is written by the
+# application in the normal course of a request too, and a root-owned file in
+# one of those directories is a permission error the next time a web request
+# touches it.
+#
+# Output goes nowhere on purpose. cron.php logs to storage/logs/ and writes a
+# heartbeat the health page watches (Settings → System health), which is a
+# better record than a mail spool nobody reads. A silent cron failure is the
+# most damaging failure mode this application has, and the health page is what
+# makes it loud.
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+MAILTO=""
+
+* * * * * __CC_USER__ __CC_PHP__ __CC_PATH__/cron.php >/dev/null 2>&1
