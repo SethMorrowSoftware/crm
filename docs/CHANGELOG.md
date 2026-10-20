@@ -1110,6 +1110,25 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Added: installing on a plain Ubuntu server
+
+`git clone`, then `sudo ./install.sh`. On Ubuntu 22.04 or 24.04 LTS the
+script installs Apache, PHP and MariaDB, places the checkout in
+`/var/www/castle-crm` owned by root with only `config/`, `install/` and
+`storage/` writable by the web server, creates the database and a user with a
+random password, writes the Apache site and the cron job, and with a domain
+gets a Let's Encrypt certificate. It then stops at the web installer, so the
+venue, the owner and the seeds are still chosen in one place for both routes.
+
+Because a git checkout cannot usefully delete `install/` (the schema lives
+there and `git pull` restores it), the Apache site closes `/install/` to the
+web as soon as the lock file appears, letting only the finish page through.
+CI runs the script on clean 22.04 and 24.04 containers, re-runs it to prove
+it is repeatable, then walks the whole web installer, signs in, checks that
+`/config/config.php`, `/.git/config`, `/install/` and the rest stay private,
+and runs cron as `www-data` (`tests/install/ubuntu-smoke.sh`). See
+[INSTALL-UBUNTU.md](INSTALL-UBUNTU.md).
+
 ### Added: Settings → Attractions
 
 Every attraction's season, age and height rules, capacity and party role is

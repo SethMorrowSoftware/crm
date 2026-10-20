@@ -283,7 +283,8 @@ final class HealthController extends Controller
                     : 'Present and UNLOCKED — anyone could reconfigure this install.'),
             'fix'    => !$installerPresent
                 ? null
-                : 'Delete the install/ directory in cPanel File Manager now that setup is finished.',
+                : 'Delete the install/ directory in cPanel File Manager now that setup is finished. '
+                    . 'On a server set up with install.sh, leave it: that site is already closed to it.',
         ];
 
         // --- Safe Mode ------------------------------------------------
