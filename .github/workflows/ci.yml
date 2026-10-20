@@ -287,3 +287,49 @@ jobs:
       - name: Show logs on failure
         if: failure()
         run: tail -n 120 storage/logs/*.log 2>/dev/null || true
+
+  # ---------------------------------------------------------------------
+  # The other install route: a bare Ubuntu server, `git clone`, install.sh.
+  # A fresh container per release, so nothing the runner image already has
+  # installed can hide a package the script forgot.
+  # ---------------------------------------------------------------------
+  ubuntu-install:
+    name: install.sh · Ubuntu ${{ matrix.ubuntu }} · ${{ matrix.web }}
+    runs-on: ubuntu-latest
+    needs: lint
+
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['22.04', '24.04']
+        web: ['apache']
+        include:
+          - ubuntu: '24.04'
+            web: 'nginx'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint the smoke test
+        run: shellcheck -S warning tests/install/ubuntu-smoke.sh
+
+      - name: Clone, run install.sh, then check the result
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -e WEB="${{ matrix.web }}" "ubuntu:${{ matrix.ubuntu }}" bash -euo pipefail -c '
+            apt-get update -q >/dev/null
+            apt-get install -y -q --no-install-recommends git ca-certificates curl >/dev/null
+            # /src belongs to the runner user, not root.
+            git config --global --add safe.directory "*"
+            # Exactly what the README tells a person to do.
+            git clone -q /src /var/www/castle-crm
+            cd /var/www/castle-crm
+            install -d -m 0700 /root/secrets
+            echo "smoke-test passphrase 2026" > /root/secrets/owner
+            ./install.sh --yes --domain localhost --web-server "$WEB" \
+              --admin-email owner@castle.test --admin-name "Smoke Owner" \
+              --admin-password-file /root/secrets/owner --venue-name "Smoke Test Venue"
+            # A second run is the repair path and must change nothing that matters.
+            ./install.sh --yes --domain localhost --web-server "$WEB" > /dev/null
+            tests/install/ubuntu-smoke.sh http://localhost /var/www/castle-crm
+            test -z "$(git status --porcelain --untracked-files=no)"
+          '
