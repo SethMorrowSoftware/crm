@@ -21,11 +21,15 @@
 #   tools/screenshots.js, tools/screenshot-guard.php, tools/dev-install.php,
 #   tools/dev-server.php, tools/loadtest.php, tools/ci-local.sh,
 #   tools/build-release.sh   development only
-#   install.sh               the Ubuntu route, which deploys a git clone and
-#                            never this zip
 #
 # What it keeps: everything the application, the installer and the remaining
 # CLI tools (backup.php, reset-password.php) need, and docs/ for the operator.
+#
+# That includes install.sh, tools/cli-install.php and tools/server/, which a
+# cPanel venue cannot use — no root, no apt — but which are the whole install
+# on a server, and somebody deploying this zip onto one would otherwise have
+# no installer at all. They are inert where they cannot run, and .htaccess
+# denies both the .sh and tools/ anyway.
 
 set -euo pipefail
 
@@ -57,7 +61,6 @@ exclude=(
   ':(exclude)tools/loadtest.php'
   ':(exclude)tools/dev-server.php'
   ':(exclude)tools/screenshot-guard.php'
-  ':(exclude)install.sh'
 )
 
 rm -f "$out"

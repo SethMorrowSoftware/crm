@@ -45,6 +45,8 @@ and MySQL 5.7: **1,594 tests** plus a full installer walk-through. See
 
 ## Install
 
+### On cPanel shared hosting
+
 1. Upload the folder to `public_html/` (or a subdomain root).
 2. Create a database and user in **cPanel → MySQL Databases**.
 3. Visit `/install/` and follow eight steps.
@@ -57,19 +59,25 @@ The long version, written for somebody who has only ever used cPanel to upload
 files, is [docs/INSTALL.md](docs/INSTALL.md) — including backups, restoring,
 and what to do when nobody can sign in.
 
-### On a plain Ubuntu server
-
-No cPanel? On Ubuntu 22.04 or 24.04 LTS, one script installs Apache, PHP,
-MariaDB, the cron job and (given a domain) an HTTPS certificate, then hands
-you to the same web installer:
+### On your own Ubuntu server
 
 ```bash
-git clone https://github.com/SethMorrowSoftware/crm.git
-cd crm
-sudo ./install.sh --domain crm.example.com --email you@example.com
+sudo git clone https://github.com/SethMorrowSoftware/crm.git /var/www/castle-crm
+cd /var/www/castle-crm
+sudo ./install.sh --domain crm.example.com --admin-email you@example.com
 ```
 
-See [docs/INSTALL-UBUNTU.md](docs/INSTALL-UBUNTU.md).
+`install.sh` installs Apache (or nginx), PHP and MariaDB, creates the database,
+applies the schema, seeds the venue and the playbooks, creates your owner
+account, writes the vhost and the cron line, and prints the address and
+password to sign in with. `--letsencrypt you@example.com` adds a certificate.
+An upgrade is `git pull`: the schema follows on the next request.
+
+It is re-runnable, it never installs over an existing install, and it finishes
+through the same engine as the web installer — so a server install arrives in
+the same Safe Mode posture. The whole guide, including nginx, an external
+database and what it deliberately does not do, is
+[docs/INSTALL-UBUNTU.md](docs/INSTALL-UBUNTU.md).
 
 Requirements: PHP 8.1+, MySQL 5.7.8+/MariaDB 10.3+, and the extensions
 `pdo_mysql`, `mbstring`, `json`, `openssl`, `curl`, `fileinfo` — all standard.
@@ -125,7 +133,6 @@ today. [Spec §3.8](docs/SPEC.md) draws the line precisely.
 - [docs/HANDOVER.md](docs/HANDOVER.md) — **start here:** where things stand,
   setting up a new computer, and what is left to do (deploy, import, sync)
 - [docs/INSTALL.md](docs/INSTALL.md) — installing, upgrading, backups, recovery
-- [docs/INSTALL-UBUNTU.md](docs/INSTALL-UBUNTU.md) — installing on a plain Ubuntu server with `install.sh`
 - [docs/SPEC.md](docs/SPEC.md) — product and technical specification
 - [docs/PRIVACY.md](docs/PRIVACY.md) — what data is held, consent, retention,
   and what the software refuses to do

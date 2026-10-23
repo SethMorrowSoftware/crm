@@ -1,114 +1,323 @@
 # Installing Castle CRM on an Ubuntu server
 
-The other way to install: a server of your own (a VPS, a cloud instance, a
-box in the office) running plain **Ubuntu 22.04 or 24.04 LTS**, with no
-cPanel. One script installs everything the CRM needs and then hands you to
-the same eight-step web installer the cPanel route uses.
-
-If you have cPanel hosting, follow [INSTALL.md](INSTALL.md) instead.
-
-## What you need
-
-- A fresh Ubuntu 22.04 or 24.04 server you can SSH into with `sudo`.
-  1 GB of memory is enough.
-- Ports 80 and 443 open to the internet (your cloud provider's firewall or
-  security group).
-- For HTTPS, a domain such as `crm.thecastlefuncenter.com` whose DNS **A
-  record already points at the server**. Without one, the CRM is reachable on
-  the server's IP address over plain HTTP, which is fine for a quick look but
-  not for real passwords or guest data.
-
-## Install
+Clone the repository, run one script, sign in. That is the whole procedure:
 
 ```bash
-git clone https://github.com/SethMorrowSoftware/crm.git
-cd crm
-sudo ./install.sh --domain crm.example.com --email you@example.com
+sudo git clone https://github.com/SethMorrowSoftware/crm.git /var/www/castle-crm
+cd /var/www/castle-crm
+sudo ./install.sh --domain crm.example.com --admin-email you@example.com
 ```
 
-Leave out `--domain` and `--email` and the script asks for them (press Enter
-to skip HTTPS for now). Add `--yes` to run without any questions.
+About three minutes, most of it `apt`. The script prints the address and a
+generated password to sign in with.
 
-It takes a few minutes and finishes by printing:
+> **On cPanel shared hosting instead?** Read [`INSTALL.md`](INSTALL.md). This
+> guide is for a server you have root on — a VPS, a cloud instance, a box in
+> the back office. Both installs end up with the same application; what
+> differs is who does the server configuration, and here it is this script
+> rather than cPanel.
 
-- the address of the web installer, `https://crm.example.com/install/`, and
-- the database name, username and password to type on its step 3. They are
-  also saved in `/root/castle-crm-database.txt`, readable only by root.
+---
 
-Open that address and follow the eight steps as [INSTALL.md](INSTALL.md)
-describes them. Two differences from cPanel:
+## Before you start
 
-- **Skip "Add the cron job"** on the last page. The script already put it in
-  `/etc/cron.d/castle-crm`.
-- **Do not delete the `install/` folder.** It holds the database schema and
-  `git pull` would bring it back. The web server stops serving it the moment
-  setup finishes, so Settings → Health showing "Installer: still present but
-  locked" is expected here.
+| You need | Why |
+|---|---|
+| **Ubuntu 22.04 or 24.04**, with root or `sudo` | Debian 12 works too. Ubuntu 20.04 ships PHP 7.4 and Castle CRM needs 8.1 — see [Older Ubuntu](#older-ubuntu). |
+| **About 2 GB of disk** | ~50 MB of application, the rest is MariaDB, PHP, and room for backups. |
+| **A domain or subdomain pointing at the server** | Not strictly required — the script will serve on the machine's hostname — but you need one for HTTPS, and you want HTTPS. |
 
-## What the script did
+You do **not** need Composer, Node, npm, Docker, or a build step. Castle CRM
+is vanilla PHP by design (`docs/SPEC.md` §3.9).
+
+---
+
+## What the script does
+
+In order, and all of it re-runnable:
+
+1. **Installs packages**: Apache and `mod_php`, PHP 8.1+ with `pdo_mysql`,
+   `mbstring`, `curl`, `gd`, `intl`, `opcache` and `zip`, and MariaDB.
+2. **Creates the database** `castle_crm` and a user with a generated 128-bit
+   password, granted on that database only.
+3. **Puts the application in place** — this checkout, or a copy of it at
+   `--path` — and gives `storage/` to the web server. `.git` is made
+   unreadable to anybody else, since a clone in a web root is otherwise
+   publishing its own history.
+4. **Writes the vhost** from `tools/server/apache-vhost.conf`, enables
+   `mod_rewrite`, `headers`, `expires`, `deflate` and `setenvif`, and
+   disables Apache's default site so the machine's IP does not answer with
+   "It works!".
+5. **Installs PHP settings** for the web SAPI (16 MB uploads, a 120-second
+   limit, `expose_php = Off`), because `.htaccess` `php_value` lines only
+   apply under `mod_php`.
+6. **Installs the cron line** at `/etc/cron.d/castle-crm` — every minute, as
+   `www-data`. This is the one piece of server configuration Castle CRM
+   cannot do for itself.
+7. **Sets up the application** through `tools/cli-install.php`: the 99-table
+   schema, the permissions and roles, the venue's attractions, packages and
+   hours, the eight playbooks and their 112 automations, the email templates,
+   and your owner account.
+8. **Closes the web installer** by writing `install/.lock` as root.
+
+Steps 7 and 8 are the same engine the eight-screen web installer uses
+(`install/engine.php`), so a server install and a cPanel install end in the
+same state — including the guardrails:
+
+> **Nothing can reach a guest.** Safe Mode is on, so every email and text is
+> redirected to the owner's own address. All 112 automations and all 8
+> playbooks are inactive. Mail has no provider: messages are written to
+> `storage/logs/` instead of sent. Leaving that state takes a distinct
+> permission and typing the venue's name to confirm.
+
+---
+
+## Options
+
+Everything has a default; these are the ones worth knowing.
+
+| Option | Default | |
+|---|---|---|
+| `--domain NAME` | the machine's hostname | `ServerName`, and the address recorded for links in email. |
+| `--admin-email EMAIL` | asked for | The owner account. |
+| `--admin-name NAME` | `Owner` | |
+| `--admin-password-file F` | a generated passphrase, printed once | Read the password from a file instead. |
+| `--path DIR` | this checkout | Serve from `DIR`, copying the checkout there (`.git` included, so `git pull` still upgrades it). |
+| `--venue-name NAME` | `The Castle Fun Center` | |
+| `--timezone AREA/CITY` | the machine's, or `America/New_York` when that is UTC | **The venue's clock**, not the server's. See the note below. |
+| `--web-server nginx` | `apache` | See [nginx](#nginx). `none` writes no vhost at all. |
+| `--letsencrypt EMAIL` | off | Get a certificate with certbot afterwards. |
+| `--finish-in-browser` | off | Provision the server and stop; finish at `/install/` in a browser. |
+| `--seed-demo` | off | Example guests, deals and bookings, all marked as examples. |
+| `--no-seed-playbooks`, `--no-seed-venue` | both seeded | Skip the playbook library, or the Castle's own attractions and prices. |
+| `--external-db` | off | Use a database server you already have; needs `--db-password-file`. |
+| `--skip-packages` | off | Install nothing from `apt`. |
+| `--force-config` | off | Overwrite a vhost, PHP ini or cron file this script wrote before. |
+| `-y`, `--yes` | off | Never ask anything. |
+
+`./install.sh --help` lists all of them, including the `--db-*` options.
+
+**About the timezone.** Most server images are on UTC, and a venue on UTC is
+wrong in a way that is easy to miss: after 8pm Eastern the CRM's "today" is
+already tomorrow, so a party booked for tonight lands on the wrong run sheet.
+When the machine is on UTC the script uses `America/New_York` and says so.
+Pass `--timezone`, or change it later under **Settings → Venue**.
+
+---
+
+## After it finishes
+
+Three things, in this order:
+
+1. **Get a certificate.** A plain-HTTP install sends staff passwords and guest
+   details in the clear.
+
+   ```bash
+   sudo ./install.sh --letsencrypt you@example.com --yes
+   ```
+
+   That runs certbot against the vhost and redirects HTTP to HTTPS. Then turn
+   on **Settings → System → Require HTTPS**, so the application refuses an
+   insecure request as well.
+
+2. **Work the dashboard checklist.** It asks you to confirm the venue details
+   and the seeded prices (they came from a public website and may be stale),
+   configure an email provider under **Settings → Email**, and take a backup.
+
+3. **Check cron is running.** **Settings → System health** shows the
+   heartbeat. If it says cron has not run, see
+   [Troubleshooting](#troubleshooting).
+
+Leave Safe Mode last, deliberately, once you have sent yourself a test of
+everything you plan to switch on.
+
+---
+
+## Where everything is
 
 | | |
 |---|---|
-| Packages | Apache, PHP (8.1 on 22.04, 8.3 on 24.04) with every extension the installer checks, MariaDB, cron, git, and certbot when HTTPS was asked for. An existing MySQL or MariaDB server is used rather than replaced. |
-| Application | Copied the checkout to `/var/www/castle-crm` (change with `--dir`), `.git` included. Code is owned by root; only `config/`, `install/` and `storage/` are writable by the web server. |
-| Database | Database `castle_crm` and user `castle_crm` with a random 32-character password, reachable only from the server itself. |
-| Web server | The Apache site `/etc/apache2/sites-available/castle-crm.conf`. The CRM's own `.htaccess` does the routing and keeps `config/`, `storage/`, `tests/`, `.git` and the like private. Ubuntu's placeholder site is switched off when no domain was given. |
-| Cron | `cron.php` every minute as `www-data`. It does nothing until setup finishes. |
-| HTTPS | A Let's Encrypt certificate, renewed automatically by certbot's timer, with HTTP redirecting to HTTPS. |
-| Firewall | If `ufw` is on, HTTP and HTTPS are allowed. |
+| Application | `/var/www/castle-crm` (or your `--path`) |
+| Configuration | `config/config.php` — the database password and the encryption key, `0640` and owned by `www-data` |
+| Logs | `storage/logs/castle-YYYY-MM-DD.log`, and Apache's in `/var/log/apache2/castle-crm-*.log` |
+| Backups | `storage/backups/`, written by cron daily and by **Settings → Backups** |
+| Apache vhost | `/etc/apache2/sites-available/castle-crm.conf` |
+| nginx site | `/etc/nginx/sites-available/castle-crm` |
+| PHP settings | `/etc/php/8.x/{apache2,fpm}/conf.d/99-castle-crm.ini` |
+| Cron | `/etc/cron.d/castle-crm` |
 
-Every step can be repeated. Running `sudo ./install.sh` again never rotates
-the database password once setup has finished, never copies over an existing
-install, and puts an existing certificate back in place.
+The installed copies of the vhost, the site and the cron file are yours to
+edit: re-running `install.sh` keeps them unless you pass `--force-config`.
+They are rendered from the templates in `tools/server/`.
 
-## Adding HTTPS later
-
-Point the domain at the server, then from the application folder:
-
-```bash
-cd /var/www/castle-crm
-sudo ./install.sh --domain crm.example.com --email you@example.com
-```
-
-Turn on **Settings → System → Force HTTPS** once the padlock shows.
+---
 
 ## Upgrading
 
-1. Take a backup first (**Settings → Backups → Back up now**) and download it.
-2. Pull the new version and re-run the script, which re-applies ownership
-   and the Apache site:
-
-   ```bash
-   cd /var/www/castle-crm
-   sudo git pull
-   sudo ./install.sh --yes
-   ```
-
-3. Visit any page. Pending database migrations run automatically.
-4. Check **Settings → System health**.
-
-## Where things are
-
-| | |
-|---|---|
-| Application | `/var/www/castle-crm` |
-| Configuration | `/var/www/castle-crm/config/config.php` (database password and encryption key: back it up somewhere safe) |
-| Application logs, and mail while it is in log mode | `/var/www/castle-crm/storage/logs/` |
-| Web server logs | `/var/log/apache2/castle-crm-error.log` and `castle-crm-access.log` |
-| Cron | `/etc/cron.d/castle-crm` |
-
-The command-line tools work as on cPanel, run as the web server's user so
-the files they write stay readable by it:
-
 ```bash
-cd /var/www/castle-crm
-sudo -u www-data php tools/reset-password.php owner@example.com
-sudo -u www-data php tools/backup.php
+sudo git -C /var/www/castle-crm pull
 ```
 
-## Trying the script out
+That is all. The next request notices the code has changed and applies any new
+schema file itself (`cc_apply_pending_upgrade()` in `app/bootstrap.php`) —
+there is no migration command to remember. Take a backup first from
+**Settings → Backups**; a schema change is not reversible by `git`.
 
-`tests/install/ubuntu-smoke.sh` walks the web installer with a made-up venue
-and owner, signs in, checks that private paths stay private and runs cron. CI
-runs it after `install.sh` on clean Ubuntu 22.04 and 24.04 containers. Only
-ever run it on a throwaway server: it completes the installer for you.
+Re-run `sudo ./install.sh --yes` after a pull only if you want the server
+configuration refreshed too — new packages, a changed vhost template
+(`--force-config`), repaired permissions. It will not re-install over your
+data: it detects the existing `config/config.php`, keeps the database and
+every account, and tells you so.
+
+**Keep the `install/` directory.** A cPanel install is told to delete it,
+because there an upgrade is a fresh unzip that puts it back. Here the
+directory is part of the checkout, and `install/schema` is what applies the
+next version's tables. `install/.lock` is what closes the web installer, and
+the vhost denies `install/schema`, `install/seeds` and `install/steps`
+outright.
+
+---
+
+## nginx
+
+```bash
+sudo ./install.sh --web-server nginx --domain crm.example.com --admin-email you@example.com
+```
+
+Installs nginx and PHP-FPM, and writes `/etc/nginx/sites-available/castle-crm`
+from `tools/server/nginx-site.conf`.
+
+One thing worth knowing if you ever edit that file: **nginx never reads
+`.htaccess`**. On Apache the shipped `.htaccess` is the real request policy —
+the front controller rewrite, the security headers, the deny rules — and the
+vhost just allows it to be read. The nginx site has to restate all of it, so
+every deny rule is there in nginx's own syntax, and
+`tests/static/QualityGatesTest.php` holds it to the same list as the
+`.htaccess` so the two cannot drift apart. The `^~` on the deny locations is
+not decoration: without it a request for `/tests/run.php` would match the
+`\.php$` handler and **execute the test runner** against your live database.
+
+Apache and nginx both want port 80. If you switch, stop the other one:
+`sudo systemctl disable --now apache2`.
+
+---
+
+## Other ways to run it
+
+### Finish in a browser
+
+```bash
+sudo ./install.sh --finish-in-browser --domain crm.example.com
+```
+
+Does everything except the setup itself, then prints the database credentials
+to type into step 3 of the web installer at `http://your-domain/install/`.
+Useful if you would rather pick the venue details and the seeds on screen.
+Run `sudo ./install.sh --yes` again afterwards: it takes back the write access
+the web installer needed on `config/` and `install/`.
+
+### A database you already have
+
+```bash
+printf '%s' 'the-password' | sudo tee /root/db-pass > /dev/null
+sudo chmod 600 /root/db-pass
+sudo ./install.sh --external-db --db-host db.internal --db-name castle_crm \
+  --db-user castle_crm --db-password-file /root/db-pass --admin-email you@example.com
+```
+
+Create the database and user yourself first, with full privileges on that one
+database — the installer creates 99 tables and the backup feature reads all of
+them. Castle CRM never touches another database.
+
+Passwords are never taken as options, here or anywhere: every process on the
+machine can read a command line (`ps auxww`).
+
+### Older Ubuntu
+
+Ubuntu 20.04 ships PHP 7.4. Add a PHP repository first, then install as usual:
+
+```bash
+sudo add-apt-repository -y ppa:ondrej/php
+sudo apt-get update
+sudo ./install.sh --domain crm.example.com --admin-email you@example.com
+```
+
+The script checks the PHP version before it changes anything and says this
+rather than failing halfway.
+
+---
+
+## Troubleshooting
+
+**403 Forbidden on every page.** The web server cannot read the application.
+Almost always a clone inside a home directory: Ubuntu has made those readable
+only by their owner since 21.04. Install somewhere the web server can reach:
+
+```bash
+sudo ./install.sh --path /var/www/castle-crm --admin-email you@example.com
+```
+
+The script checks this before it installs anything and refuses with the same
+advice.
+
+**500 on every page, nothing in the browser.** Read
+`storage/logs/castle-*.log`, then `/var/log/apache2/castle-crm-error.log`. The
+usual cause is `storage/` not being writable by `www-data`; `sudo
+./install.sh --yes` repairs the permissions.
+
+**Links 404 but the home page works.** `mod_rewrite` or `AllowOverride All` is
+missing, so the front controller never sees the request. Check
+`apache2ctl -M | grep rewrite` and that your vhost still has `AllowOverride
+All`. Castle CRM also works without rewriting, at
+`/index.php?_route=/your/path`, which is a useful thing to try to confirm the
+diagnosis.
+
+**Nothing scheduled happens.** No automation fires, no digest arrives, the
+health page says the heartbeat is stale. Check the daemon is running
+(`systemctl status cron`), then run the tick by hand and read what it says:
+
+```bash
+sudo -u www-data php /var/www/castle-crm/cron.php
+```
+
+**Nobody can sign in.** Reset a password from the command line — this works
+with no mail provider configured, which a fresh install has:
+
+```bash
+sudo -u www-data php /var/www/castle-crm/tools/reset-password.php owner@example.com --generate
+```
+
+Run it with no arguments to list the accounts, or with `--unlock` to clear a
+lockout.
+
+**Email is not arriving.** Expected on a new install: mail defaults to the log
+driver and Safe Mode redirects everything to the owner. Configure a provider
+under **Settings → Email**, send yourself a test, then leave Safe Mode. A
+password reset works in the meantime — the whole message, link included, is
+written to `storage/logs/`.
+
+**I lost the database password.** It is in `config/config.php`, which only
+root and `www-data` can read.
+
+**Starting over.** Delete `config/config.php` and `install/.lock`, drop the
+database, and run the script again. That throws the data away; export anything
+you want first from **Settings → Backups**.
+
+---
+
+## What this script does not do
+
+Honest gaps, so nobody assumes otherwise:
+
+- **No off-site backups.** Cron writes a daily backup to `storage/backups/` on
+  the same disk as the database. That survives a mistake, not a dead server.
+  Copy them somewhere else — `rsync`, a cloud bucket, anything.
+- **No OS hardening.** It does not install `unattended-upgrades`, `fail2ban`
+  or an SSH policy. It opens the firewall for HTTP and HTTPS if `ufw` is
+  already active, and that is the extent of it.
+- **No monitoring.** The health page is inside the application, so it cannot
+  tell you the machine is down. A one-line uptime check against `/login` from
+  anywhere else covers the gap.
+- **No mail server.** Castle CRM sends through a provider's API or SMTP, which
+  you configure in the application. It does not install Postfix, and sending
+  directly from a VPS mostly lands in spam anyway.

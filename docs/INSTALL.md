@@ -1,5 +1,10 @@
 # Installing Castle CRM on cPanel
 
+> **Installing on your own server instead?** Read
+> [`INSTALL-UBUNTU.md`](INSTALL-UBUNTU.md). On a machine you have root on,
+> `install.sh` does everything this guide asks you to do by hand in cPanel —
+> clone the repository, run the script, sign in.
+
 > **Deploying at The Castle Fun Center itself?** Read
 > [`DEPLOY-CASTLE.md`](DEPLOY-CASTLE.md) instead. It is this guide with the
 > venue's own pieces named — Cloudflare DNS, Microsoft 365 mail, the CEplay
