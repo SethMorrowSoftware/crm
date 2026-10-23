@@ -1110,6 +1110,18 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Fixed: install.sh on Ubuntu 26.04
+
+26.04 ships PHP 8.5, and install.sh looked only for 8.4 down to 8.1, so it
+reported no usable PHP and advised adding the ondrej/php PPA, which does not
+publish 26.04 and then made every `apt-get update` fail. The script now asks
+the release which PHP its `php-cli` depends on and uses that, installs
+`php-opcache` only where it is a separate package (8.5 builds it in), offers
+the PPA only on releases older than 22.04, and sets aside an ondrej/php
+sources entry that apt reports has no Release file, moving it to
+`/etc/apt/sources.list.d.castle-crm-disabled/` and retrying. CI now installs
+on 26.04 too and runs the full suite on PHP 8.5.
+
 ### Added: `install.sh` — Castle CRM on an Ubuntu server, from a clone
 
 Until now the only supported install was cPanel: upload a zip, walk eight

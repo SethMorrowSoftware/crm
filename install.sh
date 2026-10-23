@@ -28,9 +28,11 @@
 #
 #   ./install.sh --help     every option
 #
-# Tested on Ubuntu 22.04 and 24.04, and on Debian 12, which is close enough to
-# the same machine. Ubuntu 20.04 ships PHP 7.4 and Castle CRM needs 8.1, so
-# that one needs a PHP PPA first; the script says so rather than failing later.
+# Tested on Ubuntu 22.04, 24.04 and 26.04, and on Debian 12, which is close
+# enough to the same machine. Each uses its own release's PHP. Ubuntu 20.04
+# ships PHP 7.4 and Castle CRM needs 8.1, so that one needs a PHP PPA first;
+# the script says so rather than failing later. A PPA left behind on a release
+# it does not publish (26.04) is set aside, since it would stop apt cold.
 
 set -euo pipefail
 
@@ -262,6 +264,54 @@ fi
 
 ok "$OS_NAME"
 
+OS_CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
+
+# apt-get update, and the one way it fails that this script can mend.
+#
+# The ondrej/php PPA publishes only the Ubuntu releases it has built for, and
+# it is always behind the newest one. On a release it does not cover (26.04
+# "resolute" when this was written) its sources entry makes every apt-get
+# update fail with "does not have a Release file", which stops this script
+# before it has done anything — and the distribution's own PHP is new enough
+# there, so the PPA was never needed. That entry is moved out of apt's way, to
+# a folder it can be put back from, and the update is tried once more. Any
+# other failure is reported as it is.
+APT_DISABLED_SOURCES=/etc/apt/sources.list.d.castle-crm-disabled
+
+apt_update() {
+  local output stale
+
+  if output=$(LC_ALL=C apt-get update -qq 2>&1); then
+    return 0
+  fi
+
+  if ! grep -q 'ondrej/php.*does not have a Release file' <<< "$output"; then
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+
+  stale=$(grep -l -s 'ondrej/php' /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources || true)
+
+  if [ -z "$stale" ]; then
+    printf '%s\n' "$output" >&2
+    die "The ondrej/php PPA does not publish ${OS_NAME}, and apt cannot update while it is listed." \
+        "It is not under /etc/apt/sources.list.d, so remove its line from /etc/apt/sources.list" \
+        "yourself, then run this again. ${OS_NAME}'s own PHP is the one to use."
+  fi
+
+  mkdir -p "$APT_DISABLED_SOURCES"
+
+  local file
+  for file in $stale; do
+    mv "$file" "$APT_DISABLED_SOURCES/"
+    warn "Set aside $file: the ondrej/php PPA has nothing for ${OS_CODENAME:-this release}."
+  done
+
+  note "It is in $APT_DISABLED_SOURCES if you ever want it back. This release's own PHP is used instead."
+
+  apt-get update -qq
+}
+
 if [ "$SKIP_PACKAGES" -eq 0 ]; then
   command -v apt-get > /dev/null 2>&1 || die \
     "No apt-get, so this is not Ubuntu or Debian." \
@@ -309,6 +359,11 @@ php_version_at_least_81() { # version
   [ "$(printf '%s\n8.1\n' "$1" | sort -V | head -n1)" = "8.1" ]
 }
 
+# Ubuntu 22.04 is the first release whose own PHP is 8.1.
+php_version_at_least_81_release() { # Ubuntu VERSION_ID
+  [ "$(printf '%s\n22.04\n' "$1" | sort -V | head -n1)" = "22.04" ]
+}
+
 if [ "$SKIP_PACKAGES" -eq 1 ] && [ -z "$PHP_VERSION" ]; then
   command -v php > /dev/null 2>&1 || die "--skip-packages was given, but there is no php on PATH."
   PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')
@@ -317,26 +372,46 @@ fi
 if [ -z "$PHP_VERSION" ]; then
   section "Refreshing the package lists"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq || die "apt-get update failed. Check this machine's network access."
+  apt_update || die "apt-get update failed. Check this machine's network access."
   ok "package lists are current"
 
-  # Newest first: the application is tested on 8.1 through 8.4, and a venue is
-  # better off on the one its distribution actually supports.
-  for candidate in 8.4 8.3 8.2 8.1; do
-    if apt-cache show "php${candidate}-cli" > /dev/null 2>&1; then
-      PHP_VERSION="$candidate"
-      break
-    fi
-  done
+  # The distribution's own choice first, read from what its php-cli package
+  # depends on: that is the PHP the release supports and patches, whatever its
+  # number (8.1 on 22.04, 8.3 on 24.04, 8.5 on 26.04). A fixed list of
+  # versions is what once stopped at 8.4 and told a 26.04 server it had no PHP.
+  default_php=$(apt-cache depends php-cli 2> /dev/null \
+    | sed -n 's/^ *Depends: php\([0-9][0-9]*\.[0-9][0-9]*\)-cli$/\1/p' | head -n1 || true)
+
+  if [ -n "$default_php" ] && php_version_at_least_81 "$default_php"; then
+    PHP_VERSION="$default_php"
+  else
+    # No php-cli metapackage to ask: newest first of the versions that exist.
+    for candidate in 8.5 8.4 8.3 8.2 8.1; do
+      if apt-cache show "php${candidate}-cli" > /dev/null 2>&1; then
+        PHP_VERSION="$candidate"
+        break
+      fi
+    done
+  fi
 
   PACKAGE_LISTS_FRESH=1
 fi
 
-[ -n "$PHP_VERSION" ] || die \
-  "This release of $OS_NAME offers no PHP 8.1 or newer, and Castle CRM needs 8.1." \
-  "On Ubuntu 20.04 (which ships PHP 7.4):" \
-  "  sudo add-apt-repository -y ppa:ondrej/php && sudo apt-get update" \
-  "then run this again. Ubuntu 22.04 and 24.04 need nothing extra."
+if [ -z "$PHP_VERSION" ]; then
+  # The PPA is advice only where it is the answer: an Ubuntu release older
+  # than 22.04, whose own PHP is too old and which the PPA does publish.
+  # Anywhere newer, the release's own PHP is fine and the PPA may not exist.
+  if [ "$OS_ID" = "ubuntu" ] && [ -n "$OS_VERSION" ] && ! php_version_at_least_81_release "$OS_VERSION"; then
+    die "This release of $OS_NAME offers no PHP 8.1 or newer, and Castle CRM needs 8.1." \
+      "On Ubuntu 20.04 (which ships PHP 7.4):" \
+      "  sudo add-apt-repository -y ppa:ondrej/php && sudo apt-get update" \
+      "then run this again. Ubuntu 22.04 and newer need nothing extra."
+  fi
+
+  die "No PHP 8.1 or newer is available from this machine's package sources." \
+    "Check that the release's 'universe' component is enabled (sudo add-apt-repository universe)," \
+    "or name one that is installable with --php-version."
+fi
 
 php_version_at_least_81 "$PHP_VERSION" || die \
   "PHP $PHP_VERSION is too old: Castle CRM needs 8.1 or newer."
@@ -420,7 +495,7 @@ if [ "$SKIP_PACKAGES" -eq 0 ]; then
   export DEBIAN_FRONTEND=noninteractive
 
   if [ "${PACKAGE_LISTS_FRESH:-0}" -eq 0 ]; then
-    apt-get update -qq || die "apt-get update failed."
+    apt_update || die "apt-get update failed."
   fi
 
   packages=(
@@ -434,9 +509,13 @@ if [ "$SKIP_PACKAGES" -eq 0 ]; then
     # application as quick as a compiled one.
     "php${PHP_VERSION}-gd"
     "php${PHP_VERSION}-intl"
-    "php${PHP_VERSION}-opcache"
     "php${PHP_VERSION}-zip"
   )
+
+  # PHP 8.5 builds OPcache in, so 26.04 has no package for it to install.
+  if apt-cache show "php${PHP_VERSION}-opcache" > /dev/null 2>&1; then
+    packages+=("php${PHP_VERSION}-opcache")
+  fi
 
   case "$WEB_SERVER" in
     apache) packages+=("apache2" "libapache2-mod-php${PHP_VERSION}") ;;

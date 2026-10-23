@@ -234,7 +234,9 @@ machine can read a command line (`ps auxww`).
 
 ### Older Ubuntu
 
-Ubuntu 20.04 ships PHP 7.4. Add a PHP repository first, then install as usual:
+Ubuntu 22.04, 24.04 and 26.04 need nothing extra: the script uses the PHP
+each release ships (8.1, 8.3 and 8.5). Only Ubuntu 20.04, which ships PHP 7.4,
+needs a PHP repository added first, then install as usual:
 
 ```bash
 sudo add-apt-repository -y ppa:ondrej/php
@@ -248,6 +250,16 @@ rather than failing halfway.
 ---
 
 ## Troubleshooting
+
+**"The repository 'https://ppa.launchpadcontent.net/ondrej/php/ubuntu resolute
+Release' does not have a Release file."** The ondrej/php PPA was added on a
+release it does not publish (it trails the newest Ubuntu), and apt refuses to
+update while it is listed. That release's own PHP is the one to use. The
+script sets the PPA aside by itself and carries on; to remove it by hand:
+
+```bash
+sudo rm -f /etc/apt/sources.list.d/ondrej-ubuntu-php-* && sudo apt-get update
+```
 
 **403 Forbidden on every page.** The web server cannot read the application.
 Almost always a clone inside a home directory: Ubuntu has made those readable
