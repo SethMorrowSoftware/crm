@@ -1110,6 +1110,16 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Added: `install.sh --port`
+
+On a shared server Castle CRM can now go on a port of its own (`--port 8088`)
+instead of needing a hostname: nginx answers there to any name (`server_name
+_`), Apache gets its own `Listen` line in `conf-available/castle-crm-port.conf`,
+ufw opens the port, and the address printed is the server's IP and port. The
+script refuses a port already in use (other than by its own site on a re-run),
+and on port 80 refuses a `--domain` another site already answers to. CI
+installs on a port beside an existing nginx and Apache site on 26.04.
+
 ### Fixed: install.sh on a server shared with other applications
 
 install.sh assumed a server of its own. On one already running other sites

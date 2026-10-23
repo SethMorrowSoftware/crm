@@ -110,6 +110,10 @@ Where it goes
                          all, so `git pull` still upgrades it.
   --domain NAME          The hostname staff will use. Defaults to this
                          machine's hostname.
+  --port N               Serve Castle CRM on its own port, e.g. 8088, instead
+                         of port 80 under a hostname. The simple way onto a
+                         server that already runs other sites: no DNS name is
+                         needed, and the address is http://<server IP>:N.
   --web-server WHICH     apache (default), nginx, or none to write no vhost.
   --php-version X.Y      Defaults to the newest 8.1+ this release of Ubuntu
                          offers.
@@ -168,6 +172,7 @@ INVOCATION=("$@")
 
 APP_DIR=""
 DOMAIN=""
+PORT="80"
 WEB_SERVER="apache"
 WEB_SERVER_EXPLICIT=0
 PHP_VERSION=""
@@ -200,6 +205,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --path)                 APP_DIR="${2:?--path needs a directory}"; shift 2 ;;
     --domain)               DOMAIN="${2:?--domain needs a hostname}"; shift 2 ;;
+    --port)                 PORT="${2:?--port needs a number}"; shift 2 ;;
     --web-server)           WEB_SERVER="${2:?--web-server needs apache, nginx or none}"; WEB_SERVER_EXPLICIT=1; shift 2 ;;
     --php-version)          PHP_VERSION="${2:?--php-version needs a version}"; shift 2 ;;
     --admin-email)          ADMIN_EMAIL="${2:?--admin-email needs an address}"; shift 2 ;;
@@ -232,6 +238,9 @@ case "$WEB_SERVER" in
   apache|nginx|none) ;;
   *) die "--web-server must be apache, nginx or none (got \"$WEB_SERVER\")." ;;
 esac
+
+[[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] \
+  || die "--port must be a number from 1 to 65535 (got \"$PORT\")."
 
 # ---------------------------------------------------------------------------
 # Preflight
@@ -426,11 +435,72 @@ if [ "$SHARED" -eq 1 ]; then
     note "  $site"
   done
 
-  [ "$DOMAIN_EXPLICIT" -eq 1 ] || die \
+  # A port of its own tells the requests apart just as well as a name does.
+  [ "$DOMAIN_EXPLICIT" -eq 1 ] || [ "$PORT" != "80" ] || die \
     "On a server that already hosts other sites, Castle CRM needs a hostname of its own" \
     "so the web server can tell its requests apart from theirs. Point a DNS name at this" \
-    "server and run again with it:  sudo ./install.sh --domain crm.example.com ..."
+    "server and run again with it:  sudo ./install.sh --domain crm.example.com ..." \
+    "Or give it a port nobody uses instead:  sudo ./install.sh --port 8088 ..."
 fi
+
+if [ "$PORT" != "80" ]; then
+  # The port has to be free, unless it is this application's own from a
+  # previous run (a re-run must not refuse the port it set up itself).
+  port_owner=""
+
+  if command -v ss > /dev/null 2>&1; then
+    port_owner=$(ss -Hltnp "sport = :$PORT" 2> /dev/null \
+      | grep -o 'users:(("[^"]*"' | head -n1 | sed 's/^users:(("//; s/"$//' || true)
+  fi
+
+  if [ -n "$port_owner" ] \
+    && ! grep -qsE "(listen[[:space:]]+(\[::\]:)?${PORT}[[:space:];]|VirtualHost \*:${PORT}>)" \
+         /etc/nginx/sites-available/castle-crm /etc/apache2/sites-available/castle-crm.conf; then
+    die "Port $PORT is already in use by $port_owner." \
+      "Pick another, and check it with:  sudo ss -ltnp | grep :<port>"
+  fi
+
+  [ -z "$LETSENCRYPT_EMAIL" ] || die \
+    "--letsencrypt needs the standard ports and a hostname, so it cannot go with --port." \
+    "Install on the port now; add a hostname and HTTPS later."
+
+  # With no name of its own, the address people type is this server's IP.
+  if [ "$DOMAIN_EXPLICIT" -eq 0 ]; then
+    server_ip=$(hostname -I 2> /dev/null | awk '{print $1}' || true)
+    DOMAIN="${server_ip:-$DOMAIN}"
+  fi
+fi
+
+# What goes in the address bar. :80 is implied.
+if [ "$PORT" = "80" ]; then
+  SITE_ADDRESS="$DOMAIN"
+else
+  SITE_ADDRESS="$DOMAIN:$PORT"
+fi
+
+# The name the site answers to. On a port of its own it answers to anything
+# that arrives there, so an IP address, a hostname added later, or a tunnel
+# all reach it: nginx spells that `_`; Apache needs no spelling, because the
+# only vhost on a port is that port's default, so it keeps the address.
+if [ "$PORT" != "80" ] && [ "$DOMAIN_EXPLICIT" -eq 0 ] && [ "$WEB_SERVER" = "nginx" ]; then
+  SERVER_NAME="_"
+else
+  SERVER_NAME="$DOMAIN"
+fi
+
+# A name another site already answers to. nginx would serve whichever block
+# it read first and warn "conflicting server name"; Apache likewise picks the
+# first vhost. Either way one of the two applications silently disappears.
+for site in "${OTHER_SITES[@]}"; do
+  [ "$PORT" = "80" ] || break
+
+  if grep -Eiq "^[[:space:]]*(server_name|ServerName|ServerAlias)[[:space:]](.*[[:space:]])?${DOMAIN//./\\.}([[:space:];]|$)" "$site"; then
+    die "$DOMAIN is already the name of another site on this server:" \
+      "  $site" \
+      "Two sites cannot share a name. Give Castle CRM a different --domain, or, if that" \
+      "site is an old Castle CRM attempt you no longer want, disable it first."
+  fi
+done
 
 # How PHP runs. mod_php is one PHP for every site on the machine, and it
 # forces Apache onto the prefork MPM, which other sites may not tolerate; so
@@ -529,7 +599,7 @@ section "The plan"
 
 printf '  %-16s %s\n' "Application" "$APP_DIR"
 [ "$APP_DIR" = "$SOURCE_DIR" ] || printf '  %-16s %s\n' "" "(copied from $SOURCE_DIR)"
-printf '  %-16s %s\n' "Address" "http://$DOMAIN"
+printf '  %-16s %s\n' "Address" "http://$SITE_ADDRESS"
 printf '  %-16s %s\n' "Web server" "$WEB_SERVER$([ "$SHARED" -eq 1 ] && echo ", shared with ${#OTHER_SITES[@]} other site(s), which are left alone")"
 printf '  %-16s %s\n' "PHP" "$PHP_VERSION ($([ "$PHP_MODE" = fpm ] && echo "its own PHP-FPM pool, $FPM_SOCKET" || echo "mod_php"))"
 printf '  %-16s %s\n' "Database" "$DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
@@ -544,7 +614,7 @@ fi
 if [ "$ALREADY_INSTALLED" -eq 1 ]; then
   printf '  %-16s %s\n' "Already set up" "keeping the existing database and configuration"
 elif [ "$FINISH_IN_BROWSER" -eq 1 ]; then
-  printf '  %-16s %s\n' "Setup" "finished in a browser at http://$DOMAIN/install/"
+  printf '  %-16s %s\n' "Setup" "finished in a browser at http://$SITE_ADDRESS/install/"
 else
   printf '  %-16s %s\n' "Owner" "${ADMIN_EMAIL:-(will ask)}"
 fi
@@ -937,7 +1007,8 @@ install_template() { # source, destination, mode
     </Directory>"
   fi
 
-  sed -e "s|__CC_DOMAIN__|${DOMAIN}|g" \
+  sed -e "s|__CC_DOMAIN__|${SERVER_NAME}|g" \
+      -e "s|__CC_PORT__|${PORT}|g" \
       -e "s|__CC_PATH__|${APP_DIR}|g" \
       -e "s|__CC_PHP_VERSION__|${PHP_VERSION}|g" \
       -e "s|__CC_PHP__|${PHP_BIN}|g" \
@@ -1032,6 +1103,15 @@ TOKENS
       ok "Apache no longer announces its version"
     fi
 
+    if [ "$PORT" != "80" ]; then
+      # Apache only accepts connections on ports it has a Listen line for.
+      # Its own file, so ports.conf (and every other site) is left alone.
+      printf '# Written by Castle CRM'"'"'s install.sh: the port its site answers on.\nListen %s\n' "$PORT" \
+        > /etc/apache2/conf-available/castle-crm-port.conf
+      a2enconf castle-crm-port > /dev/null
+      ok "Apache listens on port $PORT for Castle CRM"
+    fi
+
     a2ensite castle-crm > /dev/null
 
     # Only on a server of its own: elsewhere the default site may be what
@@ -1077,7 +1157,7 @@ TOKENS
     # — an [emerg], so nginx refuses to start and serves nothing, over either
     # protocol. MEASURED on a container with no /proc/net/if_inet6.
     if [ "$TEMPLATE_WROTE" -eq 1 ] && [ ! -e /proc/net/if_inet6 ]; then
-      sed -i 's|^\(\s*\)listen \[::\]:80;|\1# listen [::]:80;  # commented out by install.sh: no IPv6 on this machine|' \
+      sed -i 's|^\(\s*\)\(listen \[::\]:[0-9]*;\)|\1# \2  # commented out by install.sh: no IPv6 on this machine|' \
         /etc/nginx/sites-available/castle-crm
       ok "commented out the IPv6 listener — this machine has no IPv6 stack"
     fi
@@ -1119,6 +1199,10 @@ if grep -q '^Status: active' <<< "$ufw_status"; then
     apache) ufw allow 'Apache Full' > /dev/null 2>&1 && ok "opened the firewall for HTTP and HTTPS" ;;
     nginx)  ufw allow 'Nginx Full'  > /dev/null 2>&1 && ok "opened the firewall for HTTP and HTTPS" ;;
   esac
+
+  if [ "$PORT" != "80" ] && [ "$WEB_SERVER" != "none" ]; then
+    ufw allow "$PORT/tcp" > /dev/null 2>&1 && ok "opened the firewall for port $PORT"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -1139,7 +1223,7 @@ fi
 # Setup
 # ---------------------------------------------------------------------------
 
-BASE_URL="http://$DOMAIN"
+BASE_URL="http://$SITE_ADDRESS"
 ADMIN_PASSWORD=""
 GENERATED_PASSWORD=0
 
