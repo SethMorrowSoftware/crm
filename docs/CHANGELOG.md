@@ -1120,6 +1120,14 @@ script refuses a port already in use (other than by its own site on a re-run),
 and on port 80 refuses a `--domain` another site already answers to. CI
 installs on a port beside an existing nginx and Apache site on 26.04.
 
+A re-run with a different port no longer half-applies it. The kept site file
+still answered on the old port while Apache's `Listen` moved to the new one,
+which took the site offline; the script now refuses and asks for
+`--force-config`. The "its own site" exemption for a busy port now requires
+the CRM site to be enabled under the web server holding the port, and ignores
+commented-out `listen` lines. Moving back to port 80 removes the extra
+`Listen` file.
+
 ### Fixed: install.sh on a server shared with other applications
 
 install.sh assumed a server of its own. On one already running other sites

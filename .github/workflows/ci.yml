@@ -412,6 +412,15 @@ jobs:
             # shellcheck disable=SC2086
             ./install.sh --yes $WHERE > /dev/null
 
+            # A kept site file answers on its old port, so a new port without
+            # --force-config must be refused rather than half applied.
+            if [ "$MODE" = port ]; then
+              if ./install.sh --yes --port 8089 > /tmp/refusal 2>&1; then
+                echo "install.sh moved to a new port while keeping the old site file"; exit 1
+              fi
+              grep -q "already set up on a different port" /tmp/refusal
+            fi
+
             tests/install/ubuntu-smoke.sh "$URL" /var/www/castle-crm
 
             # Everything that was here is as it was.
