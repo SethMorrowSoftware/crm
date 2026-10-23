@@ -37,6 +37,33 @@ define('CC_ROOT', dirname(__DIR__));
 // Preflight
 // ---------------------------------------------------------------------------
 
+$userName = static function (int $uid): string {
+    $entry = function_exists('posix_getpwuid') ? posix_getpwuid($uid) : false;
+
+    return is_array($entry) ? (string) $entry['name'] : '';
+};
+
+// How to run this script again, for the hints: as the same user, which on a
+// server is the web server's user (config.php is readable by it alone).
+$invocation = 'php ' . $argv[0];
+$runningAs = function_exists('posix_geteuid') ? $userName(posix_geteuid()) : '';
+
+if ($runningAs !== '' && $runningAs !== 'root' && getenv('SUDO_USER') !== false) {
+    $invocation = 'sudo -u ' . $runningAs . ' ' . $invocation;
+}
+
+$configDir = CC_ROOT . '/config';
+$configFile = $configDir . '/config.php';
+
+// install.sh leaves config/ readable by the web server's user only, so from
+// any other account config.php looks missing. Say that rather than "not installed".
+if (!is_readable($configFile) && (is_file($configFile) || is_dir($configDir) && !is_executable($configDir))) {
+    $owner = $userName((int) fileowner($configDir)) ?: 'www-data';
+    fwrite(STDERR, "This account cannot read config/config.php: only {$owner} can.\n");
+    fwrite(STDERR, "Run it as that user:  sudo -u {$owner} " . implode(' ', array_merge(['php'], $argv)) . "\n");
+    exit(1);
+}
+
 if (!is_file(CC_ROOT . '/config/config.php')) {
     fwrite(STDERR, "Castle CRM is not installed yet — there is no config/config.php.\n");
     fwrite(STDERR, "Run the web installer at /install/ first.\n");
@@ -113,8 +140,8 @@ if ($positional === []) {
     }
 
     echo "\nTo reset one:\n";
-    echo "  php tools/reset-password.php " . $users[0]['email'] . "\n";
-    echo "  php tools/reset-password.php " . $users[0]['email'] . " --generate\n";
+    echo "  {$invocation} " . $users[0]['email'] . "\n";
+    echo "  {$invocation} " . $users[0]['email'] . " --generate\n";
     exit(0);
 }
 

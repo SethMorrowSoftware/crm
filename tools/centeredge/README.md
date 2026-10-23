@@ -6,6 +6,27 @@ the venue, because the CRM lives on shared hosting at LiveCode Hosting and the
 POS database is on the venue LAN, where a datacenter cannot reach it and never
 should.
 
+## The quick way: one command on the CRM's own server
+
+When Castle CRM runs on an Ubuntu server at the venue (installed with
+`install.sh`), that server can reach CenterEdge itself, and one command does
+everything below: sets up pymssql, asks for the CenterEdge SQL login once
+(kept in `/etc/castle-crm/centeredge.env`, root only), exports, imports guests,
+children and visit history through the CRM's own importer with a dry run
+before each, and deletes the exported files.
+
+```bash
+cd ~/crm                       # wherever install.sh installed it
+sudo bash tools/centeredge/import.sh
+```
+
+It asks whether CenterEdge's "Bulk email" box is real consent (answer no
+unless the desk actually asks guests). Run it again whenever you like: what is
+already in the CRM is matched, not duplicated. `--help` lists the options.
+
+The rest of this page is the manual route, for a CRM that is not on the
+venue LAN.
+
 ## One-time setup (no root needed)
 
 ```bash
