@@ -143,7 +143,7 @@ everything you plan to switch on.
 | Backups | `storage/backups/`, written by cron daily and by **Settings → Backups** |
 | Apache vhost | `/etc/apache2/sites-available/castle-crm.conf` |
 | nginx site | `/etc/nginx/sites-available/castle-crm` |
-| PHP settings | `/etc/php/8.x/{apache2,fpm}/conf.d/99-castle-crm.ini` |
+| PHP settings | `/etc/php/8.x/apache2/conf.d/99-castle-crm.ini` on a dedicated Apache server; otherwise Castle CRM's own PHP-FPM pool, `/etc/php/8.x/fpm/pool.d/castle-crm.conf`, on `/run/php/castle-crm.sock` |
 | Cron | `/etc/cron.d/castle-crm` |
 
 The installed copies of the vhost, the site and the cron file are yours to
@@ -178,6 +178,36 @@ outright.
 
 ---
 
+## On a server shared with other applications
+
+Castle CRM can live on a machine that already runs other sites. The script
+notices them (any enabled site in `/etc/nginx` or `/etc/apache2` other than
+the stock default) and then adds Castle CRM as one more site, changing
+nothing the others rely on:
+
+```bash
+sudo ./install.sh --domain crm.example.com --admin-email you@example.com
+```
+
+- **A hostname of its own is required.** The web server tells the sites apart
+  by name, so point a DNS name at the server and pass it as `--domain`. The
+  script refuses to start without one, having changed nothing.
+- **The web server already on port 80 is used.** nginx or Apache, whichever is
+  serving, gets a `castle-crm` site; the other is never installed. If port 80
+  belongs to something else (Caddy, Traefik, a Docker container), the script
+  stops and says so: run it with `--web-server none` and point that server at
+  the application, with PHP on `unix:/run/php/castle-crm.sock`.
+- **PHP runs in Castle CRM's own PHP-FPM pool**, `castle-crm`, with its own
+  upload and memory limits, so nothing changes for another PHP application.
+  On Apache it is reached through `proxy_fcgi`, which works under any MPM, so
+  Apache is never switched to prefork and mod_php is never enabled.
+- **The default site stays enabled**, and nothing server-wide changes (no
+  `ServerTokens`, no `conf.d` PHP file).
+- **An existing MySQL or MariaDB server is used as it is.** Castle CRM gets
+  its own database and user on it and never touches another database. If root
+  cannot log in over the socket, create them yourself and use
+  [`--external-db`](#a-database-you-already-have).
+
 ## nginx
 
 ```bash
@@ -197,8 +227,9 @@ every deny rule is there in nginx's own syntax, and
 not decoration: without it a request for `/tests/run.php` would match the
 `\.php$` handler and **execute the test runner** against your live database.
 
-Apache and nginx both want port 80. If you switch, stop the other one:
-`sudo systemctl disable --now apache2`.
+Apache and nginx both want port 80. The script uses whichever is already
+serving it, and refuses a `--web-server` that would have to fight it for the
+port.
 
 ---
 
