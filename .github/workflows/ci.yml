@@ -336,3 +336,86 @@ jobs:
             tests/install/ubuntu-smoke.sh http://localhost /var/www/castle-crm
             test -z "$(git status --porcelain --untracked-files=no)"
           '
+
+  # ---------------------------------------------------------------------
+  # The same, on a server that already runs other sites: install.sh must
+  # use the web server that is there, add one site under its own name, run
+  # PHP in its own pool, and leave the other sites and the default site, the
+  # MPM and the database server exactly as it found them.
+  # ---------------------------------------------------------------------
+  ubuntu-install-shared:
+    name: install.sh · shared server · ${{ matrix.web }} · Ubuntu ${{ matrix.ubuntu }}
+    runs-on: ubuntu-latest
+    needs: lint
+
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['24.04', '26.04']
+        web: ['nginx', 'apache']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Another application first, then Castle CRM beside it
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -e WEB="${{ matrix.web }}" "ubuntu:${{ matrix.ubuntu }}" bash -euo pipefail -c '
+            apt-get update -q >/dev/null
+            apt-get install -y -q --no-install-recommends git ca-certificates curl iproute2 >/dev/null
+            echo "127.0.0.1 crm.test other.test" >> /etc/hosts
+
+            # The application that was here first: a plain site on its own name.
+            mkdir -p /var/www/other && echo "OTHER APP" > /var/www/other/index.html
+            if [ "$WEB" = nginx ]; then
+              apt-get install -y -q --no-install-recommends nginx >/dev/null
+              sed -i "s/listen \[::\]:80 default_server;/# &/" /etc/nginx/sites-available/default
+              printf "server { listen 80; server_name other.test; root /var/www/other; }\n" > /etc/nginx/sites-available/other
+              ln -s ../sites-available/other /etc/nginx/sites-enabled/other
+              service nginx start
+            else
+              apt-get install -y -q --no-install-recommends apache2 >/dev/null
+              printf "<VirtualHost *:80>\n ServerName other.test\n DocumentRoot /var/www/other\n</VirtualHost>\n" > /etc/apache2/sites-available/other.conf
+              a2ensite -q other
+              service apache2 start
+            fi
+            test "$(curl -s http://other.test/)" = "OTHER APP"
+            mpm_before=$( { apache2ctl -M 2>/dev/null || true; } | grep -o "mpm_[a-z]*" || true)
+
+            git config --global --add safe.directory "*"
+            git clone -q /src /var/www/castle-crm
+            cd /var/www/castle-crm
+            install -d -m 0700 /root/secrets
+            echo "smoke-test passphrase 2026" > /root/secrets/owner
+
+            # Without a hostname of its own it must refuse, having changed nothing.
+            if ./install.sh --yes --admin-email owner@castle.test --admin-password-file /root/secrets/owner > /tmp/refusal 2>&1; then
+              echo "install.sh accepted a shared server without --domain"; exit 1
+            fi
+            grep -q "hostname of its own" /tmp/refusal
+
+            # No --web-server: it has to find the one already on port 80.
+            ./install.sh --yes --domain crm.test \
+              --admin-email owner@castle.test --admin-name "Smoke Owner" \
+              --admin-password-file /root/secrets/owner --venue-name "Smoke Test Venue"
+            ./install.sh --yes --domain crm.test > /dev/null
+
+            tests/install/ubuntu-smoke.sh http://crm.test /var/www/castle-crm
+
+            # Everything that was here is as it was.
+            test "$(curl -s http://other.test/)" = "OTHER APP"
+            if [ "$WEB" = nginx ]; then
+              test -e /etc/nginx/sites-enabled/default
+              if command -v apache2 > /dev/null; then echo "apache2 was installed beside nginx"; exit 1; fi
+            else
+              test -e /etc/apache2/sites-enabled/000-default.conf
+              test ! -e /etc/apache2/conf-enabled/zz-castle-crm.conf
+              test "$(apache2ctl -M 2>/dev/null | grep -o "mpm_[a-z]*")" = "$mpm_before"
+              if apache2ctl -M 2>/dev/null | grep -q php; then echo "mod_php was enabled on a shared Apache"; exit 1; fi
+              if command -v nginx > /dev/null; then echo "nginx was installed beside Apache"; exit 1; fi
+            fi
+            test ! -e /etc/php/*/apache2/conf.d/99-castle-crm.ini
+            test ! -e /etc/php/*/fpm/conf.d/99-castle-crm.ini
+            test -S /run/php/castle-crm.sock
+            test -z "$(git status --porcelain --untracked-files=no)"
+            echo "Castle CRM installed beside another site, and the other site is untouched."
+          '

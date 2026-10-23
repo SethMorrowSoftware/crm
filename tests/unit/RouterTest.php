@@ -26,7 +26,6 @@ Harness::suite('unit/router');
 function route_compile(string $pattern): array
 {
     $method = new ReflectionMethod(Router::class, 'compile');
-    $method->setAccessible(true);
 
     return $method->invoke(new Router(), $pattern);
 }
@@ -238,7 +237,6 @@ Harness::test('that route then matches the real route table', function (): void 
 
     // dispatch() would run middleware, so match the compiled regex instead.
     $reflection = new ReflectionProperty(Router::class, 'routes');
-    $reflection->setAccessible(true);
 
     $matched = false;
 

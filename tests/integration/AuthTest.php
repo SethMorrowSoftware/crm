@@ -553,7 +553,6 @@ Harness::test('Model::safeOrderBy rejects an injected sort column', function ():
     // A list view that passes a user-supplied sort column must not become an
     // injection point.
     $method = new ReflectionMethod(App\Core\Model::class, 'safeOrderBy');
-    $method->setAccessible(true);
 
     $model = new class extends App\Core\Model {
         protected static string $table = 'contacts';

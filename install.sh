@@ -169,6 +169,7 @@ INVOCATION=("$@")
 APP_DIR=""
 DOMAIN=""
 WEB_SERVER="apache"
+WEB_SERVER_EXPLICIT=0
 PHP_VERSION=""
 ADMIN_EMAIL=""
 ADMIN_NAME="Owner"
@@ -199,7 +200,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --path)                 APP_DIR="${2:?--path needs a directory}"; shift 2 ;;
     --domain)               DOMAIN="${2:?--domain needs a hostname}"; shift 2 ;;
-    --web-server)           WEB_SERVER="${2:?--web-server needs apache, nginx or none}"; shift 2 ;;
+    --web-server)           WEB_SERVER="${2:?--web-server needs apache, nginx or none}"; WEB_SERVER_EXPLICIT=1; shift 2 ;;
     --php-version)          PHP_VERSION="${2:?--php-version needs a version}"; shift 2 ;;
     --admin-email)          ADMIN_EMAIL="${2:?--admin-email needs an address}"; shift 2 ;;
     --admin-name)           ADMIN_NAME="${2:?--admin-name needs a name}"; shift 2 ;;
@@ -346,10 +347,102 @@ case "$TIMEZONE" in
   ""|UTC|Etc/UTC|Etc/GMT|GMT|Etc/Universal|Universal) TIMEZONE="America/New_York" ;;
 esac
 
+DOMAIN_EXPLICIT=0
+[ -n "$DOMAIN" ] && DOMAIN_EXPLICIT=1
+
 if [ -z "$DOMAIN" ]; then
   DOMAIN=$(hostname --fqdn 2> /dev/null || hostname)
   DOMAIN="${DOMAIN:-localhost}"
 fi
+
+# ---------------------------------------------------------------------------
+# What else this machine already serves
+# ---------------------------------------------------------------------------
+#
+# Castle CRM is often one application among several on a server. On such a
+# machine it must arrive as one more site and change nothing the others rely
+# on: no second web server fighting for port 80, no default site switched
+# off, no server-wide PHP or Apache setting changed, no database server
+# swapped. Everything below that would do any of those asks SHARED first.
+
+PORT80_OWNER=""
+
+if command -v ss > /dev/null 2>&1; then
+  PORT80_OWNER=$(ss -Hltnp 'sport = :80' 2> /dev/null \
+    | grep -o 'users:(("[^"]*"' | head -n1 | sed 's/^users:(("//; s/"$//' || true)
+fi
+
+OTHER_SITES=()
+
+for site in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf /etc/apache2/sites-enabled/*; do
+  [ -e "$site" ] || continue
+
+  case "$(basename "$site")" in
+    # The stock placeholders, and this application's own files from a
+    # previous run (certbot's copy included).
+    default|000-default.conf|default-ssl.conf|castle-crm|castle-crm.conf|castle-crm-le-ssl.conf) continue ;;
+  esac
+
+  OTHER_SITES+=("$site")
+done
+
+SHARED=0
+[ "${#OTHER_SITES[@]}" -gt 0 ] && SHARED=1
+
+# The web server already in charge of port 80 is the one to use: installing
+# the other would only fail to bind, or worse, win the port at the next boot.
+case "$PORT80_OWNER" in
+  "")            PORT80_SERVER="" ;;
+  nginx)         PORT80_SERVER="nginx" ;;
+  apache2|httpd) PORT80_SERVER="apache" ;;
+  *)             PORT80_SERVER="other" ;;
+esac
+
+if [ "$WEB_SERVER_EXPLICIT" -eq 0 ]; then
+  case "$PORT80_SERVER" in
+    nginx|apache) WEB_SERVER="$PORT80_SERVER" ;;
+    other)
+      die "Port 80 is already served by $PORT80_OWNER, which this script cannot add a site to." \
+        "Run it with --web-server none --domain <name>: it then sets up PHP and the database," \
+        "and you point $PORT80_OWNER at $APP_DIR with PHP on unix:/run/php/castle-crm.sock." \
+        "tools/server/ has nginx and Apache configurations to copy from."
+      ;;
+    "")
+      # Nothing listening, but sites configured: whichever server has them.
+      if compgen -G "/etc/nginx/sites-enabled/*" > /dev/null && ! compgen -G "/etc/apache2/sites-enabled/*" > /dev/null; then
+        WEB_SERVER="nginx"
+      fi
+      ;;
+  esac
+elif [ "$WEB_SERVER" != "none" ] && [ -n "$PORT80_SERVER" ] && [ "$WEB_SERVER" != "$PORT80_SERVER" ]; then
+  die "Port 80 belongs to $PORT80_OWNER, so a new $WEB_SERVER could not start." \
+    "Use --web-server ${PORT80_SERVER/other/none} instead, which adds Castle CRM to what is already running."
+fi
+
+if [ "$SHARED" -eq 1 ]; then
+  ok "this server already hosts ${#OTHER_SITES[@]} other site(s); Castle CRM will be added beside them"
+
+  for site in "${OTHER_SITES[@]}"; do
+    note "  $site"
+  done
+
+  [ "$DOMAIN_EXPLICIT" -eq 1 ] || die \
+    "On a server that already hosts other sites, Castle CRM needs a hostname of its own" \
+    "so the web server can tell its requests apart from theirs. Point a DNS name at this" \
+    "server and run again with it:  sudo ./install.sh --domain crm.example.com ..."
+fi
+
+# How PHP runs. mod_php is one PHP for every site on the machine, and it
+# forces Apache onto the prefork MPM, which other sites may not tolerate; so
+# anywhere but a dedicated Apache server, Castle CRM gets its own PHP-FPM
+# pool, with its own settings and its own socket, and touches no other.
+if [ "$WEB_SERVER" = "apache" ] && [ "$SHARED" -eq 0 ]; then
+  PHP_MODE="mod_php"
+else
+  PHP_MODE="fpm"
+fi
+
+FPM_SOCKET="/run/php/castle-crm.sock"
 
 # ---------------------------------------------------------------------------
 # Which PHP
@@ -437,8 +530,8 @@ section "The plan"
 printf '  %-16s %s\n' "Application" "$APP_DIR"
 [ "$APP_DIR" = "$SOURCE_DIR" ] || printf '  %-16s %s\n' "" "(copied from $SOURCE_DIR)"
 printf '  %-16s %s\n' "Address" "http://$DOMAIN"
-printf '  %-16s %s\n' "Web server" "$WEB_SERVER"
-printf '  %-16s %s\n' "PHP" "$PHP_VERSION"
+printf '  %-16s %s\n' "Web server" "$WEB_SERVER$([ "$SHARED" -eq 1 ] && echo ", shared with ${#OTHER_SITES[@]} other site(s), which are left alone")"
+printf '  %-16s %s\n' "PHP" "$PHP_VERSION ($([ "$PHP_MODE" = fpm ] && echo "its own PHP-FPM pool, $FPM_SOCKET" || echo "mod_php"))"
 printf '  %-16s %s\n' "Database" "$DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
 printf '  %-16s %s\n' "Venue" "$VENUE_NAME ($TIMEZONE)"
 
@@ -518,13 +611,24 @@ if [ "$SKIP_PACKAGES" -eq 0 ]; then
   fi
 
   case "$WEB_SERVER" in
-    apache) packages+=("apache2" "libapache2-mod-php${PHP_VERSION}") ;;
-    nginx)  packages+=("nginx" "php${PHP_VERSION}-fpm") ;;
-    none)   ;;
+    apache) packages+=("apache2") ;;
+    nginx)  packages+=("nginx") ;;
   esac
 
+  if [ "$PHP_MODE" = "mod_php" ]; then
+    packages+=("libapache2-mod-php${PHP_VERSION}")
+  else
+    packages+=("php${PHP_VERSION}-fpm")
+  fi
+
+  # A database server already here is used as it is. Installing MariaDB over
+  # MySQL removes MySQL, and every other application's database with it.
   if [ "$EXTERNAL_DB" -eq 0 ]; then
-    packages+=("mariadb-server" "mariadb-client")
+    if command -v mysqld > /dev/null 2>&1 || command -v mariadbd > /dev/null 2>&1; then
+      note "a MySQL/MariaDB server is already installed; Castle CRM gets its own database on it"
+    else
+      packages+=("mariadb-server" "mariadb-client")
+    fi
   fi
 
   if [ -n "$LETSENCRYPT_EMAIL" ]; then
@@ -816,12 +920,32 @@ install_template() { # source, destination, mode
     return 0
   fi
 
+  # A line holding only __CC_PHP_FPM__ becomes the block that hands PHP to
+  # Castle CRM's own pool, or nothing under mod_php. awk and ENVIRON rather
+  # than sed, because the block contains the `|` sed uses as its delimiter.
+  local fpm_block=""
+
+  if [ "$PHP_MODE" = "fpm" ]; then
+    fpm_block="    # PHP runs in Castle CRM's own PHP-FPM pool, not mod_php, so its settings
+    # reach no other site on this server. install.sh wrote the pool too:
+    # /etc/php/${PHP_VERSION}/fpm/pool.d/castle-crm.conf
+    <FilesMatch \"\\.php\$\">
+        SetHandler \"proxy:unix:${FPM_SOCKET}|fcgi://castle-crm\"
+    </FilesMatch>
+    <Directory ${APP_DIR}>
+        CGIPassAuth On
+    </Directory>"
+  fi
+
   sed -e "s|__CC_DOMAIN__|${DOMAIN}|g" \
       -e "s|__CC_PATH__|${APP_DIR}|g" \
       -e "s|__CC_PHP_VERSION__|${PHP_VERSION}|g" \
       -e "s|__CC_PHP__|${PHP_BIN}|g" \
       -e "s|__CC_USER__|${WEB_USER}|g" \
-      "$source" > "$destination.castle-tmp"
+      -e "s|__CC_FPM_SOCKET__|${FPM_SOCKET}|g" \
+      "$source" \
+    | CC_FPM_BLOCK="$fpm_block" awk '/^[[:space:]]*__CC_PHP_FPM__[[:space:]]*$/ { if (ENVIRON["CC_FPM_BLOCK"] != "") print ENVIRON["CC_FPM_BLOCK"]; next } { print }' \
+    > "$destination.castle-tmp"
 
   chmod "$mode" "$destination.castle-tmp"
   mv "$destination.castle-tmp" "$destination"
@@ -829,16 +953,33 @@ install_template() { # source, destination, mode
   ok "wrote $destination"
 }
 
-php_sapi_dir=""
+if [ "$PHP_MODE" = "mod_php" ]; then
+  # A dedicated Apache server: mod_php's conf.d is Castle CRM's alone.
+  php_sapi_dir="/etc/php/${PHP_VERSION}/apache2/conf.d"
 
-case "$WEB_SERVER" in
-  apache) php_sapi_dir="/etc/php/${PHP_VERSION}/apache2/conf.d" ;;
-  nginx)  php_sapi_dir="/etc/php/${PHP_VERSION}/fpm/conf.d" ;;
-esac
+  if [ -d "$php_sapi_dir" ]; then
+    install_template "$APP_DIR/tools/server/php-castle-crm.ini" \
+      "$php_sapi_dir/99-castle-crm.ini" 0644
+  fi
+else
+  # Its own pool: the same settings as php-castle-crm.ini, scoped to it.
+  fpm_pool_dir="/etc/php/${PHP_VERSION}/fpm/pool.d"
 
-if [ -n "$php_sapi_dir" ] && [ -d "$php_sapi_dir" ]; then
-  install_template "$APP_DIR/tools/server/php-castle-crm.ini" \
-    "$php_sapi_dir/99-castle-crm.ini" 0644
+  if [ -d "$fpm_pool_dir" ]; then
+    install_template "$APP_DIR/tools/server/php-fpm-pool.conf" \
+      "$fpm_pool_dir/castle-crm.conf" 0644
+
+    service_start "php${PHP_VERSION}-fpm" || true
+
+    if service_reload "php${PHP_VERSION}-fpm"; then
+      ok "PHP-FPM pool castle-crm listening on $FPM_SOCKET"
+    else
+      warn "php${PHP_VERSION}-fpm would not start or reload, and no page runs without it."
+      warn "Check: php-fpm${PHP_VERSION} -t"
+    fi
+  else
+    warn "No $fpm_pool_dir: install php${PHP_VERSION}-fpm, then run this again."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -853,6 +994,13 @@ case "$WEB_SERVER" in
     a2enmod rewrite headers expires deflate setenvif > /dev/null
     ok "enabled mod_rewrite, headers, expires, deflate, setenvif"
 
+    if [ "$PHP_MODE" = "fpm" ]; then
+      # proxy_fcgi hands .php to the pool; it works under any MPM, so the
+      # other sites keep whichever one they run on.
+      a2enmod proxy_fcgi > /dev/null
+      ok "enabled proxy_fcgi for Castle CRM's PHP-FPM pool"
+    fi
+
     install_template "$APP_DIR/tools/server/apache-vhost.conf" \
       "/etc/apache2/sites-available/castle-crm.conf" 0644
 
@@ -866,7 +1014,9 @@ case "$WEB_SERVER" in
     # Ubuntu's own security.conf sets `ServerTokens OS`, so anything sorting
     # before it is silently overruled — which is what the first version of
     # this did, and the Server header went on naming the version.
-    if [ ! -e /etc/apache2/conf-available/zz-castle-crm.conf ] || [ "$FORCE_CONFIG" -eq 1 ]; then
+    # Not on a shared server, where it would change every other site's
+    # headers too; that is the owner's call, not this script's.
+    if [ "$SHARED" -eq 0 ] && { [ ! -e /etc/apache2/conf-available/zz-castle-crm.conf ] || [ "$FORCE_CONFIG" -eq 1 ]; }; then
       cat > /etc/apache2/conf-available/zz-castle-crm.conf <<'TOKENS'
 # Written by Castle CRM's install.sh. Stops the Apache version and the
 # distribution appearing in the Server header of every response — the same
@@ -884,7 +1034,9 @@ TOKENS
 
     a2ensite castle-crm > /dev/null
 
-    if [ -L /etc/apache2/sites-enabled/000-default.conf ]; then
+    # Only on a server of its own: elsewhere the default site may be what
+    # another application, or a health check, is answering on.
+    if [ "$SHARED" -eq 0 ] && [ -L /etc/apache2/sites-enabled/000-default.conf ]; then
       # Apache serves the alphabetically first enabled vhost to any request
       # whose Host matches nothing — which would be the stock "It works!" page
       # on this machine's IP address, not Castle CRM.
@@ -914,9 +1066,6 @@ TOKENS
       warn "stops: sudo systemctl disable --now apache2"
     fi
 
-    service_start "php${PHP_VERSION}-fpm" \
-      || warn "php${PHP_VERSION}-fpm would not start, and nginx needs it to run any page."
-
     install_template "$APP_DIR/tools/server/nginx-site.conf" \
       "/etc/nginx/sites-available/castle-crm" 0644
 
@@ -935,7 +1084,7 @@ TOKENS
 
     ln -sfn ../sites-available/castle-crm /etc/nginx/sites-enabled/castle-crm
 
-    if [ -e /etc/nginx/sites-enabled/default ]; then
+    if [ "$SHARED" -eq 0 ] && [ -e /etc/nginx/sites-enabled/default ]; then
       rm -f /etc/nginx/sites-enabled/default
       ok "disabled nginx's default site"
     fi
@@ -954,7 +1103,8 @@ TOKENS
 
   none)
     note "No vhost written. Point your own at $APP_DIR, with index.php as the"
-    note "front controller. tools/server/ holds both configurations to copy from."
+    note "front controller and PHP on unix:$FPM_SOCKET. tools/server/ holds"
+    note "nginx and Apache configurations to copy from."
     ;;
 esac
 

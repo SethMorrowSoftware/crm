@@ -1110,6 +1110,21 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Fixed: install.sh on a server shared with other applications
+
+install.sh assumed a server of its own. On one already running other sites
+it would install Apache beside a running nginx (which then cannot bind port
+80), switch Apache to prefork for mod_php, disable the default site, change
+server-wide PHP and Apache settings, and install MariaDB over an existing
+MySQL. Now, when other sites are enabled, it requires `--domain`, uses the web
+server already on port 80 (or stops and says so when that is something else),
+runs PHP in its own `castle-crm` PHP-FPM pool reached through `proxy_fcgi` on
+Apache, leaves the default site and server-wide settings alone, and reuses
+any MySQL/MariaDB server already installed. nginx installs use the dedicated
+pool too. CI installs beside an existing nginx site and an existing Apache
+site on 24.04 and 26.04 and checks the other site, the default site, the MPM
+and the PHP settings are untouched.
+
 ### Fixed: install.sh on Ubuntu 26.04
 
 26.04 ships PHP 8.5, and install.sh looked only for 8.4 down to 8.1, so it
@@ -1121,6 +1136,11 @@ the PPA only on releases older than 22.04, and sets aside an ondrej/php
 sources entry that apt reports has no Release file, moving it to
 `/etc/apt/sources.list.d.castle-crm-disabled/` and retrying. CI now installs
 on 26.04 too and runs the full suite on PHP 8.5.
+
+PHP 8.5 also deprecates `curl_close()`, which has done nothing since PHP 8.0.
+In production that only logged a warning on every outgoing HTTP call, but with
+debug on, and in the test suite, it became an exception, so every call has been
+removed.
 
 ### Added: `install.sh` — Castle CRM on an Ubuntu server, from a clone
 

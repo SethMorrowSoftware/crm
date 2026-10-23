@@ -90,14 +90,12 @@ function public_request(string $path, ?array $post = null): array
 
     if ($raw === false) {
         $error = curl_error($handle);
-        curl_close($handle);
 
         throw new RuntimeException('Request to ' . $path . ' failed: ' . $error);
     }
 
     $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
     $headerSize = (int) curl_getinfo($handle, CURLINFO_HEADER_SIZE);
-    curl_close($handle);
 
     return [
         'status'   => $status,

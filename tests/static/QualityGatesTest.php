@@ -2833,9 +2833,14 @@ Harness::test('THE SHIPPED SERVER CONFIGS DENY WHAT THE .HTACCESS DENIES', funct
     Assert::contains('root __CC_PATH__', $site, 'install.sh fills in the path');
     Assert::contains('server_name __CC_DOMAIN__', $site, 'and the domain');
     Assert::contains(
-        'php__CC_PHP_VERSION__-fpm.sock',
+        'fastcgi_pass unix:__CC_FPM_SOCKET__;',
         $site,
-        'and the PHP-FPM pool, which is version-numbered on Debian and Ubuntu'
+        'and Castle CRM\'s own PHP-FPM pool, never the shared one other sites use'
+    );
+    Assert::contains(
+        'listen = __CC_FPM_SOCKET__',
+        (string) file_get_contents(CC_ROOT . '/tools/server/php-fpm-pool.conf'),
+        'and that pool listens on the socket the site sends PHP to'
     );
     Assert::contains('try_files $uri $uri/ /index.php', $site, 'the front controller is reachable');
 
