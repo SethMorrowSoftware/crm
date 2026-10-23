@@ -462,7 +462,6 @@ function installer_testRewrite(): bool
     ]);
 
     $body = curl_exec($ch);
-    curl_close($ch);
 
     return is_string($body) && str_contains($body, 'rewrite-ok');
 }

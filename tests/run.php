@@ -389,7 +389,6 @@ function start_test_server(): ?array
 
             $body = curl_exec($handle);
             $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-            curl_close($handle);
 
             if ($status === 200 && is_string($body)) {
                 return [$process, $pipes, $baseUrl];

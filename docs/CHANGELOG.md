@@ -1137,6 +1137,11 @@ sources entry that apt reports has no Release file, moving it to
 `/etc/apt/sources.list.d.castle-crm-disabled/` and retrying. CI now installs
 on 26.04 too and runs the full suite on PHP 8.5.
 
+PHP 8.5 also deprecates `curl_close()`, which has done nothing since PHP 8.0.
+In production that only logged a warning on every outgoing HTTP call, but with
+debug on, and in the test suite, it became an exception, so every call has been
+removed.
+
 ### Added: `install.sh` — Castle CRM on an Ubuntu server, from a clone
 
 Until now the only supported install was cPanel: upload a zip, walk eight

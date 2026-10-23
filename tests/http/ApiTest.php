@@ -185,14 +185,12 @@ function ha_call(
 
     if ($raw === false) {
         $error = curl_error($handle);
-        curl_close($handle);
 
         throw new RuntimeException('API call to ' . $path . ' failed: ' . $error);
     }
 
     $status     = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
     $headerSize = (int) curl_getinfo($handle, CURLINFO_HEADER_SIZE);
-    curl_close($handle);
 
     $responseBody = substr((string) $raw, $headerSize);
     $decoded      = json_decode($responseBody, true);

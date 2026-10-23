@@ -790,7 +790,6 @@ final class Sms
         $body   = curl_exec($handle);
         $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
         $error  = curl_error($handle);
-        curl_close($handle);
 
         if ($body === false) {
             return ['ok' => false, 'status' => $status, 'json' => [], 'body' => $error];
