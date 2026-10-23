@@ -443,9 +443,40 @@ if [ "$SHARED" -eq 1 ]; then
     "Or give it a port nobody uses instead:  sudo ./install.sh --port 8088 ..."
 fi
 
+# Castle CRM's site file from an earlier run, if there is one.
+case "$WEB_SERVER" in
+  nginx)
+    CRM_SITE_CONF="/etc/nginx/sites-available/castle-crm"
+    CRM_SITE_ENABLED="/etc/nginx/sites-enabled/castle-crm"
+    ;;
+  apache)
+    CRM_SITE_CONF="/etc/apache2/sites-available/castle-crm.conf"
+    CRM_SITE_ENABLED="/etc/apache2/sites-enabled/castle-crm.conf"
+    ;;
+  *)
+    CRM_SITE_CONF=""
+    CRM_SITE_ENABLED=""
+    ;;
+esac
+
+crm_site_listens_on() { # port: does Castle CRM's site file answer on it? Comments don't count.
+  [ -n "$CRM_SITE_CONF" ] && grep -qsE \
+    "^[[:space:]]*(listen[[:space:]]+(\[::\]:)?${1}[[:space:];]|<VirtualHost[[:space:]]+\*:${1}>)" \
+    "$CRM_SITE_CONF"
+}
+
+# A kept site file still answers on the port it was written for, so a re-run
+# with a different port would leave the listener and the site disagreeing.
+if [ -n "$CRM_SITE_CONF" ] && [ -e "$CRM_SITE_CONF" ] && [ "$FORCE_CONFIG" -eq 0 ] \
+  && ! crm_site_listens_on "$PORT"; then
+  die "Castle CRM is already set up on a different port, in $CRM_SITE_CONF." \
+    "To move it to port $PORT, run again with --force-config (your edits to that file are replaced)," \
+    "or run with the port it already uses."
+fi
+
 if [ "$PORT" != "80" ]; then
-  # The port has to be free, unless it is this application's own from a
-  # previous run (a re-run must not refuse the port it set up itself).
+  # The port has to be free, unless Castle CRM's own enabled site is what is
+  # answering on it (a re-run must not refuse the port it set up itself).
   port_owner=""
 
   if command -v ss > /dev/null 2>&1; then
@@ -453,9 +484,15 @@ if [ "$PORT" != "80" ]; then
       | grep -o 'users:(("[^"]*"' | head -n1 | sed 's/^users:(("//; s/"$//' || true)
   fi
 
+  case "$port_owner" in
+    nginx)         port_owner_server="nginx" ;;
+    apache2|httpd) port_owner_server="apache" ;;
+    *)             port_owner_server="" ;;
+  esac
+
   if [ -n "$port_owner" ] \
-    && ! grep -qsE "(listen[[:space:]]+(\[::\]:)?${PORT}[[:space:];]|VirtualHost \*:${PORT}>)" \
-         /etc/nginx/sites-available/castle-crm /etc/apache2/sites-available/castle-crm.conf; then
+    && ! { [ "$port_owner_server" = "$WEB_SERVER" ] && [ -e "$CRM_SITE_ENABLED" ] \
+           && crm_site_listens_on "$PORT"; }; then
     die "Port $PORT is already in use by $port_owner." \
       "Pick another, and check it with:  sudo ss -ltnp | grep :<port>"
   fi
@@ -1110,6 +1147,10 @@ TOKENS
         > /etc/apache2/conf-available/castle-crm-port.conf
       a2enconf castle-crm-port > /dev/null
       ok "Apache listens on port $PORT for Castle CRM"
+    elif [ -e /etc/apache2/conf-available/castle-crm-port.conf ]; then
+      # Moved back to port 80, which ports.conf already listens on.
+      a2disconf castle-crm-port > /dev/null 2>&1 || true
+      rm -f /etc/apache2/conf-available/castle-crm-port.conf
     fi
 
     a2ensite castle-crm > /dev/null
