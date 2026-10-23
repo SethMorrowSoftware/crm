@@ -1110,6 +1110,17 @@ reachable by accident — which is exactly why they needed finding.
 
 ## Unreleased — next
 
+### Added: CenterEdge import in one command
+
+`sudo bash tools/centeredge/import.sh` on the CRM's own server sets up
+pymssql, asks for the CenterEdge login once, exports, and imports guests,
+children and visits through the importer with a dry run before each, then
+deletes the export. It is built on `tools/import-csv.php`, a command-line
+front to the same importer as Settings → Import a file (same mapping, dry
+run, refusals and report; it holds the cron lock while it runs so cron does
+not walk the same job). `tools/reset-password.php` now says when
+config.php is unreadable instead of reporting the CRM as not installed.
+
 ### Added: `install.sh --port`
 
 On a shared server Castle CRM can now go on a port of its own (`--port 8088`)
