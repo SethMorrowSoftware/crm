@@ -189,9 +189,19 @@ nothing the others rely on:
 sudo ./install.sh --domain crm.example.com --admin-email you@example.com
 ```
 
-- **A hostname of its own is required.** The web server tells the sites apart
-  by name, so point a DNS name at the server and pass it as `--domain`. The
-  script refuses to start without one, having changed nothing.
+- **It needs either a hostname or a port of its own.** The web server tells
+  sites apart by name or by port. With a DNS name pointed at the server, pass
+  `--domain crm.example.com`. With no name yet, pass a free port instead and
+  the CRM is at `http://<server IP>:8088`:
+
+  ```bash
+  sudo ./install.sh --port 8088 --path /var/www/castle-crm --admin-email you@example.com
+  ```
+
+  Without either, the script refuses to start, having changed nothing. It also
+  refuses a name another site already uses, and a port something is already
+  listening on. A hostname and HTTPS can be added later by re-running with
+  `--domain` and `--letsencrypt`.
 - **The web server already on port 80 is used.** nginx or Apache, whichever is
   serving, gets a `castle-crm` site; the other is never installed. If port 80
   belongs to something else (Caddy, Traefik, a Docker container), the script
